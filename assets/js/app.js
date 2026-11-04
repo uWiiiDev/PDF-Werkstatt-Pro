@@ -4253,6 +4253,43 @@
         if (!doc) return;
         await bakeAnnotationsIntoDocument(doc);
 
+        // Check if the document is a pure image scan without extractable text (0 characters)
+        // If so, automatically run offline Sandwich-OCR (Tesseract) before PDF/UA tagging!
+        try {
+            var preCheckJsDoc = await loadPdfJsDocument(doc.bytes);
+            var preScanPages = Math.min(preCheckJsDoc.numPages, 15);
+            var existingTextChars = 0;
+            for (var sp = 1; sp <= preScanPages; sp++) {
+                var spPage = await preCheckJsDoc.getPage(sp);
+                var spTc = await spPage.getTextContent();
+                var spTxt = spTc.items.map(function (it) { return it.str; }).join('').trim();
+                existingTextChars += spTxt.length;
+                if (existingTextChars > 0) break;
+            }
+            if (existingTextChars === 0 && window.Tesseract) {
+                var progBox = document.getElementById('a11yAuditProgressBox');
+                var progLabel = document.getElementById('a11yAuditStepLabel');
+                var progPct = document.getElementById('a11yAuditStepPercent');
+                var progFill = document.getElementById('a11yAuditProgressFill');
+                if (progBox) {
+                    progBox.style.display = 'block';
+                    if (progFill) progFill.style.width = '25%';
+                    if (progPct) progPct.textContent = 'OCR…';
+                    if (progLabel) {
+                        progLabel.textContent = '🔎 Reiner Bild-Scan erkannt — führe automatisch Offline-OCR (Texterkennung) für alle Seiten durch…';
+                    }
+                }
+                showToast('Reiner Bild-Scan erkannt: Starte automatische Offline-Texterkennung (Sandwich-OCR)…', 'info');
+                var scopeEl = document.getElementById('ocrScope');
+                var prevScope = scopeEl ? scopeEl.value : 'all';
+                if (scopeEl) scopeEl.value = 'all';
+                await convertToSearchableSandwichPdf();
+                if (scopeEl) scopeEl.value = prevScope;
+            }
+        } catch (ocrPreErr) {
+            console.warn('Auto-OCR pre-check warning:', ocrPreErr);
+        }
+
         var fixTitle = (document.getElementById('a11yFixTitle').value || '').trim();
         if (!fixTitle || /\.pdf$/i.test(fixTitle)) {
             fixTitle = doc.name.replace(/\.pdf$/i, '').replace(/_/g, ' ') + ' - Barrierefreies Dokument';
