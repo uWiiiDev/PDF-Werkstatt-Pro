@@ -1393,7 +1393,7 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                     </div>
                 </div>
                 <p style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;">
-                    Setzt automatisch: <code>/Title</code>, <code>/ViewerPreferences &lt;&lt; /DisplayDocTitle true &gt;&gt;</code>, <code>/Lang</code>, <code>/MarkInfo &lt;&lt; /Marked true &gt;&gt;</code>, einen Basis-Strukturbaum (<code>/StructTreeRoot</code> mit Dokument-/Seiten-Tags), XMP-Metadaten (<code>pdfuaid:part=1</code>) sowie Lesezeichen (<code>/Outlines</code>).
+                    Setzt automatisch (PAC 2026 / ISO 14289-1 konform): <code>/Title</code>, <code>/DisplayDocTitle true</code>, <code>/Lang</code>, <code>/MarkInfo &lt;&lt; /Marked true &gt;&gt;</code>, Content-Stream-Tagging (<code>BDC/MCID</code> für Text &amp; <code>/Artifact</code> für Grafiken/Hintergrund), <code>/StructTreeRoot</code> inkl. <code>/ParentTree</code> &amp; <code>/RoleMap</code>, TrueType-Schrifteinbettung (<code>/FontFile2</code> &amp; <code>/ToUnicode</code>), 1:1 synchronisierte XMP-Metadaten (<code>pdfuaid:part=1</code>) sowie Lesezeichen (<code>/Outlines</code>).
                 </p>
             </div>
         </div>
