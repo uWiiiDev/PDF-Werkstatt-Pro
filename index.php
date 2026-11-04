@@ -1,0 +1,2120 @@
+<?php
+/**
+ * PDF-Werkstatt Pro (v1.0) - Desktop Web Suite (Main Application Shell)
+ * Compatible with PHP 5.4+ up to PHP 8.4+ (Pure Webspace, No shell_exec)
+ */
+define('PDFSTUDIO_ROOT', __DIR__);
+$GLOBALS['PDFSTUDIO_BOOT_OK'] = false;
+
+function pdfstudio_boot_shutdown_check()
+{
+    if (!empty($GLOBALS['PDFSTUDIO_BOOT_OK'])) {
+        return;
+    }
+    $err = function_exists('error_get_last') ? error_get_last() : null;
+    if ($err && in_array((int)$err['type'], array(1, 4, 16, 64, 256), true)) {
+        if (!headers_sent()) {
+            header('Content-Type: text/html; charset=UTF-8');
+        }
+        echo '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><title>PDF-Werkstatt Pro — Server-Diagnose</title></head>';
+        echo '<body style="background:#14171f;color:#f1f5f9;font-family:sans-serif;padding:32px;">';
+        echo '<div style="max-width:740px;margin:0 auto;background:#1d222e;border:1px solid #ef4444;border-radius:10px;padding:24px;">';
+        echo '<h2 style="color:#f87171;margin-top:0;">⚠️ Startfehler auf dem Server erkannt (PHP ' . htmlspecialchars(PHP_VERSION, ENT_QUOTES, 'UTF-8') . ')</h2>';
+        echo '<p>Beim Laden der Anwendung ist folgender PHP-Fehler aufgetreten:</p>';
+        echo '<pre style="background:#0f1117;padding:14px;border-radius:6px;overflow-x:auto;color:#fbbf24;font-size:13px;">'
+           . htmlspecialchars($err['message'] . "\nDatei: " . $err['file'] . ' (Zeile ' . $err['line'] . ')', ENT_QUOTES, 'UTF-8')
+           . '</pre>';
+        echo '<p style="font-size:13px;color:#94a3b8;line-height:1.6;">'
+           . '<strong>Häufigste Ursachen beim Kopieren auf einen Apache-Server:</strong><br>'
+           . '1. Die Unterordner <code>includes/</code>, <code>assets/</code> oder <code>storage/</code> wurden nicht mitkopiert oder haben keine Leserechte für Apache (Lösung: <code>chmod -R 755 . &amp;&amp; chmod -R 775 storage/</code>).<br>'
+           . '2. Rufen Sie zur genauen Prüfung <a href="diagnose.php" style="color:#60a5fa;">diagnose.php</a> im Browser auf.'
+           . '</p></div></body></html>';
+    }
+}
+register_shutdown_function('pdfstudio_boot_shutdown_check');
+
+if (!is_readable(__DIR__ . '/includes/bootstrap.php')) {
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=UTF-8');
+    }
+    exit('<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><title>PDF-Werkstatt Pro — Installationshinweis</title></head><body style="background:#14171f;color:#f1f5f9;font-family:sans-serif;padding:32px;"><div style="max-width:700px;margin:0 auto;background:#1d222e;border:1px solid #f59e0b;border-radius:10px;padding:24px;"><h2 style="color:#fbbf24;margin-top:0;">⚠️ Datei <code>includes/bootstrap.php</code> fehlt oder ist nicht lesbar</h2><p>Bitte stellen Sie sicher, dass der Unterordner <code>includes/</code> vollständig auf den Server kopiert wurde und Leserechte für den Webserver besitzt (<code>chmod -R 755 .</code>).</p></div></body></html>');
+}
+
+require_once __DIR__ . '/includes/bootstrap.php';
+
+pdfstudio_record_stat('pageview');
+$serverInfo = pdfstudio_get_server_info();
+$GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
+?><!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?> — Desktop PDF Suite</title>
+    <link rel="stylesheet" href="assets/css/desktop.css?v=<?php echo urlencode(PDFSTUDIO_VERSION); ?>">
+    <!-- 100% Local Offline Engines (No Internet or CDN required) -->
+    <script>window.PDFSTUDIO_CSRF_TOKEN = <?php echo json_encode(pdfstudio_get_csrf_token()); ?>;</script>
+    <script src="assets/vendor/pdf-lib.min.js"></script>
+    <script src="assets/vendor/pdf.min.js"></script>
+    <script src="assets/vendor/jszip.min.js"></script>
+    <script src="assets/vendor/tesseract/tesseract.min.js"></script>
+    <script src="assets/vendor/mammoth.browser.min.js"></script>
+    <script src="assets/vendor/xlsx.full.min.js"></script>
+</head>
+<body class="theme-dark">
+
+<div class="desktop-shell" id="desktopShell">
+
+    <!-- ==================================================================
+         1. WINDOW TITLEBAR (Row 1 — Brand, View Switcher, System Controls)
+         ================================================================== -->
+    <header class="titlebar">
+        <div class="titlebar-left">
+            <div class="app-brand">
+                <span class="app-brand-badge">PDF</span>
+                <span>PDF-Werkstatt Pro <small style="font-size:10.5px;opacity:0.75;font-weight:600;">v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?></small></span>
+            </div>
+
+            <!-- Quick Access Mini Icons -->
+            <div class="quick-access-bar">
+                <button type="button" class="qa-btn" data-cmd="open-pdf" title="PDF öffnen (Strg+O)">📂</button>
+                <button type="button" class="qa-btn" data-cmd="merge-files" title="Mehrere PDF-Dateien zusammenführen">📑</button>
+                <button type="button" class="qa-btn" data-cmd="export-pdf" title="PDF speichern / herunterladen (Strg+S)">💾</button>
+                <button type="button" class="qa-btn" data-cmd="undo" title="Rückgängig (Strg+Z)">↶</button>
+            </div>
+        </div>
+
+        <div class="titlebar-center">
+            <!-- Compact Workspace Mode Switcher -->
+            <div class="mode-switcher">
+                <button type="button" class="mode-btn active" id="modeBtnLauncher" data-cmd="view-launcher" title="Alle Werkzeuge als Kacheln">
+                    ⊞ Alle Tools
+                </button>
+                <button type="button" class="mode-btn" id="modeBtnOrganizer" data-cmd="view-organizer" title="Seiten-Sortierer">
+                    ☷ Seiten-Studio
+                </button>
+                <button type="button" class="mode-btn" id="modeBtnEditor" data-cmd="view-editor" title="Visueller PDF-Editor">
+                    ✎ PDF-Editor
+                </button>
+            </div>
+        </div>
+
+        <div class="titlebar-right">
+            <button type="button" class="php-pill" id="accountHeaderBtn" data-cmd="open-account-modal" style="cursor:pointer;background:rgba(59,130,246,0.16);color:#60a5fa;border-color:rgba(59,130,246,0.35);" title="Persönliches Konto, Tresor &amp; Profil-Vorlagen öffnen">
+                👤 <span id="accountHeaderLabel">Konto / Login (Gast)</span>
+            </button>
+            <button type="button" class="php-pill hidden" id="headerChangePassBtn" data-cmd="open-password-change" style="cursor:pointer;background:rgba(245,158,11,0.16);color:#fbbf24;border-color:rgba(245,158,11,0.35);" title="Passwort Ihres Benutzerkontos ändern">
+                🔑 Passwort
+            </button>
+            <button type="button" class="php-pill hidden" id="headerLogoutBtn" data-cmd="logout-account" style="cursor:pointer;background:rgba(239,68,68,0.16);color:#f87171;border-color:rgba(239,68,68,0.35);" title="Aus Ihrem Benutzerkonto abmelden">
+                🚪 Abmelden
+            </button>
+
+            <button type="button" class="qa-btn" data-cmd="toggle-left-dock" title="Linke Seitenleiste ein-/ausblenden">◧</button>
+            <button type="button" class="qa-btn" data-cmd="toggle-right-dock" title="Rechten Inspektor ein-/ausblenden">◨</button>
+            <button type="button" class="qa-btn" data-cmd="toggle-theme" title="Dark / Light Theme wechseln">◐</button>
+            <button type="button" class="qa-btn" id="btnFullscreenTitlebar" data-cmd="toggle-fullscreen" title="Vollbild-Modus umschalten — Browserelemente ausblenden (F11)">⛶</button>
+            <button type="button" class="qa-btn" data-cmd="open-help" title="Benutzerhandbuch &amp; Funktionshilfe öffnen (F1)">❓</button>
+            <button type="button" class="qa-btn" id="btnToggleRibbonDeck" title="Ribbon-Menü ein-/ausklappen">▴</button>
+        </div>
+    </header>
+
+    <!-- ==================================================================
+         2. DEDICATED RIBBON CATEGORY TAB BAR (Row 2 — Never Scrolls)
+         ================================================================== -->
+    <nav class="ribbon-tabbar" id="ribbonTabsNav">
+        <button type="button" class="ribbon-tab active" data-ribbon="home">🏠 Start</button>
+        <button type="button" class="ribbon-tab" data-ribbon="edit">✎ Bearbeiten</button>
+        <button type="button" class="ribbon-tab" data-ribbon="pages">📑 Seiten</button>
+        <button type="button" class="ribbon-tab" data-ribbon="forms">📋 Formulare &amp; Links</button>
+        <button type="button" class="ribbon-tab" data-ribbon="protect">🛡️ Layout &amp; Schutz</button>
+        <button type="button" class="ribbon-tab" data-ribbon="convert">🔄 Konverter &amp; OCR</button>
+        <button type="button" class="ribbon-tab" data-ribbon="a11y">♿ Barrierefreiheit</button>
+    </nav>
+
+    <!-- ==================================================================
+         3. DESKTOP RIBBON DECK (Row 3 — Contextual Tool Groups per Tab)
+         ================================================================== -->
+    <div class="ribbon-deck" id="ribbonDeck">
+
+        <!-- TAB 1: START -->
+        <div class="ribbon-pane active" data-ribbon-pane="home">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="open-pdf">
+                        <span class="rb-icon">📂</span>
+                        <span class="rb-label">Öffnen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="new-blank-pdf">
+                        <span class="rb-icon">📄</span>
+                        <span class="rb-label">Neu (A4)</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Dokument</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="merge-files" title="Mehrere PDF-Dateien oder geöffnete Tabs auswählen, Reihenfolge anpassen und zu einem PDF zusammenführen">
+                        <span class="rb-icon">📑</span>
+                        <span class="rb-label">Zusammenführen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-split-modal">
+                        <span class="rb-icon">✂️</span>
+                        <span class="rb-label">Teilen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-compress-modal" title="PDF-Dateigröße verkleinern &amp; komprimieren">
+                        <span class="rb-icon">📉</span>
+                        <span class="rb-label">Komprimieren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-compare-modal">
+                        <span class="rb-icon">⚖️</span>
+                        <span class="rb-label">Vergleichen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="launch-tool-edit-text" title="Bestehenden PDF-Originaltext direkt anklicken und umschreiben">
+                        <span class="rb-icon">I✎</span>
+                        <span class="rb-label">Text ändern</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-signature-modal">
+                        <span class="rb-icon">✍️</span>
+                        <span class="rb-label">Signatur</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-a11y-modal">
+                        <span class="rb-icon">♿</span>
+                        <span class="rb-label">PDF/UA Check</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Direktwerkzeuge</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="export-pdf">
+                        <span class="rb-icon">💾</span>
+                        <span class="rb-label">Download</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="save-server" title="PDF inklusive editierbarem Projektstand &amp; Versionshistorie im Tresor speichern">
+                        <span class="rb-icon">☁️</span>
+                        <span class="rb-label">Im Tresor speichern</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-share-modal" title="Dokument per E-Mail-Freigabelink mit Kollegen teilen">
+                        <span class="rb-icon">✉️</span>
+                        <span class="rb-label">Per E-Mail teilen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-account-modal" title="Persönliches Konto, Passwort ändern, Stempel-Tresor &amp; Profil-Vorlagen">
+                        <span class="rb-icon">👤</span>
+                        <span class="rb-label">Mein Konto</span>
+                    </button>
+                    <button type="button" class="ribbon-btn hidden" id="ribbonLogoutBtn" data-cmd="logout-account" title="Aus Ihrem Benutzerkonto abmelden">
+                        <span class="rb-icon">🚪</span>
+                        <span class="rb-label">Abmelden</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="print-pdf">
+                        <span class="rb-icon">🖨️</span>
+                        <span class="rb-label">Drucken</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" id="btnFullscreenRibbon" data-cmd="toggle-fullscreen" title="Vollbild-Modus umschalten — Browser-Adressleiste und Tabs ausblenden (F11)">
+                        <span class="rb-icon" id="rbFullscreenIcon">⛶</span>
+                        <span class="rb-label" id="rbFullscreenLabel">Vollbild</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-help" title="Ausführliches Benutzerhandbuch mit allen Funktionen öffnen (F1)">
+                        <span class="rb-icon">❓</span>
+                        <span class="rb-label">Hilfe</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Tresor, E-Mail-Freigabe &amp; Ansicht</div>
+            </div>
+        </div>
+
+        <!-- TAB 2: BEARBEITEN & SIGNIEREN -->
+        <div class="ribbon-pane" data-ribbon-pane="edit" id="editorToolsGroup">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn tool-btn active" data-tool="select" title="Elemente auswählen, mit der Maus verschieben oder per Doppelklick bearbeiten">
+                        <span class="rb-icon">↖</span>
+                        <span class="rb-label">Auswahl</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="edit-text" title="Vorhandenen Originaltext im PDF anklicken und direkt umschreiben / ersetzen">
+                        <span class="rb-icon"><b>I✎</b></span>
+                        <span class="rb-label">Text ändern</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="text" title="Neuen Text an beliebiger Stelle einfügen">
+                        <span class="rb-icon"><b>T+</b></span>
+                        <span class="rb-label">Neuer Text</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="pen">
+                        <span class="rb-icon">✒️</span>
+                        <span class="rb-label">Stift</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="highlight">
+                        <span class="rb-icon">🖍️</span>
+                        <span class="rb-label">Marker</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="rect">
+                        <span class="rb-icon">▭</span>
+                        <span class="rb-label">Rahmen</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Zeichnen &amp; Text</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="redact">
+                        <span class="rb-icon">⬛</span>
+                        <span class="rb-label">Schwärzen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="sanitize-redactions" title="Geschwärzte Seiten physisch flachrechnen (Text darunter unwiderruflich entfernen)">
+                        <span class="rb-icon">🛡️</span>
+                        <span class="rb-label">Sanitize</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="stamp">
+                        <span class="rb-icon">🏷️</span>
+                        <span class="rb-label">Stempel</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-signature-modal">
+                        <span class="rb-icon">✍️</span>
+                        <span class="rb-label">Signatur</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="insert-image-overlay">
+                        <span class="rb-icon">🖼️</span>
+                        <span class="rb-label">Bild/Logo</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Stempel, Signatur &amp; Schwärzen</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="undo">
+                        <span class="rb-icon">↶</span>
+                        <span class="rb-label">Zurück</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="delete-selected-annotation">
+                        <span class="rb-icon">🗑</span>
+                        <span class="rb-label">Löschen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="bake-annotations">
+                        <span class="rb-icon">✔</span>
+                        <span class="rb-label">Einbetten</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Aktionen</div>
+            </div>
+        </div>
+
+        <!-- TAB 3: SEITEN ORGANISIEREN -->
+        <div class="ribbon-pane" data-ribbon-pane="pages">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="view-organizer">
+                        <span class="rb-icon">☷</span>
+                        <span class="rb-label">Sortieren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="merge-files" title="Mehrere PDF-Dateien auswählen, Reihenfolge anpassen und zu einem PDF zusammenführen">
+                        <span class="rb-icon">📑</span>
+                        <span class="rb-label">Zusammenführen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="merge-all-tabs" title="Alle aktuell geöffneten PDF-Tabs sofort zu einem Dokument zusammenführen">
+                        <span class="rb-icon">⇄</span>
+                        <span class="rb-label">Tabs verbinden</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-split-modal">
+                        <span class="rb-icon">✂️</span>
+                        <span class="rb-label">Teilen</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Zusammenführen &amp; Teilen</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="rotate-left">
+                        <span class="rb-icon">⟲</span>
+                        <span class="rb-label">Links</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="rotate-right">
+                        <span class="rb-icon">⟳</span>
+                        <span class="rb-label">Rechts</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="rotate-all-right">
+                        <span class="rb-icon">🔄</span>
+                        <span class="rb-label">Alle 90°</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="reverse-pages">
+                        <span class="rb-icon">⇅</span>
+                        <span class="rb-label">Umkehren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-crop-modal">
+                        <span class="rb-icon">📐</span>
+                        <span class="rb-label">Zuschneiden</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Geometrie &amp; Zuschnitt</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="add-blank-page">
+                        <span class="rb-icon">📄+</span>
+                        <span class="rb-label">Leere S.</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="duplicate-page">
+                        <span class="rb-icon">📋</span>
+                        <span class="rb-label">Klonen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="add-current-to-tray">
+                        <span class="rb-icon">🗂️</span>
+                        <span class="rb-label">Mappe +</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="delete-page">
+                        <span class="rb-icon">🗑️</span>
+                        <span class="rb-label">Löschen</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Seitenverwaltung</div>
+            </div>
+        </div>
+
+        <!-- TAB 4: FORMULARE (ACROFORMS), LINKS & VERGLEICH -->
+        <div class="ribbon-pane" data-ribbon-pane="forms">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="form-text" title="Interaktives AcroForm-Textfeld auf der Seite platzieren">
+                        <span class="rb-icon">⌨️</span>
+                        <span class="rb-label">Textfeld</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="form-check" title="Interaktive AcroForm-Checkbox platzieren">
+                        <span class="rb-icon">☑️</span>
+                        <span class="rb-label">Checkbox</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="form-select" title="Interaktives AcroForm-Dropdown-Menü platzieren">
+                        <span class="rb-icon">▾</span>
+                        <span class="rb-label">Dropdown</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="flatten-form" title="Alle Formularfelder dauerhaft in festen Text umwandeln">
+                        <span class="rb-icon">🔒</span>
+                        <span class="rb-label">Sperren</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Interaktive PDF-Formulare (AcroForms)</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="link" title="Klickbaren Web-Link oder internen Seitensprung auf der Seite anlegen">
+                        <span class="rb-icon">🔗</span>
+                        <span class="rb-label">Link / Sprung</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Hyperlinks</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-compare-modal">
+                        <span class="rb-icon">⚖️</span>
+                        <span class="rb-label">PDF-Vergleich</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Dokumenten-Diff</div>
+            </div>
+        </div>
+
+        <!-- TAB 5: LAYOUT, BATES, WASSERZEICHEN & KOMPRIMIEREN -->
+        <div class="ribbon-pane" data-ribbon-pane="protect">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="open-crop-modal">
+                        <span class="rb-icon">📐</span>
+                        <span class="rb-label">Zuschneiden</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-bates-modal">
+                        <span class="rb-icon">📑</span>
+                        <span class="rb-label">Kopf/Fuß &amp; Bates</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="apply-watermark">
+                        <span class="rb-icon">💧</span>
+                        <span class="rb-label">Wasserzeichen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="apply-page-numbers">
+                        <span class="rb-icon">🔢</span>
+                        <span class="rb-label">Seitenzahlen</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Seitenlayout, Bates &amp; Stempelung</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-compress-modal" title="PDF komprimieren &amp; Dateigröße verkleinern">
+                        <span class="rb-icon">📉</span>
+                        <span class="rb-label">PDF komprimieren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="sanitize-redactions">
+                        <span class="rb-icon">🛡️</span>
+                        <span class="rb-label">Sicher schwärzen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-compress-modal" title="PDF-Metadaten (Titel, Autor, Betreff) bearbeiten">
+                        <span class="rb-icon">🏷️</span>
+                        <span class="rb-label">Metadaten</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Komprimierung &amp; Sicherheit</div>
+            </div>
+        </div>
+
+        <!-- TAB 6: KONVERTIEREN & OCR -->
+        <div class="ribbon-pane" data-ribbon-pane="convert">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="open-images">
+                        <span class="rb-icon">🖼️</span>
+                        <span class="rb-label">Bilder → PDF</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-converter-modal">
+                        <span class="rb-icon">📝</span>
+                        <span class="rb-label">Office/Text → PDF</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Import nach PDF</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn" data-cmd="open-compress-modal" title="PDF komprimieren &amp; Dateigröße verkleinern">
+                        <span class="rb-icon">📉</span>
+                        <span class="rb-label">Komprimieren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="export-current-png">
+                        <span class="rb-icon">📷</span>
+                        <span class="rb-label">Seite → PNG</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="export-images-zip">
+                        <span class="rb-icon">🗂️</span>
+                        <span class="rb-label">Alle → ZIP</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="extract-all-text">
+                        <span class="rb-icon">📄</span>
+                        <span class="rb-label">PDF → Text</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Export aus PDF</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="make-searchable-pdf" title="Wandelt gescannte PDFs/Bilder per Offline-OCR in ein echt durchsuchbares Sandwich-PDF (mit hinterlegter Textebene) um">
+                        <span class="rb-icon">🔎</span>
+                        <span class="rb-label">Durchsuchbares PDF</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="run-ocr-page" title="Erkennt den Text der aktuellen Seite per Offline-OCR und gibt ihn im Textfeld rechts aus">
+                        <span class="rb-icon">🔍</span>
+                        <span class="rb-label">OCR → Textfeld</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="extract-page-text">
+                        <span class="rb-icon">📖</span>
+                        <span class="rb-label">Text lesen</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Sandwich-OCR &amp; Texterkennung</div>
+            </div>
+        </div>
+
+        <!-- TAB 7: BARRIEREFREIHEIT (PDF/UA & BITV 2.0 + TAG/ALT-TEXT EDITOR) -->
+        <div class="ribbon-pane" data-ribbon-pane="a11y">
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-a11y-modal">
+                        <span class="rb-icon">♿</span>
+                        <span class="rb-label">PDF/UA Prüfen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="quick-autofix-a11y">
+                        <span class="rb-icon">🛠️</span>
+                        <span class="rb-label">Auto-Fix</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="export-a11y-report">
+                        <span class="rb-icon">📊</span>
+                        <span class="rb-label">Prüfbericht</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Prüfung &amp; Auto-Reparatur</div>
+            </div>
+
+            <div class="ribbon-sep"></div>
+
+            <div class="ribbon-section">
+                <div class="ribbon-section-body">
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="a11y-tag" data-tagtype="H1" title="Überschrift 1 (H1) im Lesebaum markieren">
+                        <span class="rb-icon"><b>H1</b></span>
+                        <span class="rb-label">Tag H1</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="a11y-tag" data-tagtype="H2" title="Überschrift 2 (H2) im Lesebaum markieren">
+                        <span class="rb-icon"><b>H2</b></span>
+                        <span class="rb-label">Tag H2</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="a11y-tag" data-tagtype="P" title="Textabsatz (P) im Lesebaum markieren">
+                        <span class="rb-icon">¶</span>
+                        <span class="rb-label">Absatz (P)</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="a11y-tag" data-tagtype="Figure" title="Bild/Grafik (Figure) mit Alternativtext (/Alt) für Blinde markieren">
+                        <span class="rb-icon">🖼️</span>
+                        <span class="rb-label">Bild + Alt-Text</span>
+                    </button>
+                </div>
+                <div class="ribbon-section-title">Visueller Tag-Baum &amp; Alternativtexte (/Alt)</div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ==================================================================
+         3. MULTI-DOCUMENT TABS BAR
+         ================================================================== -->
+    <div class="tabsbar">
+        <div class="tabs-list" id="docTabsList">
+            <!-- Dynamically populated tabs -->
+        </div>
+        <div class="tabs-actions">
+            <button type="button" class="tool-btn" data-cmd="new-blank-pdf" title="Neues leeres PDF-Tab öffnen" style="height:24px;font-size:11px;">
+                + Leeres PDF
+            </button>
+            <button type="button" class="tool-btn" data-cmd="merge-files" title="Mehrere PDF-Dateien auswählen, sortieren und zu einem PDF zusammenführen" style="height:24px;font-size:11px;">
+                📑 PDF zusammenführen
+            </button>
+            <button type="button" class="tool-btn" data-cmd="merge-all-tabs" title="Alle geöffneten Dokument-Tabs sofort zu einem PDF zusammenführen" style="height:24px;font-size:11px;">
+                ⇄ Alle Tabs zusammenführen
+            </button>
+        </div>
+    </div>
+
+    <!-- ==================================================================
+         4. MAIN 3-COLUMN DESKTOP WORKSPACE
+         ================================================================== -->
+    <div class="workspace" id="mainWorkspace">
+
+        <!-- LEFT DOCK: Pages / Sammelmappe / Server Storage -->
+        <aside class="left-dock" id="leftDock">
+            <div class="dock-tabs">
+                <button type="button" class="dock-tab active" data-docktab="pages">Seiten</button>
+                <button type="button" class="dock-tab" data-docktab="tray">Sammelmappe (<span id="trayCountBadge">0</span>)</button>
+                <button type="button" class="dock-tab" data-docktab="server">☁️ Tresor</button>
+            </div>
+
+            <!-- Tab 1: Page Thumbnails -->
+            <div class="dock-panel" id="dockPanelPages">
+                <div class="dock-header-actions">
+                    <span id="leftPageSummary">Keine Datei geladen</span>
+                    <div>
+                        <button type="button" class="thumb-icon-btn" data-cmd="add-blank-page" title="Leere Seite hinzufügen">+</button>
+                        <button type="button" class="thumb-icon-btn" data-cmd="delete-page" title="Aktuelle Seite löschen">🗑</button>
+                    </div>
+                </div>
+                <div class="dock-body">
+                    <div class="thumb-list" id="thumbnailList"></div>
+                </div>
+            </div>
+
+            <!-- Tab 2: Sammelmappe (Cross-Document Page Collector) -->
+            <div class="dock-panel hidden" id="dockPanelTray">
+                <div class="dock-header-actions">
+                    <span>Gesammelte Seiten</span>
+                    <div style="display:flex;gap:4px;">
+                        <button type="button" class="thumb-icon-btn" data-cmd="add-current-to-tray" title="Aktuelle Seite in Sammelmappe legen">+1</button>
+                        <button type="button" class="thumb-icon-btn" data-cmd="build-pdf-from-tray" title="Neues PDF aus Sammelmappe erzeugen">✔</button>
+                        <button type="button" class="thumb-icon-btn" data-cmd="clear-tray" title="Sammelmappe leeren">✕</button>
+                    </div>
+                </div>
+                <div class="dock-body">
+                    <p style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.4;">
+                        Sammeln Sie beliebige Seiten aus verschiedenen PDFs und erzeugen Sie daraus per Klick ein neues Dokument.
+                    </p>
+                    <button type="button" class="tool-btn btn-primary" data-cmd="build-pdf-from-tray" style="width:100%;margin-bottom:10px;">
+                        Neues PDF aus Sammelmappe öffnen
+                    </button>
+                    <div class="thumb-list" id="trayList"></div>
+                </div>
+            </div>
+
+            <!-- Tab 3: Personal Account Vault (Login Protected) -->
+            <div class="dock-panel hidden" id="dockPanelServer">
+                <div class="dock-header-actions">
+                    <span id="vaultStatusLabel">🔒 Tresor (Login erforderlich)</span>
+                    <div style="display:flex;gap:4px;">
+                        <button type="button" class="thumb-icon-btn" data-cmd="open-account-modal" title="Konto &amp; Profil-Einstellungen">👤</button>
+                        <button type="button" class="thumb-icon-btn" data-cmd="refresh-server-files" title="Aktualisieren">↻</button>
+                    </div>
+                </div>
+                <div class="dock-body">
+                    <div id="vaultAuthControls" class="hidden">
+                        <!-- Storage Quota Progress Bar (configured in config.php) -->
+                        <div id="vaultQuotaBox" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:6px;padding:7px 9px;margin-bottom:8px;">
+                            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px;">
+                                <span style="color:var(--text-secondary);">Speicherplatz:</span>
+                                <span id="vaultQuotaText" style="font-weight:700;color:var(--text-primary);">— / —</span>
+                            </div>
+                            <div style="height:5px;background:var(--bg-input);border-radius:999px;overflow:hidden;">
+                                <div id="vaultQuotaFill" style="height:100%;width:0%;background:var(--accent-primary);transition:width 0.25s ease;"></div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex;gap:6px;margin-bottom:10px;">
+                            <button type="button" class="tool-btn btn-primary" data-cmd="save-server" style="flex:1;" title="Speichert das PDF + alle verschiebbaren Textfelder/Stempel als Projekt + legt automatisch eine neue Version an">
+                                ☁️ Projekt &amp; PDF speichern
+                            </button>
+                            <button type="button" class="tool-btn" data-cmd="open-share-modal" title="Aktuelles Dokument per E-Mail teilen">
+                                ✉️
+                            </button>
+                        </div>
+                    </div>
+                    <div id="serverFilesList" style="display:flex;flex-direction:column;gap:8px;"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- CENTER VIEWPORT -->
+        <main class="center-viewport" id="centerViewport">
+            <!-- Global Drag & Drop Overlay -->
+            <div class="drop-overlay" id="dropOverlay">
+                <div style="font-size:42px;">📄➕</div>
+                <h2 style="font-size:18px;font-weight:700;">Dateien hier ablegen</h2>
+                <p style="color:var(--text-secondary);">PDFs, Bilder (JPG/PNG/WebP), Word (.docx), Excel (.xlsx) oder Textdateien</p>
+            </div>
+
+            <!-- VIEW A: LAUNCHER DASHBOARD -->
+            <section class="launcher-view" id="viewLauncher">
+                <div class="launcher-hero">
+                    <div class="launcher-hero-text">
+                        <h1>PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?> — Ihre Desktop-PDF-Suite im Browser</h1>
+                        <p>
+                            Professionelle PDF-Bearbeitung, Konvertierung, OCR-Texterkennung und Barrierefreiheits-Prüfung (PDF/UA) als schnelle Desktop-Oberfläche (100 % Offline • Automatische 5-Minuten-Sicherung).
+                            Ziehen Sie Dateien einfach per Drag &amp; Drop in dieses Fenster oder starten Sie mit einem Werkzeug:
+                        </p>
+                    </div>
+                    <div class="launcher-hero-actions">
+                        <button type="button" class="tool-btn btn-primary" data-cmd="open-pdf" style="height:38px;padding:0 16px;font-size:13px;">
+                            📂 PDF-Datei öffnen
+                        </button>
+                        <button type="button" class="tool-btn" data-cmd="new-blank-pdf" style="height:38px;padding:0 16px;font-size:13px;">
+                            📄 Neues leeres PDF (A4)
+                        </button>
+                        <button type="button" class="tool-btn" data-cmd="open-help" style="height:38px;padding:0 16px;font-size:13px;">
+                            ❓ Handbuch &amp; Hilfe
+                        </button>
+                    </div>
+                </div>
+
+                <div class="launcher-section-title">1. Seiten organisieren, zusammenfügen &amp; teilen</div>
+                <div class="tools-grid">
+                    <div class="tool-tile" data-cmd="merge-files">
+                        <div class="tool-tile-icon">📑</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF zusammenfügen</h3>
+                            <p>Mehrere PDF-Dateien auswählen, Reihenfolge anpassen und zu einem PDF verbinden.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-split-modal">
+                        <div class="tool-tile-icon">✂️</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF teilen &amp; extrahieren</h3>
+                            <p>Seitenbereiche (z. B. 1-3, 5) extrahieren oder jede Seite als einzelnes PDF speichern.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="view-organizer">
+                        <div class="tool-tile-icon">☷</div>
+                        <div class="tool-tile-body">
+                            <h3>Seiten sortieren, drehen &amp; löschen</h3>
+                            <p>Übersichtliches Seiten-Studio zum Umsortieren per Drag &amp; Drop, Drehen und Entfernen.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-tray-panel">
+                        <div class="tool-tile-icon">🗂️</div>
+                        <div class="tool-tile-body">
+                            <h3>Sammelmappe</h3>
+                            <p>Einzelne Seiten aus verschiedenen Dokument-Tabs sammeln und neu kombinieren.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="launcher-section-title">2. Visueller PDF-Editor, Signatur &amp; Sicherheit</div>
+                <div class="tools-grid">
+                    <div class="tool-tile" data-cmd="launch-tool-edit-text">
+                        <div class="tool-tile-icon">✎</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF-Originaltext ändern &amp; kommentieren</h3>
+                            <p>Bestehenden PDF-Text direkt anklicken &amp; umschreiben, neuen Freitext, Marker, Formen und Bilder platzieren.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-signature-modal">
+                        <div class="tool-tile-icon">✍️</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF unterschreiben</h3>
+                            <p>Unterschrift per Maus/Touch zeichnen, als Schreibschrift tippen oder als Bild einfügen.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="launch-tool-redact">
+                        <div class="tool-tile-icon">⬛</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF schwärzen &amp; Stempel</h3>
+                            <p>Vertrauliche Textstellen abdecken oder Stempel (BEZAHLT, GENEHMIGT, DATUM) setzen.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="focus-watermark">
+                        <div class="tool-tile-icon">💧</div>
+                        <div class="tool-tile-body">
+                            <h3>Wasserzeichen &amp; Seitenzahlen</h3>
+                            <p>Schräge Wasserzeichen und fortlaufende Seitenzahlen (Seite X von Y) einbrennen.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="launcher-section-title">3. Konvertieren, Komprimieren &amp; OCR-Texterkennung</div>
+                <div class="tools-grid">
+                    <div class="tool-tile" data-cmd="open-images">
+                        <div class="tool-tile-icon">🖼️</div>
+                        <div class="tool-tile-body">
+                            <h3>Bilder in PDF / PDF in Bilder</h3>
+                            <p>JPG, PNG &amp; WebP in PDF umwandeln oder alle PDF-Seiten als Bilder (ZIP) speichern.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-converter-modal">
+                        <div class="tool-tile-icon">🔄</div>
+                        <div class="tool-tile-body">
+                            <h3>Office, HTML &amp; Text → PDF</h3>
+                            <p>Word (.docx), Excel (.xlsx), HTML, Markdown oder Text direkt in ein PDF konvertieren.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="focus-compress">
+                        <div class="tool-tile-icon">📉</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF komprimieren &amp; Metadaten</h3>
+                            <p>Dateigröße durch gezielte DPI-/Qualitäts-Optimierung verkleinern &amp; Metadaten ändern.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="make-searchable-pdf">
+                        <div class="tool-tile-icon">🔎</div>
+                        <div class="tool-tile-body">
+                            <h3>In durchsuchbares PDF umwandeln (OCR)</h3>
+                            <p>Erkennt Text in Scans/Bildern offline und hinterlegt ihn exakt positioniert als durchsuchbare Textebene im PDF.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-a11y-modal">
+                        <div class="tool-tile-icon">♿</div>
+                        <div class="tool-tile-body">
+                            <h3>Barrierefreiheit (PDF/UA &amp; BITV)</h3>
+                            <p>Dokumente auf Barrierefreiheit prüfen, Prüfbericht erstellen &amp; Tags/Sprache/Titel nachrüsten.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="launcher-section-title">4. Acrobat Pro Zusatzfunktionen (Formulare, Vergleich, Zuschnitt &amp; Bates)</div>
+                <div class="tools-grid">
+                    <div class="tool-tile" data-cmd="launch-tool-forms">
+                        <div class="tool-tile-icon">📋</div>
+                        <div class="tool-tile-body">
+                            <h3>Interaktive Formulare (AcroForms)</h3>
+                            <p>Ausfüllbare Textfelder, Checkboxen, Dropdown-Menüs und Klick-Links im PDF anlegen.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-compare-modal">
+                        <div class="tool-tile-icon">⚖️</div>
+                        <div class="tool-tile-body">
+                            <h3>PDF-Vergleich (Visuell &amp; Text)</h3>
+                            <p>Zwei PDF-Versionen nebeneinander vergleichen – markiert Abweichungen farbig im Bild &amp; Text.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-crop-modal">
+                        <div class="tool-tile-icon">📐</div>
+                        <div class="tool-tile-body">
+                            <h3>Seiten zuschneiden (Crop)</h3>
+                            <p>Seitenränder (Oben, Unten, Links, Rechts in mm) für einzelne oder alle Seiten beschneiden.</p>
+                        </div>
+                    </div>
+                    <div class="tool-tile" data-cmd="open-bates-modal">
+                        <div class="tool-tile-icon">🔢</div>
+                        <div class="tool-tile-body">
+                            <h3>Bates-Nummerierung &amp; Kopf-/Fußzeile</h3>
+                            <p>Juristische Bates-Nummern (z. B. AZ-2026-000001) sowie 3-spaltige Kopf- &amp; Fußzeilen.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VIEW B: MULTI-PAGE ORGANIZER GRID -->
+            <section class="organizer-view hidden" id="viewOrganizer">
+                <div class="organizer-toolbar">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <strong>Seiten-Organisierer:</strong>
+                        <span style="color:var(--text-secondary);font-size:12px;">Ziehen Sie Karten per Drag &amp; Drop zum Umsortieren</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                        <button type="button" class="tool-btn" data-cmd="rotate-all-left">⟲ Alle links</button>
+                        <button type="button" class="tool-btn" data-cmd="rotate-all-right">⟳ Alle rechts</button>
+                        <button type="button" class="tool-btn" data-cmd="reverse-pages">⇅ Reihenfolge umkehren</button>
+                        <button type="button" class="tool-btn" data-cmd="add-blank-page">+ Leere Seite</button>
+                        <button type="button" class="tool-btn" data-cmd="merge-files">📑 PDF zusammenführen</button>
+                        <button type="button" class="tool-btn btn-primary" data-cmd="view-editor">✎ Im Editor öffnen</button>
+                    </div>
+                </div>
+                <div class="organizer-grid" id="organizerGrid"></div>
+            </section>
+
+            <!-- VIEW C: VISUAL PDF STUDIO EDITOR -->
+            <section class="editor-view hidden" id="viewEditor">
+                <div class="page-stage-wrapper" id="pageStageWrapper">
+                    <canvas id="pdfRenderCanvas"></canvas>
+                    <canvas id="annotationCanvas"></canvas>
+                </div>
+
+                <!-- Floating Bottom Page, Search & Zoom Navigator -->
+                <div class="floating-nav">
+                    <button type="button" class="thumb-icon-btn" data-cmd="prev-page" title="Vorherige Seite">◀</button>
+                    <span id="floatingPageIndicator" style="font-weight:600;min-width:90px;text-align:center;">Seite 1 / 1</span>
+                    <button type="button" class="thumb-icon-btn" data-cmd="next-page" title="Nächste Seite">▶</button>
+                    <span style="color:var(--border-strong);">|</span>
+                    <button type="button" class="thumb-icon-btn" data-cmd="zoom-out" title="Verkleinern">−</button>
+                    <span id="floatingZoomLabel" style="min-width:45px;text-align:center;font-family:var(--font-mono);">100%</span>
+                    <button type="button" class="thumb-icon-btn" data-cmd="zoom-in" title="Vergrößern">+</button>
+                    <button type="button" class="thumb-icon-btn" data-cmd="zoom-reset" title="100%">1:1</button>
+                    <span style="color:var(--border-strong);">|</span>
+                    <div style="display:flex;align-items:center;gap:4px;" title="Volltextsuche im geöffneten PDF (Strg+F)">
+                        <input type="text" id="pdfSearchInput" class="form-control" placeholder="🔍 Im PDF suchen (Strg+F)…" style="width:165px;height:24px;font-size:11.5px;padding:2px 7px;">
+                        <span id="pdfSearchCountBadge" style="font-size:11px;color:var(--text-secondary);min-width:34px;text-align:center;font-family:var(--font-mono);">0/0</span>
+                        <button type="button" class="thumb-icon-btn" id="btnPdfSearchPrev" title="Vorheriger Suchtreffer">▲</button>
+                        <button type="button" class="thumb-icon-btn" id="btnPdfSearchNext" title="Nächster Suchtreffer (Enter)">▼</button>
+                        <button type="button" class="thumb-icon-btn" id="btnPdfSearchClear" title="Suche zurücksetzen">✕</button>
+                    </div>
+                    <span style="color:var(--border-strong);">|</span>
+                    <button type="button" class="thumb-icon-btn" data-cmd="toggle-fullscreen" title="Vollbild-Modus umschalten (F11)">⛶</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- RIGHT DOCK: CONTEXT INSPECTOR & POWER TOOLS -->
+        <aside class="right-dock" id="rightDock">
+
+            <!-- 1. Active Tool Properties -->
+            <div class="inspector-section" id="inspectorToolSection">
+                <div class="inspector-title">
+                    <span>Werkzeug-Eigenschaften</span>
+                    <span id="activeToolBadge" style="color:var(--accent-primary);">Auswahl</span>
+                </div>
+
+                <div class="form-row">
+                    <label>Farbe (Text / Stift / Rahmen / Stempel)</label>
+                    <div class="color-swatch-row">
+                        <input type="color" id="propColor" value="#e11d48" style="width:32px;height:26px;border:none;background:none;cursor:pointer;">
+                        <span class="color-swatch" data-color="#0f172a" style="background:#0f172a;"></span>
+                        <span class="color-swatch" data-color="#dc2626" style="background:#dc2626;"></span>
+                        <span class="color-swatch" data-color="#2563eb" style="background:#2563eb;"></span>
+                        <span class="color-swatch" data-color="#16a34a" style="background:#16a34a;"></span>
+                        <span class="color-swatch" data-color="#eab308" style="background:#eab308;"></span>
+                    </div>
+                </div>
+
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="propFontSize">Schriftgröße (px)</label>
+                        <input type="number" id="propFontSize" class="form-control" value="18" min="8" max="96">
+                    </div>
+                    <div class="form-row">
+                        <label for="propStrokeWidth">Linienstärke</label>
+                        <input type="number" id="propStrokeWidth" class="form-control" value="3" min="1" max="30">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label for="propStampText">Stempel-Vorlage</label>
+                    <select id="propStampText" class="form-control">
+                        <option value="BEZAHLT">BEZAHLT</option>
+                        <option value="GENEHMIGT">GENEHMIGT</option>
+                        <option value="VERTRAULICH">VERTRAULICH</option>
+                        <option value="ENTWURF">ENTWURF</option>
+                        <option value="KOPIE">KOPIE</option>
+                        <option value="GEPRÜFT">GEPRÜFT</option>
+                        <option value="EINGEGANGEN AM <?php echo date('d.m.Y'); ?>">EINGEGANGEN AM <?php echo date('d.m.Y'); ?></option>
+                    </select>
+                </div>
+
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <button type="button" class="tool-btn" data-cmd="delete-selected-annotation" style="flex:1;">
+                        🗑 Auswahl löschen
+                    </button>
+                    <button type="button" class="tool-btn" data-cmd="bake-annotations" style="flex:1;">
+                        ✔ Fest einbetten
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. Watermark & Page Numbers -->
+            <div class="inspector-section" id="inspectorWatermarkSection">
+                <div class="inspector-title">
+                    <span>Wasserzeichen &amp; Seitenzahlen</span>
+                </div>
+                <div class="form-row">
+                    <label for="wmText">Wasserzeichen-Text</label>
+                    <input type="text" id="wmText" class="form-control" placeholder="z. B. VERTRAULICH / MUSTER">
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="wmOpacity">Deckkraft (0.1–1.0)</label>
+                        <input type="number" id="wmOpacity" class="form-control" value="0.22" step="0.05" min="0.05" max="1">
+                    </div>
+                    <div class="form-row">
+                        <label for="wmSize">Größe (pt)</label>
+                        <input type="number" id="wmSize" class="form-control" value="48" min="14" max="120">
+                    </div>
+                </div>
+                <button type="button" class="tool-btn" data-cmd="apply-watermark" style="width:100%;margin-bottom:8px;">
+                    💧 Wasserzeichen auf alle Seiten
+                </button>
+
+                <div class="form-row">
+                    <label for="pageNumPos">Seitenzahlen-Position</label>
+                    <select id="pageNumPos" class="form-control">
+                        <option value="bottom-right">Unten rechts (Seite X von Y)</option>
+                        <option value="bottom-center">Unten zentriert (Seite X von Y)</option>
+                        <option value="bottom-left">Unten links (Seite X von Y)</option>
+                        <option value="top-right">Oben rechts (Seite X von Y)</option>
+                    </select>
+                </div>
+                <button type="button" class="tool-btn" data-cmd="apply-page-numbers" style="width:100%;">
+                    🔢 Seitenzahlen einfügen
+                </button>
+            </div>
+
+            <!-- 3. Compress PDF -->
+            <div class="inspector-section" id="inspectorCompressSection">
+                <div class="inspector-title">
+                    <span>PDF Komprimieren</span>
+                </div>
+                <div class="form-row">
+                    <label for="compressPreset">Komprimierungs-Stufe</label>
+                    <select id="compressPreset" class="form-control">
+                        <option value="screen">Stark komprimieren (96 DPI, kleine Datei)</option>
+                        <option value="ebook" selected>Ausgewogen / E-Book (140 DPI, empfohlen)</option>
+                        <option value="print">Hohe Qualität (200 DPI)</option>
+                    </select>
+                </div>
+                <button type="button" class="tool-btn btn-primary" data-cmd="run-compression" style="width:100%;">
+                    📉 Jetzt komprimieren
+                </button>
+                <div id="compressResultInfo" style="margin-top:6px;font-size:11.5px;color:var(--accent-success);"></div>
+            </div>
+
+            <!-- 4. Metadata & Security -->
+            <div class="inspector-section" id="inspectorMetadataSection">
+                <div class="inspector-title">
+                    <span>Metadaten &amp; Dokument-Info</span>
+                </div>
+                <div class="form-row">
+                    <label for="metaTitle">Titel</label>
+                    <input type="text" id="metaTitle" class="form-control" placeholder="Dokumenttitel">
+                </div>
+                <div class="form-row">
+                    <label for="metaAuthor">Autor</label>
+                    <input type="text" id="metaAuthor" class="form-control" placeholder="Autor / Firma">
+                </div>
+                <div class="form-row">
+                    <label for="metaSubject">Betreff / Stichwörter</label>
+                    <input type="text" id="metaSubject" class="form-control" placeholder="Betreff">
+                </div>
+                <button type="button" class="tool-btn" data-cmd="apply-metadata" style="width:100%;">
+                    🏷️ Metadaten übernehmen
+                </button>
+            </div>
+
+            <!-- 5. OCR & Searchable Sandwich-PDF -->
+            <div class="inspector-section" id="inspectorOcrSection">
+                <div class="inspector-title">
+                    <span>🔎 Durchsuchbares PDF (Sandwich-OCR)</span>
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="ocrLang">Sprache (Offline-OCR)</label>
+                        <select id="ocrLang" class="form-control">
+                            <option value="deu">Deutsch (deu)</option>
+                            <option value="eng">Englisch (eng)</option>
+                            <option value="deu+eng">Deutsch + Englisch</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label for="ocrScope">Seitenumfang</label>
+                        <select id="ocrScope" class="form-control">
+                            <option value="all">Alle Seiten</option>
+                            <option value="current">Aktuelle Seite</option>
+                        </select>
+                    </div>
+                </div>
+                <button type="button" class="tool-btn btn-success" data-cmd="make-searchable-pdf" style="width:100%;margin-bottom:6px;" title="Erkennt Text in Bildern/Scans und bettet ihn unsichtbar an den exakten Wortpositionen direkt in das PDF ein">
+                    🔎 In durchsuchbares PDF umwandeln
+                </button>
+                <div style="display:flex;gap:6px;margin-bottom:8px;">
+                    <button type="button" class="tool-btn" data-cmd="extract-page-text" style="flex:1;" title="Liest bereits im PDF eingebetteten Text aus">
+                        📄 PDF-Text prüfen
+                    </button>
+                    <button type="button" class="tool-btn btn-primary" data-cmd="run-ocr-page" style="flex:1;" title="Nur Text der aktuellen Seite ins Textfeld auslesen">
+                        🔍 Nur Text-Scan
+                    </button>
+                </div>
+                <div id="ocrStatusBox" class="hidden" style="margin-bottom:6px;padding:6px 8px;border-radius:6px;font-size:11.5px;background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.35);color:var(--text-primary);line-height:1.4;"></div>
+                <textarea id="ocrOutputText" class="form-control" rows="5" placeholder="Erkannter oder im PDF hinterlegter Text erscheint hier..."></textarea>
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <button type="button" class="tool-btn" data-cmd="copy-ocr-text" style="flex:1;">📋 Kopieren</button>
+                    <button type="button" class="tool-btn" data-cmd="download-ocr-text" style="flex:1;">💾 Als .txt</button>
+                </div>
+            </div>
+
+            <!-- 6. Barrierefreiheit (PDF/UA & BITV 2.0) Quick Inspector -->
+            <div class="inspector-section" id="inspectorA11ySection">
+                <div class="inspector-title">
+                    <span>♿ Barrierefreiheit (PDF/UA)</span>
+                    <span id="inspectorA11yScoreBadge" style="color:var(--accent-warning);">Prüfen…</span>
+                </div>
+                <p style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px;line-height:1.4;">
+                    Prüft Dokumenttitel, Sprache (<code>/Lang</code>), Tagged-PDF-Struktur (<code>/StructTreeRoot</code>), <code>DisplayDocTitle</code> &amp; Textzugänglichkeit.
+                </p>
+                <div style="display:flex;gap:6px;">
+                    <button type="button" class="tool-btn btn-primary" data-cmd="open-a11y-modal" style="flex:1;">
+                        ♿ Prüfbericht &amp; Auto-Fix
+                    </button>
+                </div>
+            </div>
+
+        </aside>
+    </div>
+
+    <!-- ==================================================================
+         5. BOTTOM DESKTOP STATUS BAR
+         ================================================================== -->
+    <footer class="statusbar">
+        <div class="statusbar-left">
+            <span class="status-item">
+                <span class="status-dot"></span>
+                <span id="statusText">Bereit — PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?></span>
+            </span>
+            <span class="status-item" id="statusDocSize">Dateigröße: —</span>
+            <span class="status-item" id="statusPageDim">Format: —</span>
+            <button type="button" class="status-item" id="statusAutoSaveBtn" data-cmd="toggle-autosave" style="background:none;border:none;color:var(--accent-success);cursor:pointer;font-size:11.5px;font-weight:600;padding:0 4px;" title="Automatische Sicherung alle 5 Minuten (Klicken zum Ein-/Ausschalten)">
+                ⏱️ Auto-Save (5 Min.): Aktiv
+            </button>
+            <button type="button" class="status-item hidden" id="btnRestoreAutoSave" data-cmd="restore-autosave" style="background:rgba(59,130,246,0.18);border:1px solid var(--accent-primary);border-radius:4px;color:#60a5fa;cursor:pointer;font-size:11px;font-weight:700;padding:1px 7px;" title="Zuletzt automatisch gesichertes Dokument wiederherstellen">
+                🔄 Auto-Save wiederherstellen
+            </button>
+            <div class="progress-wrap" id="statusProgressWrap">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="statusProgressFill"></div>
+                </div>
+                <span id="statusProgressLabel">0%</span>
+            </div>
+        </div>
+
+        <div class="statusbar-right">
+            <span class="status-item">PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?> • 100 % Offline</span>
+            <span class="status-item" style="display:inline-flex;align-items:center;gap:5px;">
+                <span>Zoom:</span>
+                <button type="button" class="thumb-icon-btn" data-cmd="zoom-out" title="Verkleinern" style="width:18px;height:18px;font-size:12px;line-height:1;">−</button>
+                <input type="range" id="zoomSlider" min="50" max="250" step="5" value="110" style="width:85px;vertical-align:middle;cursor:pointer;">
+                <button type="button" class="thumb-icon-btn" data-cmd="zoom-in" title="Vergrößern" style="width:18px;height:18px;font-size:12px;line-height:1;">+</button>
+                <span id="statusZoomPercent" data-cmd="zoom-reset" title="Klicken für 100 % Standard-Zoom" style="min-width:36px;text-align:right;font-family:var(--font-mono);font-weight:700;cursor:pointer;">110%</span>
+            </span>
+        </div>
+    </footer>
+
+</div>
+
+<!-- ======================================================================
+     CUSTOM RIGHT-CLICK DESKTOP CONTEXT MENU
+     ====================================================================== -->
+<div class="context-menu" id="desktopContextMenu">
+    <button type="button" class="menu-entry" data-cmd="rotate-right"><span>Seite 90° nach rechts drehen</span><span class="menu-shortcut">⟳</span></button>
+    <button type="button" class="menu-entry" data-cmd="rotate-left"><span>Seite 90° nach links drehen</span><span class="menu-shortcut">⟲</span></button>
+    <div class="menu-divider"></div>
+    <button type="button" class="menu-entry" data-cmd="duplicate-page"><span>Seite duplizieren</span></button>
+    <button type="button" class="menu-entry" data-cmd="add-blank-page"><span>Leere Seite danach einfügen</span></button>
+    <button type="button" class="menu-entry" data-cmd="add-current-to-tray"><span>In Sammelmappe legen</span></button>
+    <div class="menu-divider"></div>
+    <button type="button" class="menu-entry" data-cmd="extract-current-page"><span>Nur diese Seite als PDF speichern</span></button>
+    <button type="button" class="menu-entry" data-cmd="export-current-png"><span>Seite als PNG-Bild exportieren</span></button>
+    <div class="menu-divider"></div>
+    <button type="button" class="menu-entry" data-cmd="delete-page"><span style="color:var(--accent-danger);">Seite löschen</span><span class="menu-shortcut">Entf</span></button>
+</div>
+
+<!-- ======================================================================
+     MODALS (Signature Pad, Split PDF, Office/HTML Converter, Server Info)
+     ====================================================================== -->
+
+<!-- 1. SIGNATURE MODAL (WITH PERSONAL SIGNATURE VAULT) -->
+<div class="modal-backdrop" id="modalSignature">
+    <div class="modal-window" style="max-width:640px;">
+        <div class="modal-header">
+            <span>✍️ Unterschrift erstellen &amp; Konto-Tresor</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalSignature">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="color:var(--text-secondary);margin-bottom:10px;">
+                Zeichnen Sie Ihre Unterschrift mit der Maus / dem Finger oder geben Sie Ihren Namen als Signatur ein:
+            </p>
+            <div class="signature-pad-wrap">
+                <canvas id="signatureCanvas" width="560" height="160"></canvas>
+            </div>
+            <div class="form-grid-2">
+                <div class="form-row">
+                    <label for="sigTypedInput">Oder Namen als Schreibschrift generieren:</label>
+                    <input type="text" id="sigTypedInput" class="form-control" placeholder="z. B. Max Mustermann">
+                </div>
+                <div class="form-row">
+                    <label for="sigPenColor">Stiftfarbe der Unterschrift</label>
+                    <select id="sigPenColor" class="form-control">
+                        <option value="#1d4ed8">Königsblau (#1d4ed8)</option>
+                        <option value="#0f172a">Tiefschwarz (#0f172a)</option>
+                        <option value="#15803d">Dokumentengrün (#15803d)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Save to Personal Account Signature Vault -->
+            <div style="display:flex;gap:8px;align-items:center;background:var(--bg-card);border:1px solid var(--border-subtle);padding:8px 10px;border-radius:6px;margin-top:4px;">
+                <input type="text" id="sigVaultTitleInput" class="form-control" placeholder="Bezeichnung (z. B. Hauptunterschrift / Paraphe)" style="flex:1;">
+                <button type="button" class="tool-btn" id="btnSaveSigToVault" title="Unterschrift dauerhaft in Ihrem Benutzerkonto hinterlegen">
+                    ⭐ Im Konto-Tresor speichern
+                </button>
+            </div>
+
+            <!-- Saved Signatures Gallery -->
+            <div style="margin-top:12px;">
+                <div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);margin-bottom:6px;">
+                    Hinterlegte Unterschriften &amp; Paraphen im Konto-Tresor:
+                </div>
+                <div id="sigVaultList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;max-height:145px;overflow-y:auto;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" id="btnClearSignature">Fläche leeren</button>
+            <button type="button" class="tool-btn" data-close-modal="modalSignature">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnApplySignature">✔ Aktuelle Zeichnung auf Seite einfügen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 2. SPLIT / EXTRACT PDF MODAL -->
+<div class="modal-backdrop" id="modalSplit">
+    <div class="modal-window">
+        <div class="modal-header">
+            <span>✂️ PDF teilen &amp; Seiten extrahieren</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalSplit">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-row">
+                <label for="splitRangeInput">Seitenbereich eingeben (z. B. <code>1-2</code> oder <code>1, 3</code>):</label>
+                <input type="text" id="splitRangeInput" class="form-control" value="1">
+            </div>
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;">
+                Sie können die angegebenen Seiten entweder als neuen Dokument-Tab im Studio öffnen, direkt als PDF herunterladen oder alle Seiten einzeln in ein ZIP-Archiv aufteilen.
+            </p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn btn-primary" id="btnSplitToTab">Als neuen Tab öffnen</button>
+                <button type="button" class="tool-btn" id="btnSplitDownload">Auswahl als PDF herunterladen</button>
+                <button type="button" class="tool-btn" id="btnSplitAllZip">Jede Seite einzeln als PDF (ZIP)</button>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalSplit">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 3. DOCUMENT CONVERTER MODAL (DOCX / XLSX / HTML / MARKDOWN / TEXT -> PDF) -->
+<div class="modal-backdrop" id="modalConverter">
+    <div class="modal-window">
+        <div class="modal-header">
+            <span>🔄 Dokument- &amp; Office-Konverter → PDF</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalConverter">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-row">
+                <label>Word (.docx), Excel (.xlsx/.csv), Text (.txt/.md) oder HTML-Datei auswählen:</label>
+                <input type="file" id="officeFileInput" class="form-control" accept=".docx,.xlsx,.xls,.csv,.txt,.md,.html,.htm">
+            </div>
+            <div class="form-row">
+                <label for="converterTextInput">Inhalt vor dem Erstellen prüfen oder frei schreiben:</label>
+                <textarea id="converterTextInput" class="form-control" rows="10" placeholder="Hier Text eingeben oder oben eine Datei (.docx, .xlsx, .txt, .html) wählen..."></textarea>
+            </div>
+            <div class="form-row">
+                <label for="converterDocTitle">Titel des neuen PDF-Dokuments:</label>
+                <input type="text" id="converterDocTitle" class="form-control" value="Konvertiertes_Dokument.pdf">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalConverter">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnConvertTextToPdf">📄 Jetzt als PDF-Tab erzeugen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 4. SERVER DIAGNOSTICS MODAL -->
+<div class="modal-backdrop" id="modalServer">
+    <div class="modal-window">
+        <div class="modal-header">
+            <span>🖥️ System- &amp; Tresor-Umgebung</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalServer">✕</button>
+        </div>
+        <div class="modal-body">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+                <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:8px 0;color:var(--text-secondary);">Betriebsmodus</td>
+                    <td style="padding:8px 0;font-weight:600;">100 % Offline Desktop-Suite</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:8px 0;color:var(--text-secondary);">Maximale Upload-Größe</td>
+                    <td style="padding:8px 0;font-weight:600;"><?php echo htmlspecialchars($serverInfo['effective_max_formatted'], ENT_QUOTES, 'UTF-8'); ?></td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:8px 0;color:var(--text-secondary);">PHP Memory Limit</td>
+                    <td style="padding:8px 0;font-weight:600;"><?php echo htmlspecialchars($serverInfo['memory_limit'], ENT_QUOTES, 'UTF-8'); ?></td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:8px 0;color:var(--text-secondary);">Speicher-Kontingent pro Konto (<code>config.php</code>)</td>
+                    <td style="padding:8px 0;font-weight:600;">
+                        <?php echo ($serverInfo['user_quota_mb'] > 0) ? htmlspecialchars($serverInfo['user_quota_mb'] . ' MB (nur für angemeldete Kontoinhaber)', ENT_QUOTES, 'UTF-8') : 'Unbegrenzt (nur für angemeldete Kontoinhaber)'; ?>
+                    </td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:8px 0;color:var(--text-secondary);">E-Mail-Absenderadresse (<code>config.php</code>)</td>
+                    <td style="padding:8px 0;font-weight:600;"><?php echo htmlspecialchars($serverInfo['mail_from_name'] . ' <' . $serverInfo['mail_from_address'] . '>', ENT_QUOTES, 'UTF-8'); ?></td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:8px 0;color:var(--text-secondary);">E-Mail-Versand / SMTP-Server (<code>config.php</code>)</td>
+                    <td style="padding:8px 0;font-weight:600;">
+                        <?php
+                        if ($serverInfo['mail_transport'] === 'smtp') {
+                            echo 'Direkter SMTP (' . htmlspecialchars($serverInfo['smtp_host'] !== '' ? $serverInfo['smtp_host'] : 'Nicht eingetragen', ENT_QUOTES, 'UTF-8') . ')';
+                        } else {
+                            echo 'PHP mail()';
+                        }
+                        ?>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding:8px 0;color:var(--text-secondary);">Server-Workspace (`storage/`)</td>
+                    <td style="padding:8px 0;font-weight:600;">
+                        <?php echo $serverInfo['storage_writable'] ? '<span style="color:var(--accent-success);">✔ Beschreibbar</span>' : '<span style="color:var(--accent-danger);">✕ Nicht beschreibbar</span>'; ?>
+                    </td>
+                </tr>
+            </table>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn btn-primary" data-close-modal="modalServer">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- 5. BARRIEREFREIHEIT (PDF/UA & BITV 2.0 / WCAG 2.1) AUDIT & REMEDIATION MODAL -->
+<div class="modal-backdrop" id="modalAccessibility">
+    <div class="modal-window" style="max-width:740px;">
+        <div class="modal-header">
+            <span>♿ Barrierefreiheits-Prüfung &amp; Reparatur (PDF/UA • BITV 2.0 • WCAG 2.1)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalAccessibility">✕</button>
+        </div>
+        <div class="modal-body">
+            <!-- Summary Banner -->
+            <div id="a11ySummaryBanner" style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 16px;margin-bottom:10px;gap:12px;flex-wrap:wrap;transition:border-color 0.25s ease, box-shadow 0.25s ease;">
+                <div>
+                    <div id="a11ySummaryTitle" style="font-size:15px;font-weight:700;">Prüfe Dokument…</div>
+                    <div id="a11ySummarySub" style="font-size:12px;color:var(--text-secondary);margin-top:2px;">
+                        Automatische Prüfung nach PDF/UA-1 (ISO 14289-1), BITV 2.0 &amp; EN 301 549
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <span id="a11yScorePill" style="display:inline-block;font-size:18px;font-weight:800;padding:4px 12px;border-radius:999px;background:var(--accent-soft);color:var(--accent-primary);">
+                        — %
+                    </span>
+                </div>
+            </div>
+
+            <!-- Live Audit Progress Indicator -->
+            <div id="a11yAuditProgressBox" style="display:none;background:var(--bg-card);border:1px solid var(--accent-primary);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:6px;gap:8px;">
+                    <span id="a11yAuditStepLabel" style="font-weight:600;color:var(--accent-primary);">🔍 Starte Tiefenprüfung der PDF-Katalogstruktur…</span>
+                    <span id="a11yAuditStepPercent" style="font-weight:700;color:var(--text-secondary);">0 %</span>
+                </div>
+                <div style="width:100%;height:7px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border-subtle);">
+                    <div id="a11yAuditProgressFill" style="width:0%;height:100%;background:linear-gradient(90deg, #3b82f6, #10b981);transition:width 0.08s linear;"></div>
+                </div>
+            </div>
+
+            <!-- 10-Point Detailed Checklist -->
+            <div id="a11yChecklistContainer" style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px;max-height:290px;overflow-y:auto;padding-right:4px;">
+                <!-- Populated dynamically by auditAccessibility() -->
+            </div>
+
+            <!-- Auto-Remediation Form -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">
+                <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--text-primary);">
+                    🛠️ Barrierefreiheit direkt im PDF nachrüsten (Auto-Remediation):
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="a11yFixTitle">Barrierefreier Dokumenttitel (<code>/Title</code> &amp; <code>dc:title</code>)</label>
+                        <input type="text" id="a11yFixTitle" class="form-control" placeholder="Aussagekräftiger Dokumenttitel">
+                    </div>
+                    <div class="form-row">
+                        <label for="a11yFixLang">Dokumentsprache für Screenreader (<code>/Lang</code>)</label>
+                        <select id="a11yFixLang" class="form-control">
+                            <option value="de-DE">Deutsch — Deutschland (de-DE)</option>
+                            <option value="de-AT">Deutsch — Österreich (de-AT)</option>
+                            <option value="de-CH">Deutsch — Schweiz (de-CH)</option>
+                            <option value="en-US">Englisch — USA (en-US)</option>
+                            <option value="en-GB">Englisch — UK (en-GB)</option>
+                            <option value="fr-FR">Französisch (fr-FR)</option>
+                        </select>
+                    </div>
+                </div>
+                <p style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;">
+                    Setzt automatisch: <code>/Title</code>, <code>/ViewerPreferences &lt;&lt; /DisplayDocTitle true &gt;&gt;</code>, <code>/Lang</code>, <code>/MarkInfo &lt;&lt; /Marked true &gt;&gt;</code>, einen Basis-Strukturbaum (<code>/StructTreeRoot</code> mit Dokument-/Seiten-Tags), XMP-Metadaten (<code>pdfuaid:part=1</code>) sowie Lesezeichen (<code>/Outlines</code>).
+                </p>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
+            <div style="display:flex;gap:8px;">
+                <button type="button" class="tool-btn" id="btnReRunA11yAudit">↻ Erneut prüfen</button>
+                <button type="button" class="tool-btn" id="btnExportA11yReportPdf">📄 Prüfbericht als PDF öffnen</button>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button type="button" class="tool-btn" data-close-modal="modalAccessibility">Schließen</button>
+                <button type="button" class="tool-btn btn-success" id="btnAutoFixA11y">🛠️ Barrierefreiheit jetzt nachrüsten</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 6. CROP PAGES MODAL (Seiten zuschneiden / Ränder anpassen) -->
+<div class="modal-backdrop" id="modalCrop">
+    <div class="modal-window">
+        <div class="modal-header">
+            <span>📐 Seiten zuschneiden (CropBox / MediaBox Ränder)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalCrop">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">
+                Geben Sie an, wie viele Millimeter (mm) vom jeweiligen Seitenrand abgeschnitten werden sollen:
+            </p>
+            <div class="form-grid-2">
+                <div class="form-row">
+                    <label for="cropTopMm">Rand oben abschneiden (mm)</label>
+                    <input type="number" id="cropTopMm" class="form-control" value="10" min="0" max="150">
+                </div>
+                <div class="form-row">
+                    <label for="cropBottomMm">Rand unten abschneiden (mm)</label>
+                    <input type="number" id="cropBottomMm" class="form-control" value="10" min="0" max="150">
+                </div>
+                <div class="form-row">
+                    <label for="cropLeftMm">Rand links abschneiden (mm)</label>
+                    <input type="number" id="cropLeftMm" class="form-control" value="10" min="0" max="150">
+                </div>
+                <div class="form-row">
+                    <label for="cropRightMm">Rand rechts abschneiden (mm)</label>
+                    <input type="number" id="cropRightMm" class="form-control" value="10" min="0" max="150">
+                </div>
+            </div>
+            <div class="form-row">
+                <label for="cropScope">Anwenden auf:</label>
+                <select id="cropScope" class="form-control">
+                    <option value="all">Alle Seiten des Dokuments</option>
+                    <option value="current">Nur aktuelle Seite</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalCrop">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnApplyCrop">✂️ Jetzt zuschneiden</button>
+        </div>
+    </div>
+</div>
+
+<!-- 7. BATES NUMBERING & 3-COLUMN HEADER/FOOTER MODAL -->
+<div class="modal-backdrop" id="modalBates">
+    <div class="modal-window" style="max-width:660px;">
+        <div class="modal-header">
+            <span>🔢 Bates-Nummerierung &amp; 3-spaltige Kopf-/Fußzeilen</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalBates">✕</button>
+        </div>
+        <div class="modal-body">
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-bottom:14px;">
+                <div style="font-weight:700;margin-bottom:8px;">A. Juristische / Behördliche Bates-Nummerierung</div>
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="batesPrefix">Präfix / Aktenzeichen</label>
+                        <input type="text" id="batesPrefix" class="form-control" value="AZ-2026-">
+                    </div>
+                    <div class="form-row">
+                        <label for="batesStart">Startnummer &amp; Stellen (z. B. 6 → 000001)</label>
+                        <div style="display:flex;gap:6px;">
+                            <input type="number" id="batesStart" class="form-control" value="1" min="1" title="Startnummer">
+                            <input type="number" id="batesDigits" class="form-control" value="6" min="1" max="12" title="Anzahl Ziffern">
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="tool-btn btn-primary" id="btnApplyBates">🔢 Bates-Nummerierung oben rechts einfügen</button>
+            </div>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+                <div style="font-weight:700;margin-bottom:4px;">B. Dreispaltige Kopf- &amp; Fußzeilen</div>
+                <p style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+                    Verfügbare Platzhalter: <code>{page}</code> (Seite), <code>{total}</code> (Gesamtseiten), <code>{date}</code> (Datum), <code>{file}</code> (Dateiname)
+                </p>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+                    <div class="form-row">
+                        <label for="hfHeaderLeft">Kopfzeile Links</label>
+                        <input type="text" id="hfHeaderLeft" class="form-control" value="{file}">
+                    </div>
+                    <div class="form-row">
+                        <label for="hfHeaderCenter">Kopfzeile Mitte</label>
+                        <input type="text" id="hfHeaderCenter" class="form-control" placeholder="Optional">
+                    </div>
+                    <div class="form-row">
+                        <label for="hfHeaderRight">Kopfzeile Rechts</label>
+                        <input type="text" id="hfHeaderRight" class="form-control" value="{date}">
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                    <div class="form-row">
+                        <label for="hfFooterLeft">Fußzeile Links</label>
+                        <input type="text" id="hfFooterLeft" class="form-control" value="Vertraulich">
+                    </div>
+                    <div class="form-row">
+                        <label for="hfFooterCenter">Fußzeile Mitte</label>
+                        <input type="text" id="hfFooterCenter" class="form-control" placeholder="Optional">
+                    </div>
+                    <div class="form-row">
+                        <label for="hfFooterRight">Fußzeile Rechts</label>
+                        <input type="text" id="hfFooterRight" class="form-control" value="Seite {page} von {total}">
+                    </div>
+                </div>
+                <button type="button" class="tool-btn btn-primary" id="btnApplyHeaderFooter" style="margin-top:6px;">📑 Kopf- &amp; Fußzeilen auf alle Seiten anwenden</button>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalBates">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 8. PDF COMPARE MODAL (Visueller & Textueller Dokumentenvergleich) -->
+<div class="modal-backdrop" id="modalCompare">
+    <div class="modal-window" style="max-width:960px;">
+        <div class="modal-header">
+            <span>⚖️ PDF-Vergleich (Visueller Pixel-Diff &amp; Text-Abgleich)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalCompare">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-grid-2" style="margin-bottom:12px;">
+                <div class="form-row">
+                    <label for="compareSelectA">Dokument A (Basis-Tab):</label>
+                    <select id="compareSelectA" class="form-control"></select>
+                </div>
+                <div class="form-row">
+                    <label for="compareSelectB">Dokument B (Vergleichs-Tab oder Datei wählen):</label>
+                    <div style="display:flex;gap:6px;">
+                        <select id="compareSelectB" class="form-control" style="flex:1;"></select>
+                        <button type="button" class="tool-btn" id="btnCompareUploadSecond">📂 2. PDF laden</button>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <div id="compareSummaryBadge" style="font-weight:700;color:var(--accent-primary);">
+                    Wählen Sie zwei Dokumente und klicken Sie auf „Jetzt vergleichen“
+                </div>
+                <button type="button" class="tool-btn btn-primary" id="btnRunPdfCompare">⚖️ Jetzt vergleichen</button>
+            </div>
+
+            <!-- 3-Column Visual Comparison Canvases -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+                <div style="background:var(--bg-card);padding:8px;border-radius:6px;text-align:center;">
+                    <div style="font-size:11px;font-weight:700;margin-bottom:6px;">Dokument A (Seite 1)</div>
+                    <canvas id="compareCanvasA" style="max-width:100%;background:#fff;border-radius:4px;"></canvas>
+                </div>
+                <div style="background:var(--bg-card);padding:8px;border-radius:6px;text-align:center;">
+                    <div style="font-size:11px;font-weight:700;margin-bottom:6px;">Dokument B (Seite 1)</div>
+                    <canvas id="compareCanvasB" style="max-width:100%;background:#fff;border-radius:4px;"></canvas>
+                </div>
+                <div style="background:var(--bg-card);padding:8px;border-radius:6px;text-align:center;">
+                    <div style="font-size:11px;font-weight:700;margin-bottom:6px;color:#ef4444;">Visueller Diff (Rot = Änderung)</div>
+                    <canvas id="compareCanvasDiff" style="max-width:100%;background:#fff;border-radius:4px;"></canvas>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <label>Text-Unterschiede (Zeilen-Diff):</label>
+                <div id="compareTextDiffOutput" style="background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;max-height:150px;overflow-y:auto;font-family:var(--font-mono);font-size:11.5px;line-height:1.5;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalCompare">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 9. OPTIONAL USER ACCOUNT, PROFILE TEMPLATES & STAMP VAULT MODAL -->
+<div class="modal-backdrop" id="modalAccount">
+    <div class="modal-window" style="max-width:740px;">
+        <div class="modal-header">
+            <span>👤 Persönliches Benutzerkonto, Profil-Vorlagen &amp; Stempel-Tresor</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalAccount">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:76vh;overflow-y:auto;">
+
+            <!-- VIEW 1: GUEST (LOGIN / REGISTER) -->
+            <div id="accountGuestSection">
+                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-secondary);line-height:1.45;">
+                    <strong style="color:var(--text-primary);">Optionales Konto (100 % lokal auf Ihrem Webspace im geschützten <code>storage/</code>-Ordner):</strong><br>
+                    Speichern Sie Dokumente inklusive verschiebbarer Textfelder/Annotationen zum späteren Weiterbearbeiten, nutzen Sie Ihren persönlichen Unterschriften- &amp; Stempel-Tresor, automatische Versionshistorie, fortlaufende Bates-Zähler und teilen Sie Dokumente per E-Mail-Link.
+                </div>
+
+                <div class="form-grid-2" style="gap:16px;align-items:start;">
+                    <!-- Login Box -->
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
+                        <h3 style="font-size:14px;margin-bottom:10px;">🔑 Anmelden (Bestehendes Konto)</h3>
+                        <div class="form-row">
+                            <label for="loginUsername">Benutzername oder E-Mail-Adresse</label>
+                            <input type="text" id="loginUsername" class="form-control" placeholder="z. B. mmustermann">
+                        </div>
+                        <div class="form-row">
+                            <label for="loginPassword">Passwort</label>
+                            <input type="password" id="loginPassword" class="form-control" placeholder="••••••••">
+                        </div>
+                        <button type="button" class="tool-btn btn-primary" id="btnSubmitLogin" style="width:100%;margin-top:6px;">
+                            🔑 Jetzt anmelden
+                        </button>
+
+                        <div style="margin-top:10px;text-align:center;">
+                            <a href="#" id="btnToggleForgotPass" style="font-size:11.5px;color:var(--accent-primary);text-decoration:underline;">
+                                Passwort vergessen? Zurücksetzungs-Link per E-Mail anfordern
+                            </a>
+                        </div>
+
+                        <!-- Collapsible Forgot Password Request Form -->
+                        <div id="forgotPasswordBox" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-subtle);">
+                            <div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-primary);">
+                                ✉️ Passwort per E-Mail-Link zurücksetzen
+                            </div>
+                            <div class="form-row">
+                                <label for="forgotPassInput">Ihr Benutzername oder Ihre E-Mail-Adresse</label>
+                                <input type="text" id="forgotPassInput" class="form-control" placeholder="name@firma.de oder Benutzername">
+                            </div>
+                            <button type="button" class="tool-btn" id="btnRequestPasswordReset" style="width:100%;">
+                                ✉️ Link zum Zurücksetzen per E-Mail senden
+                            </button>
+
+                            <div id="forgotPassResultBox" class="hidden" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--accent-primary);border-radius:6px;padding:8px 10px;font-size:11.5px;line-height:1.45;">
+                                <div id="forgotPassResultText" style="color:var(--accent-success);font-weight:700;margin-bottom:6px;"></div>
+                                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                    <a id="forgotPassMailtoLink" href="#" class="tool-btn" style="text-decoration:none;font-size:11px;height:24px;">📧 Im E-Mail-Programm öffnen</a>
+                                    <a id="forgotPassDirectLink" href="#" class="tool-btn btn-primary" style="text-decoration:none;font-size:11px;height:24px;">🔗 Zurücksetzungs-Link direkt öffnen</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Register Box -->
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
+                        <h3 style="font-size:14px;margin-bottom:10px;">✨ Neues Konto anlegen</h3>
+                        <div class="form-row">
+                            <label for="regUsername">Benutzername (mind. 3 Zeichen)</label>
+                            <input type="text" id="regUsername" class="form-control" placeholder="z. B. mmustermann">
+                        </div>
+                        <div class="form-row">
+                            <label for="regDisplayName">Ihr vollständiger Name (Standard-Autor für PDF/UA)</label>
+                            <input type="text" id="regDisplayName" class="form-control" placeholder="z. B. Max Mustermann">
+                        </div>
+                        <div class="form-row">
+                            <label for="regEmail">E-Mail-Adresse (für Dokumenten-Freigaben)</label>
+                            <input type="email" id="regEmail" class="form-control" placeholder="name@firma.de">
+                        </div>
+                        <div class="form-row">
+                            <label for="regOrg">Firma / Behörde / Abteilung (optional)</label>
+                            <input type="text" id="regOrg" class="form-control" placeholder="z. B. Musterbehörde / Abteilung Recht">
+                        </div>
+                        <div class="form-row">
+                            <label for="regPassword">Passwort (mind. 8 Zeichen)</label>
+                            <input type="password" id="regPassword" class="form-control" minlength="8" placeholder="Mindestens 8 Zeichen">
+                        </div>
+                        <button type="button" class="tool-btn btn-success" id="btnSubmitRegister" style="width:100%;margin-top:6px;">
+                            ✨ Konto erstellen &amp; direkt starten
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW 2: LOGGED-IN USER DASHBOARD -->
+            <div id="accountUserSection" class="hidden">
+                <!-- User Header Banner -->
+                <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 16px;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+                    <div>
+                        <div style="font-size:15px;font-weight:700;" id="accProfileBannerName">Angemeldet</div>
+                        <div style="font-size:12px;color:var(--text-secondary);" id="accProfileBannerSub">—</div>
+                        <div style="font-size:11.5px;color:var(--accent-primary);margin-top:4px;font-weight:600;" id="accProfileQuotaLabel">Speicherplatz: —</div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button type="button" class="tool-btn" id="btnJumpToPasswordSection">🔑 Passwort ändern</button>
+                        <button type="button" class="tool-btn" data-cmd="open-share-modal">✉️ Meine E-Mail-Freigaben</button>
+                        <button type="button" class="tool-btn btn-danger" id="btnLogoutAccount">🚪 Abmelden</button>
+                    </div>
+                </div>
+
+                <!-- Section A: Dedicated Password Change Box -->
+                <div id="accountPasswordChangeCard" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
+                    <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--accent-primary);">
+                        1. Passwort ändern
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;">
+                        <div class="form-row">
+                            <label for="changePassCurrent">Aktuelles Passwort</label>
+                            <input type="password" id="changePassCurrent" class="form-control" placeholder="Aktuelles Passwort">
+                        </div>
+                        <div class="form-row">
+                            <label for="changePassNew">Neues Passwort (mind. 8 Zeichen)</label>
+                            <input type="password" id="changePassNew" class="form-control" minlength="8" placeholder="Mindestens 8 Zeichen">
+                        </div>
+                        <div class="form-row">
+                            <label for="changePassConfirm">Neues Passwort wiederholen</label>
+                            <input type="password" id="changePassConfirm" class="form-control" minlength="8" placeholder="Neues Passwort bestätigen">
+                        </div>
+                    </div>
+                    <button type="button" class="tool-btn btn-primary" id="btnChangePasswordDirect" style="margin-top:6px;">
+                        🔒 Passwort jetzt ändern
+                    </button>
+                </div>
+
+                <!-- Section B: Profile Templates & Auto-Incrementing Bates Counter -->
+                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
+                    <div style="font-weight:700;font-size:13px;margin-bottom:10px;color:var(--accent-primary);">
+                        2. Persönliche Profil-Vorlagen &amp; fortlaufender Bates-Zähler
+                    </div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label for="profDisplayName">Anzeigename</label>
+                            <input type="text" id="profDisplayName" class="form-control">
+                        </div>
+                        <div class="form-row">
+                            <label for="profEmail">Absender-E-Mail (für Freigaben)</label>
+                            <input type="email" id="profEmail" class="form-control">
+                        </div>
+                        <div class="form-row">
+                            <label for="profAuthor">Standard-Autor (PDF-Metadaten &amp; PDF/UA)</label>
+                            <input type="text" id="profAuthor" class="form-control">
+                        </div>
+                        <div class="form-row">
+                            <label for="profOrg">Firma / Behörde / Organisation</label>
+                            <input type="text" id="profOrg" class="form-control">
+                        </div>
+                        <div class="form-row">
+                            <label for="profLang">Standard-Dokumentsprache (PDF/UA <code>/Lang</code>)</label>
+                            <select id="profLang" class="form-control">
+                                <option value="de-DE">de-DE (Deutsch — Deutschland)</option>
+                                <option value="de-AT">de-AT (Deutsch — Österreich)</option>
+                                <option value="de-CH">de-CH (Deutsch — Schweiz)</option>
+                                <option value="en-US">en-US (Englisch — USA)</option>
+                                <option value="en-GB">en-GB (Englisch — UK)</option>
+                                <option value="fr-FR">fr-FR (Französisch)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="profWatermark">Standard-Wasserzeichen</label>
+                            <input type="text" id="profWatermark" class="form-control">
+                        </div>
+                        <div class="form-row">
+                            <label for="profBatesPrefix">Bates-Aktenzeichen-Präfix</label>
+                            <input type="text" id="profBatesPrefix" class="form-control" placeholder="z. B. AZ-2026-">
+                        </div>
+                        <div class="form-row">
+                            <label for="profBatesCounter">Nächste fortlaufende Bates-Nummer (merkt sich den Stand!)</label>
+                            <input type="number" id="profBatesCounter" class="form-control" min="1" value="1">
+                        </div>
+                        <div class="form-row">
+                            <label for="profFooterLeft">Standard-Fußzeile Links</label>
+                            <input type="text" id="profFooterLeft" class="form-control">
+                        </div>
+                        <div class="form-row">
+                            <label for="profFooterRight">Standard-Fußzeile Rechts</label>
+                            <input type="text" id="profFooterRight" class="form-control">
+                        </div>
+                    </div>
+                    <button type="button" class="tool-btn btn-primary" id="btnSaveAccountProfile" style="margin-top:6px;">
+                        💾 Profil-Vorlagen &amp; Einstellungen speichern
+                    </button>
+                </div>
+
+                <!-- Section C: Personal Stamp Vault -->
+                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
+                    <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--accent-primary);">
+                        3. Persönlicher Stempel-Tresor (Eigene Stempel-Vorlagen)
+                    </div>
+                    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
+                        <input type="text" id="newVaultStampText" class="form-control" placeholder="z. B. FREIGEGEBEN — ABTEILUNG RECHT" style="flex:1;">
+                        <input type="color" id="newVaultStampColor" value="#16a34a" style="width:36px;height:30px;border:none;background:none;cursor:pointer;">
+                        <button type="button" class="tool-btn btn-success" id="btnAddVaultStamp">+ Stempel speichern</button>
+                    </div>
+                    <div id="accountStampsList" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                </div>
+
+                <!-- Section D: Delete User Account Permanently -->
+                <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.35);border-radius:8px;padding:14px;">
+                    <div style="font-weight:700;font-size:13px;margin-bottom:6px;color:#f87171;">
+                        4. Benutzerkonto &amp; Tresor dauerhaft löschen
+                    </div>
+                    <p style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.45;">
+                        Hiermit löschen Sie Ihr persönliches Benutzerkonto inklusive aller im Tresor gespeicherten PDF-Dokumente, Versionen, Unterschriften, Stempel und aktiven E-Mail-Freigabelinks unwiderruflich vom Server.
+                    </p>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                        <input type="password" id="deleteAccountPassConfirm" class="form-control" placeholder="Aktuelles Passwort zur Bestätigung eingeben" style="flex:1;min-width:220px;">
+                        <button type="button" class="tool-btn btn-danger" id="btnDeleteMyAccount">
+                            🗑️ Mein Benutzerkonto unwiderruflich löschen
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW 3: PASSWORD RESET VIA EMAIL TOKEN LINK -->
+            <div id="accountResetPasswordSection" class="hidden">
+                <div style="background:var(--bg-card);border:1px solid var(--accent-primary);border-radius:8px;padding:18px;max-width:460px;margin:0 auto;">
+                    <h3 style="font-size:15px;margin-bottom:6px;">🔒 Neues Passwort vergeben</h3>
+                    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;" id="resetPassAccountBadge">
+                        Bitte geben Sie Ihr neues Passwort ein:
+                    </p>
+                    <input type="hidden" id="resetPassTokenHidden" value="">
+                    <div class="form-row">
+                        <label for="resetNewPassword">Neues Passwort (mindestens 8 Zeichen)</label>
+                        <input type="password" id="resetNewPassword" class="form-control" minlength="8" placeholder="Mindestens 8 Zeichen">
+                    </div>
+                    <div class="form-row">
+                        <label for="resetNewPasswordConfirm">Neues Passwort wiederholen</label>
+                        <input type="password" id="resetNewPasswordConfirm" class="form-control" placeholder="••••••••">
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:10px;">
+                        <button type="button" class="tool-btn" id="btnCancelPasswordReset" style="flex:1;">Abbrechen</button>
+                        <button type="button" class="tool-btn btn-success" id="btnConfirmPasswordReset" style="flex:2;">
+                            🔒 Neues Passwort speichern &amp; anmelden
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalAccount">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 10. VERSION HISTORY & 1-CLICK DIFF MODAL -->
+<div class="modal-backdrop" id="modalVersions">
+    <div class="modal-window" style="max-width:640px;">
+        <div class="modal-header">
+            <span>🕒 Versionshistorie: <span id="versionModalDocTitle">—</span></span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalVersions">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">
+                Bei jedem Überschreiben im Tresor legt PDF-Werkstatt Pro automatisch eine Sicherungsversion an. Sie können ältere Stände jederzeit als Tab öffnen oder direkt im <strong>visuellen PDF-Diff</strong> mit dem aktuellen Stand vergleichen:
+            </p>
+            <div id="versionHistoryList" style="display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalVersions">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 11. EMAIL SHARE & FREIGABE-LINKS MODAL -->
+<div class="modal-backdrop" id="modalShare">
+    <div class="modal-window" style="max-width:680px;">
+        <div class="modal-header">
+            <span>✉️ PDF-Dokument per E-Mail teilen &amp; Freigabe-Links</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalShare">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:75vh;overflow-y:auto;">
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
+                <div style="font-weight:700;font-size:13px;margin-bottom:10px;">Neue E-Mail-Freigabe versenden</div>
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="shareFilenameSelect">Zu teilendes Dokument</label>
+                        <select id="shareFilenameSelect" class="form-control"></select>
+                    </div>
+                    <div class="form-row">
+                        <label for="shareRecipientEmail">Empfänger-E-Mail-Adresse</label>
+                        <input type="email" id="shareRecipientEmail" class="form-control" placeholder="kollege@firma.de">
+                    </div>
+                    <div class="form-row">
+                        <label for="shareAllowEdit">Berechtigung für den Empfänger</label>
+                        <select id="shareAllowEdit" class="form-control">
+                            <option value="1">Im Editor öffnen, kommentieren &amp; gegenzeichnen erlaubt</option>
+                            <option value="0">Nur Lesen &amp; PDF-Download</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label for="shareExpiresDays">Gültigkeit des Freigabe-Links</label>
+                        <select id="shareExpiresDays" class="form-control">
+                            <option value="7">7 Tage gültig</option>
+                            <option value="14" selected>14 Tage gültig</option>
+                            <option value="30">30 Tage gültig</option>
+                            <option value="0">Unbegrenzt gültig</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label for="shareCustomMessage">Persönliche Nachricht in der E-Mail (optional)</label>
+                    <textarea id="shareCustomMessage" class="form-control" rows="2" placeholder="z. B. Bitte auf Seite 2 prüfen und gegenzeichnen."></textarea>
+                </div>
+                <button type="button" class="tool-btn btn-primary" id="btnCreateEmailShare" style="width:100%;">
+                    ✉️ Freigabe-Link erzeugen &amp; per E-Mail senden
+                </button>
+
+                <!-- Result box after creating share -->
+                <div id="shareResultBox" class="hidden" style="margin-top:12px;background:var(--bg-input);border:1px solid var(--accent-primary);border-radius:6px;padding:10px;">
+                    <div style="font-size:12px;font-weight:700;color:var(--accent-success);margin-bottom:6px;" id="shareResultStatusText">
+                        ✔ Freigabe erstellt!
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+                        <input type="text" id="shareResultUrlInput" class="form-control" readonly style="font-family:var(--font-mono);font-size:11.5px;">
+                        <button type="button" class="tool-btn" id="btnCopyShareUrl">📋 Link kopieren</button>
+                    </div>
+                    <a id="shareMailtoLink" href="#" class="tool-btn" style="display:inline-flex;text-decoration:none;font-size:12px;">
+                        📧 Zusätzlich im E-Mail-Programm (Outlook / Thunderbird / Standard-Mail) öffnen
+                    </a>
+                </div>
+            </div>
+
+            <!-- Active Shares List -->
+            <div>
+                <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--text-secondary);">
+                    Ihre aktiven E-Mail-Freigaben:
+                </div>
+                <div id="activeSharesList" style="display:flex;flex-direction:column;gap:8px;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalShare">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 12. PDF COMPRESSION & METADATA MODAL -->
+<div class="modal-backdrop" id="modalCompress">
+    <div class="modal-window" style="max-width:600px;">
+        <div class="modal-header">
+            <span>📉 PDF komprimieren &amp; Metadaten bearbeiten</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalCompress">✕</button>
+        </div>
+        <div class="modal-body">
+            <!-- Current Document Info Banner -->
+            <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:10px 14px;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+                <div>
+                    <div style="font-size:13.5px;font-weight:700;" id="modalCompressDocName">—</div>
+                    <div style="font-size:11.5px;color:var(--text-secondary);" id="modalCompressDocInfo">Aktuelle Dateigröße: —</div>
+                </div>
+                <button type="button" class="tool-btn" data-cmd="open-pdf" style="height:26px;font-size:11.5px;">📂 Anderes PDF wählen</button>
+            </div>
+
+            <!-- Section 1: Compression -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
+                <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--accent-primary);">
+                    1. Dateigröße verkleinern (PDF-Komprimierung)
+                </div>
+                <div class="form-row">
+                    <label for="modalCompressPreset">Komprimierungs-Stufe wählen:</label>
+                    <select id="modalCompressPreset" class="form-control">
+                        <option value="screen">Stark komprimieren (96 DPI — minimale Dateigröße für E-Mail/Web)</option>
+                        <option value="ebook" selected>Ausgewogen / E-Book (140 DPI — empfohlenes Verhältnis aus Größe &amp; Schärfe)</option>
+                        <option value="print">Hohe Qualität (200 DPI — schonende Komprimierung für Druck &amp; Archiv)</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button type="button" class="tool-btn btn-primary" id="btnModalRunCompression" style="flex:1;">
+                        📉 Jetzt komprimieren
+                    </button>
+                    <button type="button" class="tool-btn btn-success hidden" id="btnModalDownloadCompressed" data-cmd="export-pdf">
+                        💾 Komprimiertes PDF herunterladen
+                    </button>
+                </div>
+                <div id="modalCompressResultBox" class="hidden" style="margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--bg-input);border:1px solid var(--accent-success);font-size:12px;font-weight:600;color:var(--accent-success);"></div>
+            </div>
+
+            <!-- Section 2: Metadata -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
+                <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--text-primary);">
+                    2. PDF-Metadaten anpassen (optional)
+                </div>
+                <div class="form-grid-2">
+                    <div class="form-row">
+                        <label for="modalMetaTitle">Dokument-Titel</label>
+                        <input type="text" id="modalMetaTitle" class="form-control" placeholder="Titel des Dokuments">
+                    </div>
+                    <div class="form-row">
+                        <label for="modalMetaAuthor">Autor / Ersteller</label>
+                        <input type="text" id="modalMetaAuthor" class="form-control" placeholder="Name / Behörde">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label for="modalMetaSubject">Betreff / Stichwörter</label>
+                    <input type="text" id="modalMetaSubject" class="form-control" placeholder="Betreff / Aktenzeichen">
+                </div>
+                <button type="button" class="tool-btn" id="btnModalApplyMetadata" style="width:100%;margin-top:4px;">
+                    🏷️ Metadaten in PDF übernehmen
+                </button>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalCompress">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- 13. PDF MERGE MODAL (PDF-Dateien zusammenführen & Reihenfolge anpassen) -->
+<div class="modal-backdrop" id="modalMerge">
+    <div class="modal-window" style="max-width:680px;">
+        <div class="modal-header">
+            <span>📑 PDF-Dateien zusammenführen &amp; Reihenfolge anpassen</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalMerge">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;line-height:1.45;">
+                Wählen Sie mehrere PDF-Dateien von Ihrem Computer aus (oder übernehmen Sie bereits geöffnete Dokument-Tabs), passen Sie bei Bedarf die Reihenfolge mit <strong>▲ / ▼</strong> an und verbinden Sie alles zu einem einzigen PDF-Dokument:
+            </p>
+
+            <!-- Action Bar to Add Files or Open Tabs -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                <button type="button" class="tool-btn btn-primary" id="btnMergePickFiles">
+                    📂 PDF-Dateien hinzufügen…
+                </button>
+                <button type="button" class="tool-btn" id="btnMergeAddOpenTabs" title="Alle aktuell im Studio geöffneten PDF-Tabs zur Zusammenführungs-Liste hinzufügen">
+                    ⇄ Geöffnete Tabs übernehmen
+                </button>
+                <button type="button" class="tool-btn" id="btnMergeClearList" style="margin-left:auto;">
+                    🗑 Liste leeren
+                </button>
+            </div>
+
+            <!-- Sortable File Queue List -->
+            <div id="mergeQueueList" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px;margin-bottom:12px;">
+                <!-- Populated dynamically by renderMergeQueueUI() -->
+            </div>
+
+            <div class="form-grid-2">
+                <div class="form-row">
+                    <label for="mergeOutputName">Dateiname des zusammengeführten PDFs</label>
+                    <input type="text" id="mergeOutputName" class="form-control" value="Zusammengefuegt.pdf" placeholder="Zusammengefuegt.pdf">
+                </div>
+                <div class="form-row">
+                    <label for="mergeTargetMode">Nach dem Zusammenführen</label>
+                    <select id="mergeTargetMode" class="form-control">
+                        <option value="new-tab">Als neuen Tab im Studio öffnen (zur Vorschau / Bearbeitung)</option>
+                        <option value="append-active">An das aktuell geöffnete Dokument anhängen</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
+            <button type="button" class="tool-btn" data-close-modal="modalMerge">Abbrechen</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn" id="btnRunMergeDownload">
+                    💾 Zusammenführen &amp; direkt herunterladen
+                </button>
+                <button type="button" class="tool-btn btn-success" id="btnRunMergeOpen">
+                    📑 Jetzt zusammenführen
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Hidden File Inputs -->
+<input type="file" id="hiddenPdfInput" accept=".pdf,application/pdf" multiple class="hidden">
+<input type="file" id="hiddenMergeInput" accept=".pdf,application/pdf" multiple class="hidden">
+<input type="file" id="hiddenImagesInput" accept="image/jpeg,image/png,image/webp" multiple class="hidden">
+<input type="file" id="hiddenOverlayImageInput" accept="image/jpeg,image/png,image/webp" class="hidden">
+
+<!-- Toast Notification Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Floating Assistant (Bottom-Right) -->
+<div class="floating-assistant" id="floatingAssistant">
+    <div class="assistant-panel" id="assistantPanel" aria-label="Soforthilfe">
+        <div class="assistant-header">
+            <div class="assistant-header-title">
+                <div class="assistant-avatar">🤖</div>
+                <div>
+                    <div style="font-size:12.5px;font-weight:800;color:var(--text-primary);">Interaktive Soforthilfe</div>
+                    <div style="font-size:10.5px;color:var(--text-secondary);">Schnellanleitungen &amp; 1-Klick-Werkzeugstarter</div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:4px;">
+                <button type="button" class="tool-btn" data-cmd="open-help" style="height:24px;padding:0 8px;font-size:11px;" title="Vollständiges Benutzerhandbuch in neuem Tab öffnen">
+                    📖 Handbuch
+                </button>
+                <button type="button" class="doc-tab-close" id="btnCloseAssistant" title="Schließen">✕</button>
+            </div>
+        </div>
+
+        <div class="assistant-context-banner" id="assistantContextBanner">
+            💡 <strong>Aktueller Bereich:</strong> <span id="assistantContextText">Wählen Sie ein Thema oder stellen Sie unten eine Frage zu PDF-Werkstatt Pro.</span>
+        </div>
+
+        <div class="assistant-topics-bar" id="assistantTopicsBar">
+            <button type="button" class="assistant-chip" data-assist-topic="edit-text">I✎ Text ändern</button>
+            <button type="button" class="assistant-chip" data-assist-topic="merge-split">➕ Verbinden/Teilen</button>
+            <button type="button" class="assistant-chip" data-assist-topic="sign-stamp">✍️ Signatur/Stempel</button>
+            <button type="button" class="assistant-chip" data-assist-topic="redact">🛡️ Schwärzen</button>
+            <button type="button" class="assistant-chip" data-assist-topic="compress">📉 Komprimieren</button>
+            <button type="button" class="assistant-chip" data-assist-topic="ocr">🔎 Scan-OCR</button>
+            <button type="button" class="assistant-chip" data-assist-topic="a11y">♿ Barrierefrei</button>
+            <button type="button" class="assistant-chip" data-assist-topic="vault">☁️ Tresor &amp; Auto-Save</button>
+            <button type="button" class="assistant-chip" data-assist-topic="account">🔑 Passwort/Konto</button>
+            <button type="button" class="assistant-chip" data-assist-topic="shortcuts">⌨️ Tastenkürzel</button>
+        </div>
+
+        <div class="assistant-messages" id="assistantMessages">
+            <div class="assistant-msg bot">
+                👋 <strong>Wie kann ich Ihnen helfen?</strong><br>
+                Klicken Sie oben auf ein Schnellthema oder tippen Sie unten ein Stichwort ein (z. B. <em>„Text ändern“</em>, <em>„Unterschrift“</em>, <em>„Seiten drehen“</em>, <em>„Komprimieren“</em>, <em>„Passwort“</em>) — ich erkläre Ihnen sofort den Weg und kann das passende Werkzeug direkt für Sie starten!
+            </div>
+        </div>
+
+        <form class="assistant-input-bar" id="assistantSearchForm" onsubmit="return false;">
+            <input type="text" id="assistantQueryInput" class="form-control" placeholder="Frage stellen (z. B. Wie ändere ich Text im PDF?)…" autocomplete="off">
+            <button type="submit" class="tool-btn btn-primary" id="btnSendAssistantQuery" style="height:32px;padding:0 12px;">Fragen</button>
+        </form>
+    </div>
+
+    <button type="button" class="assistant-launcher-btn" id="btnToggleAssistant" title="Interaktive Hilfe öffnen oder schließen">
+        <span class="assistant-launcher-icon">💬</span>
+        <span class="assistant-pulse-dot"></span>
+    </button>
+</div>
+
+<script src="assets/js/app.js?v=<?php echo urlencode(PDFSTUDIO_VERSION); ?>"></script>
+</body>
+</html>

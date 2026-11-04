@@ -1,0 +1,31 @@
+# ============================================================================
+# PDF-Werkstatt Pro — Git Ignore Rules (100 % Clean Installation without User Data)
+# ============================================================================
+
+# Persönliche Benutzerdaten, Tresor-Dateien, Freigaben, Sessions & Laufzeit-Statistiken ausschließen
+/storage/users/*
+/storage/public/*
+/storage/sessions/
+/storage/users.json
+/storage/shares.json
+/storage/nutzungsstatistik.json
+/storage/nutzungsstatistik.txt
+/storage/*.pdf
+/storage/*.json
+/storage/*.txt
+/storage/*.log
+/storage/*.raw
+
+# Schutzdateien & leere Ordnerstruktur für saubere Neuinstallationen beibehalten
+!/storage/.htaccess
+!/storage/index.html
+!/storage/users/.gitkeep
+!/storage/public/.gitkeep
+
+# Betriebssystem- & Editor-Dateien
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
