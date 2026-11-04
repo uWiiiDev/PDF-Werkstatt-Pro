@@ -1654,17 +1654,28 @@
                     }
                 } else if (ann.type === 'a11y-tag') {
                     customTagElements.push({
+                        pageIndex: i,
                         pageRef: page.ref,
                         tagType: ann.tagType || 'P',
                         altText: ann.altText || '',
                         order: ann.order || 1,
-                        bbox: [ann.x, pageH - ann.y - ann.h, ann.x + ann.w, pageH - ann.y]
+                        bbox: [
+                            Math.round(ann.x),
+                            Math.round(pageH - ann.y - ann.h),
+                            Math.round(ann.x + ann.w),
+                            Math.round(pageH - ann.y)
+                        ]
                     });
                 }
             }
         }
 
-        // If visual PDF/UA Tags (/StructElem + /Alt) were placed, embed them into /StructTreeRoot
+        // Persist custom a11y-tags on doc so 1-Click PDF/UA Remediation also preserves them with /Alt and /BBox
+        if (customTagElements.length > 0) {
+            doc.savedA11yTags = (doc.savedA11yTags || []).concat(customTagElements);
+        }
+
+        // If visual PDF/UA Tags (/StructElem + /Alt + /BBox) were placed, embed them into /StructTreeRoot
         if (customTagElements.length > 0) {
             customTagElements.sort(function (a, b) { return a.order - b.order; });
             var catalog = pdfDoc.catalog;
@@ -1678,11 +1689,16 @@
                     Type: 'StructElem',
                     S: PDFLib.PDFName.of(item.tagType),
                     P: docElemRef,
-                    Pg: item.pageRef
+                    Pg: item.pageRef,
+                    A: context.obj({
+                        O: PDFLib.PDFName.of('Layout'),
+                        BBox: item.bbox
+                    })
                 };
-                if (item.altText) {
-                    elemDict.Alt = PDFLib.PDFString.of(item.altText);
-                    elemDict.ActualText = PDFLib.PDFString.of(item.altText);
+                if (item.altText || item.tagType === 'Figure') {
+                    var figAlt = item.altText || ('Abbildung auf Seite ' + ((item.pageIndex || 0) + 1));
+                    elemDict.Alt = PDFLib.PDFString.of(figAlt);
+                    elemDict.ActualText = PDFLib.PDFString.of(figAlt);
                 }
                 kidsRefs.push(context.register(context.obj(elemDict)));
             }
@@ -3021,6 +3037,15 @@
             var inBt = false;
             var currentTrMode = 0;
             var currentTextLum = 0;
+            var currentBgLum = 1.0;
+
+            function srgbChannelToLinear(c) {
+                var cl = Math.max(0, Math.min(1, c));
+                return cl <= 0.03928 ? cl / 12.92 : Math.pow((cl + 0.055) / 1.055, 2.4);
+            }
+            function calcRelativeLuminance(r, g, b) {
+                return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
+            }
 
             for (var stIdx = 0; stIdx < stmts.length; stIdx++) {
                 var st = stmts[stIdx];
@@ -3057,13 +3082,26 @@
                 }
                 if (op === 'g' && st.operands.length >= 1) {
                     var gv = parseFloat(st.operands[0]);
-                    if (!isNaN(gv)) currentTextLum = gv;
+                    if (!isNaN(gv)) {
+                        currentTextLum = calcRelativeLuminance(gv, gv, gv);
+                    }
                 } else if (op === 'rg' && st.operands.length >= 3) {
                     var rv = parseFloat(st.operands[0]);
                     var grv = parseFloat(st.operands[1]);
                     var bv = parseFloat(st.operands[2]);
                     if (!isNaN(rv) && !isNaN(grv) && !isNaN(bv)) {
-                        currentTextLum = 0.2126 * rv + 0.7152 * grv + 0.0722 * bv;
+                        currentTextLum = calcRelativeLuminance(rv, grv, bv);
+                    }
+                } else if (op === 'k' && st.operands.length >= 4) {
+                    var cv = parseFloat(st.operands[0]);
+                    var mv = parseFloat(st.operands[1]);
+                    var yv = parseFloat(st.operands[2]);
+                    var kv = parseFloat(st.operands[3]);
+                    if (!isNaN(cv) && !isNaN(mv) && !isNaN(yv) && !isNaN(kv)) {
+                        var cr = (1 - Math.min(1, cv)) * (1 - Math.min(1, kv));
+                        var cg = (1 - Math.min(1, mv)) * (1 - Math.min(1, kv));
+                        var cb = (1 - Math.min(1, yv)) * (1 - Math.min(1, kv));
+                        currentTextLum = calcRelativeLuminance(cr, cg, cb);
                     }
                 }
 
@@ -3073,8 +3111,14 @@
                         if (mcStack.length === 0) {
                             untaggedTextOps++;
                         }
-                        if (inBt && currentTrMode !== 3 && currentTextLum > 0.46 && currentTextLum < 0.92) {
-                            lowContrastTextCount++;
+                        if (inBt && currentTrMode !== 3) {
+                            var lMax = Math.max(currentTextLum, currentBgLum);
+                            var lMin = Math.min(currentTextLum, currentBgLum);
+                            var contrastRatio = (lMax + 0.05) / (lMin + 0.05);
+                            // Flag low contrast text against background (ratio < 4.5:1, excluding intentional white-on-dark >= 0.90)
+                            if (contrastRatio < 4.5 && currentTextLum < 0.88) {
+                                lowContrastTextCount++;
+                            }
                         }
                     }
                 } else if (op === 'Do' || op === 'sh' || op === 'EI' || op === 'S' || op === 's' || op === 'f' || op === 'F' || op === 'f*' || op === 'B' || op === 'B*' || op === 'b' || op === 'b*') {
@@ -3126,6 +3170,7 @@
         var unembeddedFontsCount = 0;
         var missingUnicodeFontsCount = 0;
         var missingCidToGidCount = 0;
+        var mismatchedFontWidthsCount = 0;
         var hasDocumentRootElem = false;
         var hasSectElem = false;
         var headingLevelsFound = {};
@@ -3189,6 +3234,19 @@
                 if (!hasToUni) {
                     missingUnicodeFontsCount++;
                 }
+                // Check /FirstChar, /LastChar & /Widths array length consistency (Matterhorn 21-006)
+                var fcObj = iObj.lookup ? iObj.lookup(PDFLib.PDFName.of('FirstChar')) : iObj.get(PDFLib.PDFName.of('FirstChar'));
+                var lcObj = iObj.lookup ? iObj.lookup(PDFLib.PDFName.of('LastChar')) : iObj.get(PDFLib.PDFName.of('LastChar'));
+                var wObj = iObj.lookup ? iObj.lookup(PDFLib.PDFName.of('Widths')) : iObj.get(PDFLib.PDFName.of('Widths'));
+                if (!fcObj || !lcObj || !wObj) {
+                    mismatchedFontWidthsCount++;
+                } else if (typeof wObj.size === 'function') {
+                    var fcNum = parseInt(String(fcObj), 10);
+                    var lcNum = parseInt(String(lcObj), 10);
+                    if (!isNaN(fcNum) && !isNaN(lcNum) && lcNum >= fcNum && wObj.size() !== (lcNum - fcNum + 1)) {
+                        mismatchedFontWidthsCount++;
+                    }
+                }
             } else if (sName === '/Type0') {
                 totalFontsCount++;
                 if (!iObj.get(PDFLib.PDFName.of('ToUnicode'))) {
@@ -3198,7 +3256,7 @@
         }
 
         var hasStructTree = Boolean(stRootLookup) && hasParentTree && hasDocumentRootElem && !standardTypesRemappedInRoleMap;
-        var fontsPass = unembeddedFontsCount === 0 && missingUnicodeFontsCount === 0 && missingCidToGidCount === 0;
+        var fontsPass = unembeddedFontsCount === 0 && missingUnicodeFontsCount === 0 && missingCidToGidCount === 0 && mismatchedFontWidthsCount === 0;
         var pagesTabsPass = pagesMissingTabsS === 0;
 
         // Check Heading Hierarchy (WCAG 1.3.1 & 2.4.6 / Matterhorn 14)
@@ -3307,13 +3365,13 @@
             {
                 id: 'fonts',
                 category: 'PDF/UA',
-                title: '6. [PDF/UA • Schriftarten] Vollständige Schrifteinbettung (/FontFile2) & /ToUnicode',
+                title: '6. [PDF/UA • Schriftarten] Vollständige Schrifteinbettung (/FontFile2), /Widths & /ToUnicode',
                 standard: 'PAC 2026 Fonts • Matterhorn 21-001..21-007',
                 passed: fontsPass,
                 status: fontsPass ? 'pass' : 'fail',
                 detail: fontsPass
-                    ? 'Alle ' + totalFontsCount + ' Schrift(en) besitzen eingebettete Font-Programme (/FontFile2) und /ToUnicode-Tabellen.'
-                    : 'Schrift-Fehler: ' + unembeddedFontsCount + ' nicht eingebettet (/FontFile fehlt), ' + missingUnicodeFontsCount + ' ohne /ToUnicode-CMap, ' + missingCidToGidCount + ' ohne /CIDToGIDMap.'
+                    ? 'Alle ' + totalFontsCount + ' Schrift(en) besitzen eingebettete Font-Programme (/FontFile2), konsistente /Widths und /ToUnicode-Tabellen.'
+                    : 'Schrift-Fehler: ' + unembeddedFontsCount + ' nicht eingebettet (/FontFile fehlt), ' + missingUnicodeFontsCount + ' ohne /ToUnicode-CMap, ' + missingCidToGidCount + ' ohne /CIDToGIDMap' + (mismatchedFontWidthsCount > 0 ? ', ' + mismatchedFontWidthsCount + ' mit abweichenden /Widths (Matterhorn 21-006).' : '.')
             },
             {
                 id: 'pages_tabs',
@@ -3984,21 +4042,49 @@
         function isPathPaintOp(op) {
             return op === 'S' || op === 's' || op === 'f' || op === 'F' || op === 'f*' || op === 'B' || op === 'B*' || op === 'b' || op === 'b*' || op === 'n';
         }
+        function srgbToLinear(c) {
+            var cl = Math.max(0, Math.min(1, c));
+            return cl <= 0.03928 ? cl / 12.92 : Math.pow((cl + 0.055) / 1.055, 2.4);
+        }
+        function calcRelLum(r, g, b) {
+            return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
+        }
         function enhanceTextColorStmtForWcagContrast(tst) {
             if (tst.op === 'g' && tst.operands.length >= 1) {
                 var gv = parseFloat(tst.operands[0]);
-                if (!isNaN(gv) && gv > 0.45 && gv < 0.92) {
-                    return '0.22 g';
+                if (!isNaN(gv)) {
+                    var gLum = calcRelLum(gv, gv, gv);
+                    var gRatio = (1.0 + 0.05) / (gLum + 0.05);
+                    if (gRatio < 4.5 && gLum < 0.88) {
+                        return '0.22 g';
+                    }
                 }
             } else if (tst.op === 'rg' && tst.operands.length >= 3) {
                 var r = parseFloat(tst.operands[0]);
                 var g = parseFloat(tst.operands[1]);
                 var b = parseFloat(tst.operands[2]);
                 if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
-                    var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                    if (lum > 0.45 && lum < 0.92) {
-                        var scale = 0.25 / lum;
+                    var lum = calcRelLum(r, g, b);
+                    var ratio = (1.0 + 0.05) / (lum + 0.05);
+                    if (ratio < 4.5 && lum < 0.88) {
+                        var scale = Math.min(0.42, 0.16 / Math.max(0.05, lum));
                         return (r * scale).toFixed(3) + ' ' + (g * scale).toFixed(3) + ' ' + (b * scale).toFixed(3) + ' rg';
+                    }
+                }
+            } else if (tst.op === 'k' && tst.operands.length >= 4) {
+                var c = parseFloat(tst.operands[0]);
+                var m = parseFloat(tst.operands[1]);
+                var y = parseFloat(tst.operands[2]);
+                var k = parseFloat(tst.operands[3]);
+                if (!isNaN(c) && !isNaN(m) && !isNaN(y) && !isNaN(k)) {
+                    var cr = (1 - Math.min(1, c)) * (1 - Math.min(1, k));
+                    var cg = (1 - Math.min(1, m)) * (1 - Math.min(1, k));
+                    var cb = (1 - Math.min(1, y)) * (1 - Math.min(1, k));
+                    var kLum = calcRelLum(cr, cg, cb);
+                    var kRatio = (1.0 + 0.05) / (kLum + 0.05);
+                    if (kRatio < 4.5 && kLum < 0.88) {
+                        var newK = Math.max(k, 0.78);
+                        return c.toFixed(3) + ' ' + m.toFixed(3) + ' ' + y.toFixed(3) + ' ' + newK.toFixed(3) + ' k';
                     }
                 }
             }
@@ -4155,6 +4241,18 @@
 
         ensureSharedFontObjects();
 
+        function buildLiberationSansWidthsForRange(firstChar, lastChar) {
+            var arr = [];
+            for (var c = firstChar; c <= lastChar; c++) {
+                if (c >= 32 && c <= 255) {
+                    arr.push(LIBERATION_SANS_WINANSI_WIDTHS[c - 32] || 556);
+                } else {
+                    arr.push(556);
+                }
+            }
+            return arr;
+        }
+
         var indirectObjects = context.enumerateIndirectObjects();
         for (var i = 0; i < indirectObjects.length; i++) {
             var obj = indirectObjects[i][1];
@@ -4162,7 +4260,7 @@
 
             var subtypeName = String(obj.get(PDFLib.PDFName.of('Subtype')) || '');
 
-            // 1. CIDFontType2 / CIDFontType0: ensure CIDToGIDMap /Identity and embedded FontFile2 in FontDescriptor
+            // 1. CIDFontType2 / CIDFontType0: ensure CIDToGIDMap /Identity, embedded FontFile2 & remove partial /CIDSet (Matterhorn 21-004)
             if (subtypeName === '/CIDFontType2' || subtypeName === '/CIDFontType0') {
                 if (subtypeName === '/CIDFontType0') {
                     obj.set(PDFLib.PDFName.of('Subtype'), PDFLib.PDFName.of('CIDFontType2'));
@@ -4172,6 +4270,9 @@
                 }
                 var cidDesc = obj.lookup ? obj.lookup(PDFLib.PDFName.of('FontDescriptor')) : null;
                 if (cidDesc && typeof cidDesc.get === 'function') {
+                    if (typeof cidDesc.delete === 'function') {
+                        cidDesc.delete(PDFLib.PDFName.of('CIDSet'));
+                    }
                     if (!cidDesc.get(PDFLib.PDFName.of('FontFile')) &&
                         !cidDesc.get(PDFLib.PDFName.of('FontFile2')) &&
                         !cidDesc.get(PDFLib.PDFName.of('FontFile3'))) {
@@ -4200,6 +4301,9 @@
             var hasCustomDifferences = Boolean(diffArr);
 
             var existingDesc = obj.lookup ? obj.lookup(PDFLib.PDFName.of('FontDescriptor')) : null;
+            if (existingDesc && typeof existingDesc.delete === 'function') {
+                existingDesc.delete(PDFLib.PDFName.of('CIDSet'));
+            }
             var hasEmbeddedFontFile = Boolean(
                 existingDesc && typeof existingDesc.get === 'function' && (
                     existingDesc.get(PDFLib.PDFName.of('FontFile')) ||
@@ -4220,8 +4324,51 @@
                 obj.set(PDFLib.PDFName.of('Widths'), widthsObjRef);
                 obj.set(PDFLib.PDFName.of('FontDescriptor'), fontDescRef);
             } else if (!hasEmbeddedFontFile) {
+                // Synchronize FontDescriptor metrics + /Widths 1:1 with embedded LiberationSans (Matterhorn 21-006)
                 obj.set(PDFLib.PDFName.of('Subtype'), PDFLib.PDFName.of('TrueType'));
+                obj.set(PDFLib.PDFName.of('BaseFont'), PDFLib.PDFName.of('LiberationSans'));
+                if (!hasCustomDifferences && !obj.get(PDFLib.PDFName.of('Encoding'))) {
+                    obj.set(PDFLib.PDFName.of('Encoding'), PDFLib.PDFName.of('WinAnsiEncoding'));
+                }
+                existingDesc.set(PDFLib.PDFName.of('FontName'), PDFLib.PDFName.of('LiberationSans'));
+                existingDesc.set(PDFLib.PDFName.of('Flags'), PDFLib.PDFNumber.of(32));
+                existingDesc.set(PDFLib.PDFName.of('FontBBox'), context.obj([-544, -303, 1302, 980]));
+                existingDesc.set(PDFLib.PDFName.of('ItalicAngle'), PDFLib.PDFNumber.of(0));
+                existingDesc.set(PDFLib.PDFName.of('Ascent'), PDFLib.PDFNumber.of(905));
+                existingDesc.set(PDFLib.PDFName.of('Descent'), PDFLib.PDFNumber.of(-212));
+                existingDesc.set(PDFLib.PDFName.of('CapHeight'), PDFLib.PDFNumber.of(688));
+                existingDesc.set(PDFLib.PDFName.of('StemV'), PDFLib.PDFNumber.of(80));
                 existingDesc.set(PDFLib.PDFName.of('FontFile2'), fontFileRef);
+
+                var fcValObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('FirstChar')) : obj.get(PDFLib.PDFName.of('FirstChar'));
+                var lcValObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('LastChar')) : obj.get(PDFLib.PDFName.of('LastChar'));
+                var fcInt = fcValObj ? parseInt(String(fcValObj), 10) : 32;
+                var lcInt = lcValObj ? parseInt(String(lcValObj), 10) : 255;
+                if (isNaN(fcInt) || isNaN(lcInt) || lcInt < fcInt || (fcInt === 32 && lcInt === 255)) {
+                    obj.set(PDFLib.PDFName.of('FirstChar'), PDFLib.PDFNumber.of(32));
+                    obj.set(PDFLib.PDFName.of('LastChar'), PDFLib.PDFNumber.of(255));
+                    obj.set(PDFLib.PDFName.of('Widths'), widthsObjRef);
+                } else {
+                    var customRangeWidths = buildLiberationSansWidthsForRange(fcInt, lcInt);
+                    obj.set(PDFLib.PDFName.of('Widths'), context.register(context.obj(customRangeWidths)));
+                }
+            } else {
+                // Already embedded font: ensure /FirstChar, /LastChar & /Widths array length match (Matterhorn 21-006)
+                var eFcObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('FirstChar')) : obj.get(PDFLib.PDFName.of('FirstChar'));
+                var eLcObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('LastChar')) : obj.get(PDFLib.PDFName.of('LastChar'));
+                var eWObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('Widths')) : obj.get(PDFLib.PDFName.of('Widths'));
+                if (!eFcObj || !eLcObj || !eWObj) {
+                    obj.set(PDFLib.PDFName.of('FirstChar'), PDFLib.PDFNumber.of(32));
+                    obj.set(PDFLib.PDFName.of('LastChar'), PDFLib.PDFNumber.of(255));
+                    obj.set(PDFLib.PDFName.of('Widths'), widthsObjRef);
+                } else if (typeof eWObj.size === 'function') {
+                    var eFc = parseInt(String(eFcObj), 10);
+                    var eLc = parseInt(String(eLcObj), 10);
+                    if (!isNaN(eFc) && !isNaN(eLc) && eLc >= eFc && eWObj.size() !== (eLc - eFc + 1)) {
+                        var repairedWidths = buildLiberationSansWidthsForRange(eFc, eLc);
+                        obj.set(PDFLib.PDFName.of('Widths'), context.register(context.obj(repairedWidths)));
+                    }
+                }
             }
 
             if (!obj.get(PDFLib.PDFName.of('ToUnicode'))) {
@@ -4501,6 +4648,28 @@
                 var pRef = context.register(pElem);
                 mcidElemRefsForParentTree.push(pRef);
                 sectChildrenRefs.push(pRef);
+            }
+
+            // Include any user-placed visual PDF/UA Tags (e.g. <Figure> with /Alt and /BBox) on this page
+            if (doc.savedA11yTags && doc.savedA11yTags.length > 0) {
+                for (var ct = 0; ct < doc.savedA11yTags.length; ct++) {
+                    var cTag = doc.savedA11yTags[ct];
+                    if ((cTag.pageIndex || 0) !== i) continue;
+                    var cTagAlt = cTag.altText || ('Element (' + (cTag.tagType || 'Figure') + ') auf Seite ' + (i + 1));
+                    var cTagElem = context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of(cTag.tagType || 'Figure'),
+                        P: sectElemRef,
+                        Pg: page.ref,
+                        Alt: PDFLib.PDFString.of(cTagAlt),
+                        ActualText: PDFLib.PDFString.of(cTagAlt),
+                        A: context.obj({
+                            O: PDFLib.PDFName.of('Layout'),
+                            BBox: cTag.bbox || [0, 0, 100, 100]
+                        })
+                    });
+                    sectChildrenRefs.push(context.register(cTagElem));
+                }
             }
 
             parentTreeNums.push(PDFLib.PDFNumber.of(i));
