@@ -7035,6 +7035,24 @@
                 openModal('modalChangeUserPassword');
                 if (curInp) setTimeout(function () { curInp.focus(); }, 60);
                 break;
+            case 'open-autoredact-modal':
+                await openAutoRedactModal();
+                break;
+            case 'open-attachments-modal':
+                await openAttachmentsModal();
+                break;
+            case 'open-bookmarks-modal':
+                await openBookmarksModal();
+                break;
+            case 'open-sanitize-meta-modal':
+                await openSanitizeMetaModal();
+                break;
+            case 'open-nup-modal':
+                await openNupBookletModal();
+                break;
+            case 'open-mailmerge-modal':
+                await openMailMergeModal();
+                break;
         }
     }
 
@@ -7882,6 +7900,1038 @@
     }
 
     // =========================================================================
+    // v1.4.0 FEATURE 1: Intelligente Mustersuche & Auto-Schwärzung (DSGVO)
+    // =========================================================================
+    var autoRedactMatchesCache = [];
+
+    async function openAutoRedactModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        openModal('modalAutoRedact');
+        await scanPdfForAutoRedactPatterns();
+    }
+
+    async function scanPdfForAutoRedactPatterns() {
+        var doc = getActiveDoc();
+        var listEl = document.getElementById('arMatchesList');
+        var titleEl = document.getElementById('arResultsTitle');
+        if (!doc || !listEl) return;
+
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0;">⏳ Durchsuche alle Seiten des PDFs nach sensiblen Mustern…</div>';
+        autoRedactMatchesCache = [];
+
+        var patterns = [];
+        if (document.getElementById('arPatIban') && document.getElementById('arPatIban').checked) {
+            patterns.push({ label: 'IBAN', rx: /\b[A-Z]{2}\d{2}(?:\s?[0-9A-Z]{4}){3,7}(?:\s?[0-9A-Z]{1,3})?\b/g });
+        }
+        if (document.getElementById('arPatEmail') && document.getElementById('arPatEmail').checked) {
+            patterns.push({ label: 'E-Mail', rx: /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g });
+        }
+        if (document.getElementById('arPatPhone') && document.getElementById('arPatPhone').checked) {
+            patterns.push({ label: 'Telefon', rx: /(?:(?:\+|00)49|0)\s?[1-9][\d\s\/\-]{6,16}\d/g });
+        }
+        if (document.getElementById('arPatDate') && document.getElementById('arPatDate').checked) {
+            patterns.push({ label: 'Datum', rx: /\b(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:19|20)\d{2}\b/g });
+        }
+        if (document.getElementById('arPatTaxId') && document.getElementById('arPatTaxId').checked) {
+            patterns.push({ label: 'ID/AZ', rx: /\b(?:\d{2}\s?\d{3}\s?\d{3}\s?\d{3}|[A-Z]{1,4}[\-\/]\d{2,6}[\-\/]\d{1,6})\b/g });
+        }
+
+        var customRaw = (document.getElementById('arCustomTerms') && document.getElementById('arCustomTerms').value) || '';
+        customRaw.split(',').forEach(function (term) {
+            var clean = term.trim();
+            if (clean.length >= 2) {
+                var escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                patterns.push({ label: 'Begriff', rx: new RegExp(escaped, 'gi') });
+            }
+        });
+
+        if (patterns.length === 0) {
+            listEl.innerHTML = '<div style="color:#f87171;padding:8px 0;">Bitte wählen Sie mindestens ein Suchmuster aus oder geben Sie einen Suchbegriff ein.</div>';
+            return;
+        }
+
+        try {
+            var pdfProxy = await pdfjsLib.getDocument({ data: doc.bytes.slice(0) }).promise;
+            for (var p = 1; p <= pdfProxy.numPages; p++) {
+                var page = await pdfProxy.getPage(p);
+                var vp = page.getViewport({ scale: 1.0 });
+                var tc = await page.getTextContent();
+                var items = tc.items || [];
+
+                for (var i = 0; i < items.length; i++) {
+                    var it = items[i];
+                    var str = String(it.str || '');
+                    if (!str.trim()) continue;
+
+                    var tx = it.transform ? it.transform[4] : 0;
+                    var ty = it.transform ? it.transform[5] : 0;
+                    var fontH = Math.max(10, Math.abs(it.height || (it.transform ? it.transform[0] : 12)));
+                    var itemW = Math.max(fontH * 0.6, it.width || (str.length * fontH * 0.52));
+
+                    for (var patIdx = 0; patIdx < patterns.length; patIdx++) {
+                        var pat = patterns[patIdx];
+                        pat.rx.lastIndex = 0;
+                        var m;
+                        while ((m = pat.rx.exec(str)) !== null) {
+                            var matchText = m[0];
+                            var startRatio = str.length > 0 ? (m.index / str.length) : 0;
+                            var lenRatio = str.length > 0 ? (matchText.length / str.length) : 1;
+
+                            var rxX = tx + itemW * startRatio - 2;
+                            var rxW = Math.max(18, itemW * lenRatio + 4);
+                            var rxY = (vp.height - ty - fontH * 0.88) - 2;
+                            var rxH = fontH * 1.18 + 3;
+
+                            autoRedactMatchesCache.push({
+                                pageIndex: p - 1,
+                                label: pat.label,
+                                text: matchText,
+                                x: Math.max(0, Math.round(rxX)),
+                                y: Math.max(0, Math.round(rxY)),
+                                w: Math.round(rxW),
+                                h: Math.round(rxH),
+                                selected: true
+                            });
+                            if (m.index === pat.rx.lastIndex) pat.rx.lastIndex++;
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            listEl.innerHTML = '<div style="color:#f87171;padding:8px 0;">Fehler bei der Textanalyse: ' + escapeHtml(err.message || String(err)) + '</div>';
+            return;
+        }
+
+        if (titleEl) {
+            titleEl.textContent = 'Gefundene Treffer (' + autoRedactMatchesCache.length + ')';
+        }
+        renderAutoRedactMatchesList();
+    }
+
+    function renderAutoRedactMatchesList() {
+        var listEl = document.getElementById('arMatchesList');
+        if (!listEl) return;
+        if (autoRedactMatchesCache.length === 0) {
+            listEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0;">✔ Keine sensiblen Muster für die aktuelle Auswahl gefunden.</div>';
+            return;
+        }
+        var html = '';
+        autoRedactMatchesCache.forEach(function (item, idx) {
+            html += '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg-app);border:1px solid var(--border-subtle);border-radius:6px;cursor:pointer;">' +
+                '<input type="checkbox" class="ar-match-cb" data-idx="' + idx + '" ' + (item.selected ? 'checked' : '') + '>' +
+                '<span style="background:rgba(239,68,68,0.18);color:#fca5a5;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:700;">' + escapeHtml(item.label) + '</span>' +
+                '<strong style="font-family:monospace;">' + escapeHtml(item.text) + '</strong>' +
+                '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Seite ' + (item.pageIndex + 1) + '</span>' +
+                '</label>';
+        });
+        listEl.innerHTML = html;
+
+        var cbs = listEl.querySelectorAll('.ar-match-cb');
+        cbs.forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                var i = parseInt(cb.getAttribute('data-idx'), 10);
+                if (autoRedactMatchesCache[i]) autoRedactMatchesCache[i].selected = cb.checked;
+            });
+        });
+    }
+
+    async function applySelectedAutoRedactMatches(burnImmediately) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        var chosen = autoRedactMatchesCache.filter(function (m) { return m.selected; });
+        if (chosen.length === 0) {
+            showToast('Bitte wählen Sie mindestens einen Treffer aus.', 'error');
+            return;
+        }
+        pushUndoState(doc);
+        chosen.forEach(function (m) {
+            var anns = getPageAnnotations(doc, m.pageIndex);
+            anns.push({
+                type: 'redact',
+                x: m.x,
+                y: m.y,
+                w: m.w,
+                h: m.h,
+                color: '#000000'
+            });
+        });
+        doc.modified = true;
+        closeModal('modalAutoRedact');
+        trackUsageEvent('auto_redact_pattern');
+
+        if (burnImmediately) {
+            await sanitizeRedactedPages();
+        } else {
+            doc.currentPage = chosen[0].pageIndex;
+            if (state.viewMode !== 'editor') {
+                await switchView('editor');
+            } else {
+                await renderCurrentEditorPage();
+            }
+            renderTabsBar();
+            showToast(chosen.length + ' Schwärzungsbalken automatisch gesetzt! Klicken Sie auf "🛡️ Sanitize", um sie dauerhaft einzubrennen.', 'success');
+        }
+    }
+
+    // =========================================================================
+    // v1.4.0 FEATURE 3: PDF-Anlagen / Eingebettete Dateien verwalten (Portfolio)
+    // =========================================================================
+    var currentPdfAttachments = [];
+
+    async function openAttachmentsModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        openModal('modalAttachments');
+        await refreshPdfAttachmentsList();
+    }
+
+    async function refreshPdfAttachmentsList() {
+        var doc = getActiveDoc();
+        var listEl = document.getElementById('pdfAttachmentsList');
+        if (!doc || !listEl) return;
+
+        currentPdfAttachments = [];
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+            var context = pdfDoc.context;
+            var catalog = pdfDoc.catalog;
+            var namesDict = catalog.lookupMaybe(PDFLib.PDFName.of('Names'), PDFLib.PDFDict);
+            if (namesDict) {
+                var efTree = namesDict.lookupMaybe(PDFLib.PDFName.of('EmbeddedFiles'), PDFLib.PDFDict);
+                if (efTree) {
+                    var namesArr = efTree.lookupMaybe(PDFLib.PDFName.of('Names'), PDFLib.PDFArray);
+                    if (namesArr) {
+                        for (var i = 0; i + 1 < namesArr.size(); i += 2) {
+                            var nameObj = context.lookup(namesArr.get(i));
+                            var fsDict = context.lookup(namesArr.get(i + 1));
+                            var fname = (nameObj && nameObj.decodeText) ? nameObj.decodeText() : ('Anlage_' + (i / 2 + 1));
+                            if (fsDict && fsDict instanceof PDFLib.PDFDict) {
+                                var ufObj = fsDict.lookupMaybe(PDFLib.PDFName.of('UF'), PDFLib.PDFHexString) || fsDict.lookupMaybe(PDFLib.PDFName.of('F'), PDFLib.PDFString);
+                                if (ufObj && ufObj.decodeText) fname = ufObj.decodeText();
+                                var efDict = fsDict.lookupMaybe(PDFLib.PDFName.of('EF'), PDFLib.PDFDict);
+                                if (efDict) {
+                                    var streamRef = efDict.get(PDFLib.PDFName.of('UF')) || efDict.get(PDFLib.PDFName.of('F'));
+                                    var streamObj = context.lookup(streamRef);
+                                    if (streamObj && streamObj.contents) {
+                                        var rawBytes = streamObj.contents;
+                                        var decodedBytes = rawBytes;
+                                        var filterObj = streamObj.dict ? streamObj.dict.get(PDFLib.PDFName.of('Filter')) : null;
+                                        if (filterObj && String(filterObj).indexOf('FlateDecode') !== -1 && typeof DecompressionStream !== 'undefined') {
+                                            try {
+                                                var ds = new DecompressionStream('deflate');
+                                                var writer = ds.writable.getWriter();
+                                                writer.write(rawBytes);
+                                                writer.close();
+                                                var ab = await new Response(ds.readable).arrayBuffer();
+                                                decodedBytes = new Uint8Array(ab);
+                                            } catch (e2) {}
+                                        }
+                                        currentPdfAttachments.push({
+                                            name: fname,
+                                            bytes: decodedBytes,
+                                            size: decodedBytes.byteLength
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (err) {}
+
+        if (currentPdfAttachments.length === 0) {
+            listEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0;">Keine eingebetteten Dateianlagen in diesem PDF gefunden. Klicken Sie oben auf „➕ Datei(en) in dieses PDF einbetten…“, um beliebige Dokumente anzuhängen.</div>';
+            return;
+        }
+
+        var html = '';
+        currentPdfAttachments.forEach(function (att, idx) {
+            var kb = (att.size / 1024).toFixed(1) + ' KB';
+            html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg-app);border:1px solid var(--border-subtle);border-radius:6px;">' +
+                '<span style="font-size:16px;">📎</span>' +
+                '<div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                '<strong>' + escapeHtml(att.name) + '</strong> <span style="color:var(--text-muted);font-size:11px;">(' + kb + ')</span>' +
+                '</div>' +
+                '<button type="button" class="tool-btn btn-dl-att" data-idx="' + idx + '" style="height:26px;font-size:11.5px;">💾 Speichern</button>' +
+                '<button type="button" class="tool-btn btn-del-att" data-idx="' + idx + '" style="height:26px;font-size:11.5px;color:#f87171;">🗑</button>' +
+                '</div>';
+        });
+        listEl.innerHTML = html;
+
+        listEl.querySelectorAll('.btn-dl-att').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var i = parseInt(btn.getAttribute('data-idx'), 10);
+                var att = currentPdfAttachments[i];
+                if (att) {
+                    downloadBlob(att.bytes, att.name, 'application/octet-stream');
+                }
+            });
+        });
+        listEl.querySelectorAll('.btn-del-att').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+                var i = parseInt(btn.getAttribute('data-idx'), 10);
+                await removeAttachmentByIndex(i);
+            });
+        });
+    }
+
+    async function embedFilesIntoActivePdf(fileList) {
+        var doc = getActiveDoc();
+        if (!doc || !fileList || fileList.length === 0) return;
+
+        pushUndoState(doc);
+        var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+        for (var i = 0; i < fileList.length; i++) {
+            var f = fileList[i];
+            var buf = await f.arrayBuffer();
+            await pdfDoc.attach(new Uint8Array(buf), f.name, {
+                mimeType: f.type || 'application/octet-stream',
+                description: 'Eingebettete Anlage: ' + f.name,
+                creationDate: new Date(),
+                modificationDate: new Date()
+            });
+        }
+        doc.bytes = await pdfDoc.save();
+        doc.modified = true;
+        renderTabsBar();
+        trackUsageEvent('attachments_managed');
+        await refreshPdfAttachmentsList();
+        showToast(fileList.length + ' Dateianlage(n) erfolgreich in das PDF eingebettet!', 'success');
+    }
+
+    async function removeAttachmentByIndex(removeIdx) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        var remaining = currentPdfAttachments.filter(function (_, idx) { return idx !== removeIdx; });
+        pushUndoState(doc);
+        var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+        var namesDict = pdfDoc.catalog.lookupMaybe(PDFLib.PDFName.of('Names'), PDFLib.PDFDict);
+        if (namesDict) {
+            namesDict.delete(PDFLib.PDFName.of('EmbeddedFiles'));
+        }
+        pdfDoc.catalog.delete(PDFLib.PDFName.of('AF'));
+        for (var i = 0; i < remaining.length; i++) {
+            await pdfDoc.attach(remaining[i].bytes, remaining[i].name, {
+                mimeType: 'application/octet-stream',
+                description: remaining[i].name
+            });
+        }
+        doc.bytes = await pdfDoc.save();
+        doc.modified = true;
+        renderTabsBar();
+        await refreshPdfAttachmentsList();
+        showToast('Anlage aus dem PDF entfernt.', 'success');
+    }
+
+    // =========================================================================
+    // v1.4.0 FEATURE 4: Lesezeichen-Editor & Inhaltsverzeichnis-Deckblatt
+    // =========================================================================
+    var workingBookmarksList = [];
+
+    async function openBookmarksModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        if (!doc.customBookmarks || !Array.isArray(doc.customBookmarks) || doc.customBookmarks.length === 0) {
+            await autoDetectBookmarksFromPdf(true);
+        } else {
+            workingBookmarksList = JSON.parse(JSON.stringify(doc.customBookmarks));
+            renderBookmarksEditorUI();
+        }
+        openModal('modalBookmarks');
+    }
+
+    async function autoDetectBookmarksFromPdf(silentInit) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        workingBookmarksList = [];
+        try {
+            var pdfProxy = await pdfjsLib.getDocument({ data: doc.bytes.slice(0) }).promise;
+            for (var p = 1; p <= pdfProxy.numPages; p++) {
+                var page = await pdfProxy.getPage(p);
+                var tc = await page.getTextContent();
+                var items = tc.items || [];
+                var foundOnPage = 0;
+                for (var i = 0; i < items.length; i++) {
+                    var str = String(items[i].str || '').trim();
+                    if (str.length < 3 || str.length > 95) continue;
+                    var fontH = Math.abs(items[i].height || (items[i].transform ? items[i].transform[0] : 11));
+                    if (fontH >= 13.5 && foundOnPage < 3) {
+                        workingBookmarksList.push({
+                            title: str,
+                            page: p,
+                            level: fontH >= 17 ? 1 : 2
+                        });
+                        foundOnPage++;
+                    }
+                }
+                if (foundOnPage === 0 && pdfProxy.numPages <= 30) {
+                    workingBookmarksList.push({
+                        title: 'Seite ' + p,
+                        page: p,
+                        level: 1
+                    });
+                }
+            }
+        } catch (err) {}
+
+        if (workingBookmarksList.length === 0) {
+            workingBookmarksList.push({ title: doc.meta.title || 'Kapitel 1', page: 1, level: 1 });
+        }
+        renderBookmarksEditorUI();
+        if (!silentInit) {
+            showToast(workingBookmarksList.length + ' Lesezeichen aus Dokumentstruktur erkannt.', 'success');
+        }
+    }
+
+    function renderBookmarksEditorUI() {
+        var container = document.getElementById('bookmarksEditorList');
+        if (!container) return;
+        if (workingBookmarksList.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-muted);padding:8px;">Noch keine Lesezeichen angelegt. Klicken Sie auf „➕ Lesezeichen hinzufügen“.</div>';
+            return;
+        }
+        var doc = getActiveDoc();
+        var maxPage = doc ? doc.pageCount : 999;
+        var html = '';
+        workingBookmarksList.forEach(function (bm, idx) {
+            html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--bg-app);border:1px solid var(--border-subtle);border-radius:6px;">' +
+                '<select class="form-control bm-level-sel" data-idx="' + idx + '" style="width:92px;height:28px;font-size:11.5px;">' +
+                '<option value="1" ' + (bm.level === 1 ? 'selected' : '') + '>Ebene 1</option>' +
+                '<option value="2" ' + (bm.level === 2 ? 'selected' : '') + '>↳ Ebene 2</option>' +
+                '</select>' +
+                '<input type="text" class="form-control bm-title-inp" data-idx="' + idx + '" value="' + escapeHtml(bm.title) + '" placeholder="Kapiteltitel" style="flex:1;height:28px;font-size:12px;">' +
+                '<span style="font-size:11.5px;color:var(--text-muted);">Seite:</span>' +
+                '<input type="number" class="form-control bm-page-inp" data-idx="' + idx + '" value="' + (bm.page || 1) + '" min="1" max="' + maxPage + '" style="width:64px;height:28px;font-size:12px;">' +
+                '<button type="button" class="tool-btn bm-del-btn" data-idx="' + idx + '" style="height:28px;padding:0 8px;color:#f87171;">✕</button>' +
+                '</div>';
+        });
+        container.innerHTML = html;
+
+        container.querySelectorAll('.bm-level-sel').forEach(function (el) {
+            el.addEventListener('change', function () {
+                var i = parseInt(el.getAttribute('data-idx'), 10);
+                if (workingBookmarksList[i]) workingBookmarksList[i].level = parseInt(el.value, 10) || 1;
+            });
+        });
+        container.querySelectorAll('.bm-title-inp').forEach(function (el) {
+            el.addEventListener('input', function () {
+                var i = parseInt(el.getAttribute('data-idx'), 10);
+                if (workingBookmarksList[i]) workingBookmarksList[i].title = el.value;
+            });
+        });
+        container.querySelectorAll('.bm-page-inp').forEach(function (el) {
+            el.addEventListener('input', function () {
+                var i = parseInt(el.getAttribute('data-idx'), 10);
+                if (workingBookmarksList[i]) workingBookmarksList[i].page = Math.max(1, parseInt(el.value, 10) || 1);
+            });
+        });
+        container.querySelectorAll('.bm-del-btn').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var i = parseInt(el.getAttribute('data-idx'), 10);
+                workingBookmarksList.splice(i, 1);
+                renderBookmarksEditorUI();
+            });
+        });
+    }
+
+    async function saveBookmarksAndTocToActivePdf() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        var validBms = workingBookmarksList.filter(function (b) { return String(b.title || '').trim() !== ''; });
+        if (validBms.length === 0) {
+            showToast('Bitte legen Sie mindestens ein Lesezeichen mit Titel an.', 'error');
+            return;
+        }
+
+        var insertToc = document.getElementById('bmInsertTocPage') && document.getElementById('bmInsertTocPage').checked;
+        var tocTitle = (document.getElementById('bmTocTitleInput') && document.getElementById('bmTocTitleInput').value.trim()) || 'Inhaltsverzeichnis';
+
+        pushUndoState(doc);
+        var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+        var fontReg = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+        var fontBold = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+
+        var pageOffset = 0;
+        if (insertToc) {
+            var firstPage = pdfDoc.getPages()[0];
+            var sz = firstPage ? firstPage.getSize() : { width: 595.28, height: 841.89 };
+            var tocPage = pdfDoc.insertPage(0, [sz.width, sz.height]);
+            pageOffset = 1;
+
+            var yCursor = sz.height - 65;
+            tocPage.drawText(tocTitle, {
+                x: 52,
+                y: yCursor,
+                size: 20,
+                font: fontBold,
+                color: PDFLib.rgb(0.08, 0.15, 0.28)
+            });
+            yCursor -= 10;
+            tocPage.drawLine({
+                start: { x: 52, y: yCursor },
+                end: { x: sz.width - 52, y: yCursor },
+                thickness: 1.5,
+                color: PDFLib.rgb(0.23, 0.51, 0.96)
+            });
+            yCursor -= 26;
+
+            for (var bi = 0; bi < validBms.length; bi++) {
+                if (yCursor < 60) break;
+                var entry = validBms[bi];
+                var targetPageNum = entry.page + pageOffset;
+                var indentX = entry.level === 2 ? 70 : 52;
+                var entryFont = entry.level === 1 ? fontBold : fontReg;
+                var entrySize = entry.level === 1 ? 11.5 : 10.5;
+                var cleanTitle = String(entry.title).substring(0, 72);
+
+                tocPage.drawText(cleanTitle, {
+                    x: indentX,
+                    y: yCursor,
+                    size: entrySize,
+                    font: entryFont,
+                    color: PDFLib.rgb(0.12, 0.16, 0.22)
+                });
+                var pgStr = String(targetPageNum);
+                var pgW = entryFont.widthOfTextAtSize(pgStr, entrySize);
+                tocPage.drawText(pgStr, {
+                    x: sz.width - 52 - pgW,
+                    y: yCursor,
+                    size: entrySize,
+                    font: entryFont,
+                    color: PDFLib.rgb(0.23, 0.51, 0.96)
+                });
+                yCursor -= (entry.level === 1 ? 20 : 17);
+            }
+        }
+
+        // Build PDF /Outlines dictionary tree
+        var context = pdfDoc.context;
+        var pages = pdfDoc.getPages();
+        var outlinesDictRef = context.nextRef();
+        var itemRefs = validBms.map(function () { return context.nextRef(); });
+
+        for (var idx = 0; idx < validBms.length; idx++) {
+            var bmItem = validBms[idx];
+            var targetIdx = Math.max(0, Math.min(pages.length - 1, (bmItem.page - 1) + pageOffset));
+            var pageRef = pages[targetIdx].ref;
+
+            var destArr = context.obj([pageRef, PDFLib.PDFName.of('XYZ'), null, null, null]);
+            var itemMap = {
+                Title: PDFLib.PDFHexString.fromText(String(bmItem.title)),
+                Parent: outlinesDictRef,
+                Dest: destArr
+            };
+            if (idx > 0) itemMap.Prev = itemRefs[idx - 1];
+            if (idx + 1 < validBms.length) itemMap.Next = itemRefs[idx + 1];
+            context.assign(itemRefs[idx], context.obj(itemMap));
+        }
+
+        context.assign(outlinesDictRef, context.obj({
+            Type: PDFLib.PDFName.of('Outlines'),
+            First: itemRefs[0],
+            Last: itemRefs[itemRefs.length - 1],
+            Count: PDFLib.PDFNumber.of(itemRefs.length)
+        }));
+        pdfDoc.catalog.set(PDFLib.PDFName.of('Outlines'), outlinesDictRef);
+        pdfDoc.catalog.set(PDFLib.PDFName.of('PageMode'), PDFLib.PDFName.of('UseOutlines'));
+
+        doc.customBookmarks = validBms.map(function (b) {
+            return { title: b.title, page: b.page + pageOffset, level: b.level };
+        });
+        doc.bytes = await pdfDoc.save();
+        doc.pageCount = pages.length;
+        doc.modified = true;
+
+        closeModal('modalBookmarks');
+        await reloadActiveDocAfterPageMutation(doc);
+        trackUsageEvent('bookmarks_toc_used');
+        showToast(validBms.length + ' Lesezeichen' + (insertToc ? ' + Inhaltsverzeichnis-Deckblatt' : '') + ' erfolgreich ins PDF übernommen!', 'success');
+    }
+
+    // =========================================================================
+    // v1.4.0 FEATURE 5: Metadaten- & Forensik-Bereinigung (Sanitize PDF)
+    // =========================================================================
+    async function openSanitizeMetaModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        openModal('modalSanitizeMeta');
+        var repEl = document.getElementById('sanitizeForensicReport');
+        if (!repEl) return;
+
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+            var author = pdfDoc.getAuthor() || '—';
+            var creator = pdfDoc.getCreator() || '—';
+            var producer = pdfDoc.getProducer() || '—';
+            var hasXmp = pdfDoc.catalog.get(PDFLib.PDFName.of('Metadata')) ? 'Ja (XMP-XML-Stream vorhanden)' : 'Nein';
+            var hasOpenAction = pdfDoc.catalog.get(PDFLib.PDFName.of('OpenAction')) ? '⚠️ Ja (OpenAction vorhanden)' : 'Nein';
+
+            repEl.innerHTML =
+                '<div><strong>Gefundene Dokument-Spuren im aktuellen PDF:</strong></div>' +
+                '<div>• <strong>Autor (Author):</strong> ' + escapeHtml(author) + '</div>' +
+                '<div>• <strong>Erstellt mit (Creator):</strong> ' + escapeHtml(creator) + '</div>' +
+                '<div>• <strong>PDF-Konverter (Producer):</strong> ' + escapeHtml(producer) + '</div>' +
+                '<div>• <strong>XMP-Metadaten-Historie:</strong> ' + hasXmp + '</div>' +
+                '<div>• <strong>Automatische Start-Aktionen:</strong> ' + hasOpenAction + '</div>';
+        } catch (err) {
+            repEl.textContent = 'Dokument bereit zur Bereinigung.';
+        }
+    }
+
+    async function runSanitizeMetadataAndTraces() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        pushUndoState(doc);
+
+        var clearInfoXmp = document.getElementById('sanOptInfoXmp') && document.getElementById('sanOptInfoXmp').checked;
+        var clearScripts = document.getElementById('sanOptScripts') && document.getElementById('sanOptScripts').checked;
+        var clearAtts    = document.getElementById('sanOptAttachments') && document.getElementById('sanOptAttachments').checked;
+        var clearAnns    = document.getElementById('sanOptAnnotations') && document.getElementById('sanOptAnnotations').checked;
+
+        if (clearAnns) {
+            await bakeAnnotationsIntoDocument(doc);
+        }
+
+        var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+
+        if (clearInfoXmp) {
+            pdfDoc.setAuthor('');
+            pdfDoc.setCreator('');
+            pdfDoc.setProducer('PDF-Werkstatt Pro');
+            pdfDoc.setSubject('');
+            pdfDoc.setKeywords([]);
+            pdfDoc.setCreationDate(new Date(0));
+            pdfDoc.setModificationDate(new Date(0));
+            pdfDoc.catalog.delete(PDFLib.PDFName.of('Metadata'));
+            pdfDoc.catalog.delete(PDFLib.PDFName.of('PieceInfo'));
+            doc.meta.author = '';
+            doc.meta.subject = '';
+        }
+
+        if (clearScripts) {
+            pdfDoc.catalog.delete(PDFLib.PDFName.of('OpenAction'));
+            pdfDoc.catalog.delete(PDFLib.PDFName.of('AA'));
+            var namesDict = pdfDoc.catalog.lookupMaybe(PDFLib.PDFName.of('Names'), PDFLib.PDFDict);
+            if (namesDict) {
+                namesDict.delete(PDFLib.PDFName.of('JavaScript'));
+            }
+            var pages = pdfDoc.getPages();
+            for (var p = 0; p < pages.length; p++) {
+                pages[p].node.delete(PDFLib.PDFName.of('AA'));
+            }
+        }
+
+        if (clearAtts) {
+            var namesDict2 = pdfDoc.catalog.lookupMaybe(PDFLib.PDFName.of('Names'), PDFLib.PDFDict);
+            if (namesDict2) {
+                namesDict2.delete(PDFLib.PDFName.of('EmbeddedFiles'));
+            }
+            pdfDoc.catalog.delete(PDFLib.PDFName.of('AF'));
+        }
+
+        if (clearAnns) {
+            try {
+                var form = pdfDoc.getForm();
+                form.flatten();
+            } catch (e) {}
+            var pages2 = pdfDoc.getPages();
+            for (var p2 = 0; p2 < pages2.length; p2++) {
+                pages2[p2].node.delete(PDFLib.PDFName.of('Annots'));
+            }
+        }
+
+        doc.bytes = await pdfDoc.save();
+        doc.modified = true;
+        populateMetadataInspector(doc);
+        renderTabsBar();
+        closeModal('modalSanitizeMeta');
+        trackUsageEvent('metadata_sanitized');
+        showToast('Forensik- & Metadaten-Bereinigung erfolgreich durchgeführt!', 'success');
+    }
+
+    // =========================================================================
+    // v1.4.0 FEATURE 6: Mehrseiten-Layout (N-up: 2-auf-1, 4-auf-1 & Broschüre)
+    // =========================================================================
+    async function openNupBookletModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        openModal('modalNupBooklet');
+    }
+
+    async function runNupOrBookletLayout() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+
+        await bakeAnnotationsIntoDocument(doc);
+        var mode = (document.getElementById('nupLayoutMode') && document.getElementById('nupLayoutMode').value) || '2up';
+        var margin = Math.max(0, parseInt((document.getElementById('nupPageMargin') && document.getElementById('nupPageMargin').value) || '18', 10));
+        var drawBorder = document.getElementById('nupDrawBorder') && document.getElementById('nupDrawBorder').checked;
+        var drawFold = document.getElementById('nupDrawFoldLine') && document.getElementById('nupDrawFoldLine').checked;
+
+        var srcDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+        var srcPages = srcDoc.getPages();
+        var total = srcPages.length;
+        if (total === 0) return;
+
+        var outDoc = await PDFLib.PDFDocument.create();
+        var embeddedPages = await outDoc.embedPages(srcPages);
+
+        function placeCell(outPage, embPage, cellX, cellY, cellW, cellH) {
+            if (!embPage) return;
+            var pad = margin;
+            var availW = Math.max(20, cellW - pad * 2);
+            var availH = Math.max(20, cellH - pad * 2);
+            var scale = Math.min(availW / embPage.width, availH / embPage.height);
+            var drawW = embPage.width * scale;
+            var drawH = embPage.height * scale;
+            var dx = cellX + (cellW - drawW) / 2;
+            var dy = cellY + (cellH - drawH) / 2;
+
+            outPage.drawPage(embPage, { x: dx, y: dy, width: drawW, height: drawH });
+            if (drawBorder) {
+                outPage.drawRectangle({
+                    x: dx,
+                    y: dy,
+                    width: drawW,
+                    height: drawH,
+                    borderColor: PDFLib.rgb(0.75, 0.78, 0.82),
+                    borderWidth: 0.6
+                });
+            }
+        }
+
+        if (mode === '2up') {
+            var sheetW = 841.89, sheetH = 595.28; // A4 Landscape
+            for (var i = 0; i < total; i += 2) {
+                var sh = outDoc.addPage([sheetW, sheetH]);
+                placeCell(sh, embeddedPages[i], 0, 0, sheetW / 2, sheetH);
+                if (i + 1 < total) {
+                    placeCell(sh, embeddedPages[i + 1], sheetW / 2, 0, sheetW / 2, sheetH);
+                }
+                if (drawFold) {
+                    sh.drawLine({
+                        start: { x: sheetW / 2, y: 15 },
+                        end: { x: sheetW / 2, y: sheetH - 15 },
+                        thickness: 0.5,
+                        color: PDFLib.rgb(0.8, 0.82, 0.85)
+                    });
+                }
+            }
+        } else if (mode === '4up') {
+            var sheetW4 = 595.28, sheetH4 = 841.89; // A4 Portrait
+            var cw = sheetW4 / 2, ch = sheetH4 / 2;
+            for (var j = 0; j < total; j += 4) {
+                var sh4 = outDoc.addPage([sheetW4, sheetH4]);
+                placeCell(sh4, embeddedPages[j],     0,  ch, cw, ch);
+                placeCell(sh4, embeddedPages[j + 1], cw, ch, cw, ch);
+                placeCell(sh4, embeddedPages[j + 2], 0,  0,  cw, ch);
+                placeCell(sh4, embeddedPages[j + 3], cw, 0,  cw, ch);
+                if (drawFold) {
+                    sh4.drawLine({ start: { x: cw, y: 15 }, end: { x: cw, y: sheetH4 - 15 }, thickness: 0.4, color: PDFLib.rgb(0.82, 0.84, 0.87) });
+                    sh4.drawLine({ start: { x: 15, y: ch }, end: { x: sheetW4 - 15, y: ch }, thickness: 0.4, color: PDFLib.rgb(0.82, 0.84, 0.87) });
+                }
+            }
+        } else if (mode === 'booklet') {
+            var bSheetW = 841.89, bSheetH = 595.28; // A4 Landscape saddle-stitch
+            var paddedTotal = Math.ceil(total / 4) * 4;
+            var sheetsCount = paddedTotal / 4;
+            for (var s = 0; s < sheetsCount; s++) {
+                // Front side of sheet: Left = paddedTotal - 1 - 2*s, Right = 2*s
+                var frontLeftIdx  = paddedTotal - 1 - (2 * s);
+                var frontRightIdx = 2 * s;
+                var frontPage = outDoc.addPage([bSheetW, bSheetH]);
+                placeCell(frontPage, embeddedPages[frontLeftIdx] || null, 0, 0, bSheetW / 2, bSheetH);
+                placeCell(frontPage, embeddedPages[frontRightIdx] || null, bSheetW / 2, 0, bSheetW / 2, bSheetH);
+                if (drawFold) {
+                    frontPage.drawLine({ start: { x: bSheetW / 2, y: 10 }, end: { x: bSheetW / 2, y: bSheetH - 10 }, thickness: 0.5, color: PDFLib.rgb(0.78, 0.8, 0.84) });
+                }
+
+                // Back side of sheet: Left = 2*s + 1, Right = paddedTotal - 2 - 2*s
+                var backLeftIdx  = 2 * s + 1;
+                var backRightIdx = paddedTotal - 2 - (2 * s);
+                var backPage = outDoc.addPage([bSheetW, bSheetH]);
+                placeCell(backPage, embeddedPages[backLeftIdx] || null, 0, 0, bSheetW / 2, bSheetH);
+                placeCell(backPage, embeddedPages[backRightIdx] || null, bSheetW / 2, 0, bSheetW / 2, bSheetH);
+                if (drawFold) {
+                    backPage.drawLine({ start: { x: bSheetW / 2, y: 10 }, end: { x: bSheetW / 2, y: bSheetH - 10 }, thickness: 0.5, color: PDFLib.rgb(0.78, 0.8, 0.84) });
+                }
+            }
+        }
+
+        var outBytes = await outDoc.save();
+        var suffix = mode === 'booklet' ? '_Broschuere.pdf' : ('_' + mode + '.pdf');
+        var newName = doc.name.replace(/\.pdf$/i, '') + suffix;
+        closeModal('modalNupBooklet');
+        await addDocumentTab(newName, outBytes, 'editor');
+        trackUsageEvent('nup_booklet_created');
+        showToast('Mehrseiten-Layout "' + newName + '" als neuer Tab geöffnet!', 'success');
+    }
+
+    // =========================================================================
+    // v1.4.0 FEATURE 7: Formulardaten-Export & Serienbrief-Befüllung (CSV/Excel)
+    // =========================================================================
+    var currentDetectedFormFields = [];
+
+    async function openMailMergeModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Formular oder Dokument.', 'error');
+            return;
+        }
+        openModal('modalMailMerge');
+        await inspectActivePdfFormFields();
+    }
+
+    async function inspectActivePdfFormFields() {
+        var doc = getActiveDoc();
+        var boxEl = document.getElementById('mmDetectedFieldsBox');
+        if (!doc || !boxEl) return;
+
+        currentDetectedFormFields = [];
+        var seenNames = {};
+
+        // 1. Check studio annotations first
+        Object.keys(doc.annotations || {}).forEach(function (pIdx) {
+            var list = doc.annotations[pIdx] || [];
+            list.forEach(function (ann) {
+                if (ann.type === 'form-text' || ann.type === 'form-check' || ann.type === 'form-select') {
+                    var fname = ann.fieldName || ('Feld_' + (currentDetectedFormFields.length + 1));
+                    if (!seenNames[fname]) {
+                        seenNames[fname] = true;
+                        currentDetectedFormFields.push({
+                            name: fname,
+                            type: ann.type,
+                            value: ann.type === 'form-check' ? (ann.checked ? 'Ja' : 'Nein') : (ann.value || '')
+                        });
+                    }
+                }
+            });
+        });
+
+        // 2. Check native AcroForm fields in PDF
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+            var form = pdfDoc.getForm();
+            var fields = form.getFields();
+            fields.forEach(function (f) {
+                var fname = f.getName();
+                if (seenNames[fname]) return;
+                seenNames[fname] = true;
+                var val = '';
+                var fType = f.constructor ? f.constructor.name : 'Field';
+                try {
+                    if (typeof f.getText === 'function') val = f.getText() || '';
+                    else if (typeof f.isChecked === 'function') val = f.isChecked() ? 'Ja' : 'Nein';
+                    else if (typeof f.getSelected === 'function') val = (f.getSelected() || []).join(', ');
+                } catch (e2) {}
+                currentDetectedFormFields.push({
+                    name: fname,
+                    type: fType,
+                    value: val
+                });
+            });
+        } catch (err) {}
+
+        if (currentDetectedFormFields.length === 0) {
+            boxEl.innerHTML = '<span style="color:var(--text-muted);">Keine interaktiven Formularfelder im geöffneten PDF gefunden. Tipp: Sie können im Reiter „📋 Formulare &amp; Links“ Textfelder, Checkboxen oder Dropdowns anlegen.</span>';
+            return;
+        }
+
+        var html = '<div style="margin-bottom:4px;"><strong>Erkannte Formularfelder (' + currentDetectedFormFields.length + '):</strong></div>';
+        currentDetectedFormFields.forEach(function (ff) {
+            html += '<div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--border-subtle);padding:2px 0;">' +
+                '<code>' + escapeHtml(ff.name) + '</code>' +
+                '<span style="color:var(--text-secondary);">' + escapeHtml(ff.value || '—') + '</span>' +
+                '</div>';
+        });
+        boxEl.innerHTML = html;
+    }
+
+    function exportActiveFormFieldsCsv(blankTemplate) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        if (currentDetectedFormFields.length === 0) {
+            showToast('Dieses PDF enthält noch keine Formularfelder.', 'error');
+            return;
+        }
+        var headers = currentDetectedFormFields.map(function (f) {
+            return '"' + String(f.name).replace(/"/g, '""') + '"';
+        });
+        var values = currentDetectedFormFields.map(function (f) {
+            var v = blankTemplate ? '' : String(f.value || '');
+            return '"' + v.replace(/"/g, '""') + '"';
+        });
+        var csvContent = '\uFEFF' + headers.join(';') + '\r\n' + values.join(';') + '\r\n';
+        var outName = doc.name.replace(/\.pdf$/i, '') + (blankTemplate ? '_Serienbrief_Vorlage.csv' : '_Formulardaten.csv');
+        downloadBlob(csvContent, outName, 'text/csv;charset=utf-8');
+        trackUsageEvent('form_mailmerge_used');
+        showToast('CSV-Datei "' + outName + '" heruntergeladen!', 'success');
+    }
+
+    function exportActiveFormFieldsJson() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        if (currentDetectedFormFields.length === 0) {
+            showToast('Dieses PDF enthält noch keine Formularfelder.', 'error');
+            return;
+        }
+        var obj = {};
+        currentDetectedFormFields.forEach(function (f) { obj[f.name] = f.value; });
+        var outName = doc.name.replace(/\.pdf$/i, '') + '_Formulardaten.json';
+        downloadBlob(JSON.stringify(obj, null, 2), outName, 'application/json;charset=utf-8');
+        trackUsageEvent('form_mailmerge_used');
+        showToast('JSON-Formulardaten heruntergeladen!', 'success');
+    }
+
+    function parseCsvTextToObjects(csvText) {
+        var lines = String(csvText || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter(function (l) { return l.trim() !== ''; });
+        if (lines.length < 2) return [];
+        var sep = lines[0].indexOf(';') !== -1 ? ';' : ',';
+        function splitCsvRow(rowStr) {
+            var res = [], cur = '', inQ = false;
+            for (var i = 0; i < rowStr.length; i++) {
+                var ch = rowStr[i];
+                if (ch === '"') {
+                    if (inQ && rowStr[i + 1] === '"') { cur += '"'; i++; }
+                    else inQ = !inQ;
+                } else if (ch === sep && !inQ) {
+                    res.push(cur.trim());
+                    cur = '';
+                } else {
+                    cur += ch;
+                }
+            }
+            res.push(cur.trim());
+            return res;
+        }
+        var headers = splitCsvRow(lines[0]);
+        var rows = [];
+        for (var r = 1; r < lines.length; r++) {
+            var cols = splitCsvRow(lines[r]);
+            var rowObj = {};
+            headers.forEach(function (h, idx) {
+                if (h) rowObj[h] = cols[idx] !== undefined ? cols[idx] : '';
+            });
+            rows.push(rowObj);
+        }
+        return rows;
+    }
+
+    async function runMailMergeFromUploadedTable() {
+        var doc = getActiveDoc();
+        var fileInp = document.getElementById('mmCsvFileInput');
+        var statusEl = document.getElementById('mmStatusBox');
+        if (!doc || !fileInp || !fileInp.files || fileInp.files.length === 0) {
+            showToast('Bitte wählen Sie zuerst eine CSV- oder Excel-Datei (.csv / .xlsx) aus.', 'error');
+            return;
+        }
+
+        await bakeAnnotationsIntoDocument(doc);
+        var file = fileInp.files[0];
+        var rows = [];
+        try {
+            if (/\.xlsx?$/i.test(file.name) && typeof XLSX !== 'undefined') {
+                var ab = await file.arrayBuffer();
+                var wb = XLSX.read(ab, { type: 'array' });
+                var firstSheet = wb.Sheets[wb.SheetNames[0]];
+                rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+            } else {
+                var txt = await file.text();
+                rows = parseCsvTextToObjects(txt);
+            }
+        } catch (err) {
+            showToast('Tabellendatei konnte nicht gelesen werden: ' + (err.message || err), 'error');
+            return;
+        }
+
+        if (!rows || rows.length === 0) {
+            showToast('Die gewählte Tabelle enthält keine Datenzeilen.', 'error');
+            return;
+        }
+
+        var flattenOut = document.getElementById('mmFlattenFilledPdfs') && document.getElementById('mmFlattenFilledPdfs').checked;
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.background = 'rgba(59,130,246,0.14)';
+            statusEl.style.color = '#93c5fd';
+            statusEl.textContent = '⏳ Erzeuge ' + rows.length + ' Serienbrief-PDF(s)…';
+        }
+
+        var zip = new JSZip();
+        var baseName = doc.name.replace(/\.pdf$/i, '');
+
+        for (var rIdx = 0; rIdx < rows.length; rIdx++) {
+            var rowData = rows[rIdx];
+            var pdfCopy = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+            try {
+                var form = pdfCopy.getForm();
+                var fields = form.getFields();
+                fields.forEach(function (f) {
+                    var fname = f.getName();
+                    var matchedKey = Object.keys(rowData).find(function (k) {
+                        return k.trim().toLowerCase() === fname.trim().toLowerCase();
+                    });
+                    if (matchedKey !== undefined) {
+                        var val = String(rowData[matchedKey] !== undefined ? rowData[matchedKey] : '');
+                        try {
+                            if (typeof f.setText === 'function') {
+                                f.setText(val);
+                            } else if (typeof f.check === 'function') {
+                                if (/^(1|true|ja|yes|x|on)$/i.test(val.trim())) f.check();
+                                else if (typeof f.uncheck === 'function') f.uncheck();
+                            } else if (typeof f.select === 'function' && val) {
+                                f.select(val);
+                            }
+                        } catch (e3) {}
+                    }
+                });
+                if (flattenOut) {
+                    form.flatten();
+                }
+            } catch (eForm) {}
+
+            var pdfBytes = await pdfCopy.save();
+            var suffix = String(rIdx + 1).padStart(3, '0');
+            zip.file(baseName + '_' + suffix + '.pdf', pdfBytes);
+        }
+
+        var zipBlob = await zip.generateAsync({ type: 'blob' });
+        var zipUrl = URL.createObjectURL(zipBlob);
+        var a = document.createElement('a');
+        a.href = zipUrl;
+        a.download = baseName + '_Serienbrief_' + rows.length + '_PDFs.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(zipUrl); }, 3000);
+
+        if (statusEl) {
+            statusEl.style.background = 'rgba(16,185,129,0.14)';
+            statusEl.style.color = '#6ee7b7';
+            statusEl.textContent = '✔ ' + rows.length + ' ausgefüllte PDF-Dateien erfolgreich als ZIP heruntergeladen!';
+        }
+        trackUsageEvent('form_mailmerge_used');
+        showToast(rows.length + ' Serienbrief-PDFs erfolgreich als ZIP erstellt!', 'success');
+    }
+
+    // =========================================================================
     // Event Listeners Setup
     // =========================================================================
     function initEventListeners() {
@@ -8466,6 +9516,96 @@
                     btnSubmitUserPwChange.disabled = false;
                 }
             });
+        }
+
+        // v1.4.0: Auto-Redact, Attachments, Bookmarks/TOC, Sanitize Meta, N-up/Booklet & Mail Merge Listeners
+        var btnScanAutoRedact = document.getElementById('btnScanAutoRedact');
+        if (btnScanAutoRedact) {
+            btnScanAutoRedact.addEventListener('click', scanPdfForAutoRedactPatterns);
+        }
+        var arSelectAllToggle = document.getElementById('arSelectAllToggle');
+        if (arSelectAllToggle) {
+            arSelectAllToggle.addEventListener('change', function () {
+                autoRedactMatchesCache.forEach(function (m) { m.selected = arSelectAllToggle.checked; });
+                renderAutoRedactMatchesList();
+            });
+        }
+        var btnApplyAutoRedactBoxes = document.getElementById('btnApplyAutoRedactBoxes');
+        if (btnApplyAutoRedactBoxes) {
+            btnApplyAutoRedactBoxes.addEventListener('click', function () { applySelectedAutoRedactMatches(false); });
+        }
+        var btnApplyAndSanitizeAutoRedact = document.getElementById('btnApplyAndSanitizeAutoRedact');
+        if (btnApplyAndSanitizeAutoRedact) {
+            btnApplyAndSanitizeAutoRedact.addEventListener('click', function () { applySelectedAutoRedactMatches(true); });
+        }
+
+        var btnAddAttachmentFiles = document.getElementById('btnAddAttachmentFiles');
+        var hiddenAttachmentInput = document.getElementById('hiddenAttachmentInput');
+        if (btnAddAttachmentFiles && hiddenAttachmentInput) {
+            btnAddAttachmentFiles.addEventListener('click', function () {
+                hiddenAttachmentInput.value = '';
+                hiddenAttachmentInput.click();
+            });
+            hiddenAttachmentInput.addEventListener('change', async function (e) {
+                if (e.target.files && e.target.files.length > 0) {
+                    await embedFilesIntoActivePdf(e.target.files);
+                }
+            });
+        }
+
+        var btnAutoDetectBookmarks = document.getElementById('btnAutoDetectBookmarks');
+        if (btnAutoDetectBookmarks) {
+            btnAutoDetectBookmarks.addEventListener('click', function () { autoDetectBookmarksFromPdf(false); });
+        }
+        var btnAddBookmarkRow = document.getElementById('btnAddBookmarkRow');
+        if (btnAddBookmarkRow) {
+            btnAddBookmarkRow.addEventListener('click', function () {
+                var doc = getActiveDoc();
+                workingBookmarksList.push({
+                    title: 'Neues Kapitel ' + (workingBookmarksList.length + 1),
+                    page: doc ? (doc.currentPage + 1) : 1,
+                    level: 1
+                });
+                renderBookmarksEditorUI();
+            });
+        }
+        var btnClearBookmarks = document.getElementById('btnClearBookmarks');
+        if (btnClearBookmarks) {
+            btnClearBookmarks.addEventListener('click', function () {
+                workingBookmarksList = [];
+                renderBookmarksEditorUI();
+            });
+        }
+        var btnSaveBookmarksAndToc = document.getElementById('btnSaveBookmarksAndToc');
+        if (btnSaveBookmarksAndToc) {
+            btnSaveBookmarksAndToc.addEventListener('click', saveBookmarksAndTocToActivePdf);
+        }
+
+        var btnRunSanitizeMeta = document.getElementById('btnRunSanitizeMeta');
+        if (btnRunSanitizeMeta) {
+            btnRunSanitizeMeta.addEventListener('click', runSanitizeMetadataAndTraces);
+        }
+
+        var btnRunNupBooklet = document.getElementById('btnRunNupBooklet');
+        if (btnRunNupBooklet) {
+            btnRunNupBooklet.addEventListener('click', runNupOrBookletLayout);
+        }
+
+        var btnExportFormCsv = document.getElementById('btnExportFormCsv');
+        if (btnExportFormCsv) {
+            btnExportFormCsv.addEventListener('click', function () { exportActiveFormFieldsCsv(false); });
+        }
+        var btnExportFormJson = document.getElementById('btnExportFormJson');
+        if (btnExportFormJson) {
+            btnExportFormJson.addEventListener('click', exportActiveFormFieldsJson);
+        }
+        var btnDownloadCsvTemplate = document.getElementById('btnDownloadCsvTemplate');
+        if (btnDownloadCsvTemplate) {
+            btnDownloadCsvTemplate.addEventListener('click', function () { exportActiveFormFieldsCsv(true); });
+        }
+        var btnRunMailMerge = document.getElementById('btnRunMailMerge');
+        if (btnRunMailMerge) {
+            btnRunMailMerge.addEventListener('click', runMailMergeFromUploadedTable);
         }
 
         // Keyboard shortcuts (Desktop feel)

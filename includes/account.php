@@ -1109,6 +1109,12 @@ function pdfstudio_get_stat_event_labels()
         'batch_processed'     => 'Stapelverarbeitung (Batch-Modus) ausgefuehrt',
         'zugferd_used'        => 'E-Rechnung (ZUGFeRD / XRechnung) geprueft/eingebettet',
         'qrcode_inserted'     => 'QR-Code auf PDF-Seite generiert',
+        'auto_redact_pattern' => 'Intelligente Mustersuche & Auto-Schwaerzung (DSGVO)',
+        'attachments_managed' => 'PDF-Anlagen / Eingebettete Dateien verwaltet',
+        'bookmarks_toc_used'  => 'Lesezeichen-Editor & Inhaltsverzeichnis erzeugt',
+        'metadata_sanitized'  => 'Forensik- & Metadaten-Bereinigung (Sanitize PDF)',
+        'nup_booklet_created' => 'Mehrseiten-Layout (N-up / Broschuerendruck) erstellt',
+        'form_mailmerge_used' => 'Formulardaten-Export & Serienbrief-Befuellung',
         'converter_used'      => 'Konverter genutzt (Bilder/Office/Text -> PDF)'
     );
 }

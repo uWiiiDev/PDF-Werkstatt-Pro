@@ -195,6 +195,14 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🧾</span>
                         <span class="rb-label">E-Rechnung</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-attachments-modal" title="Eingebettete Dateianlagen (PDF-Portfolio) anzeigen, herunterladen oder beliebige Dateien ins PDF einbetten">
+                        <span class="rb-icon">📎</span>
+                        <span class="rb-label">Anlagen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-bookmarks-modal" title="Lesezeichen (Outlines) bearbeiten und automatisches Inhaltsverzeichnis-Deckblatt erzeugen">
+                        <span class="rb-icon">🔖</span>
+                        <span class="rb-label">Lesezeichen</span>
+                    </button>
                 </div>
                 <div class="ribbon-section-title">Direktwerkzeuge</div>
             </div>
@@ -267,6 +275,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn tool-btn" data-tool="redact">
                         <span class="rb-icon">⬛</span>
                         <span class="rb-label">Schwärzen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-autoredact-modal" title="Intelligente Mustersuche &amp; Auto-Schwärzung (IBAN, E-Mail, Telefon, Datum, Namen)">
+                        <span class="rb-icon">🔍⬛</span>
+                        <span class="rb-label">Auto-Schwärzen</span>
                     </button>
                     <button type="button" class="ribbon-btn" data-cmd="sanitize-redactions" title="Geschwärzte Seiten physisch flachrechnen (Text darunter unwiderruflich entfernen)">
                         <span class="rb-icon">🛡️</span>
@@ -361,6 +373,10 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">📐</span>
                         <span class="rb-label">Zuschneiden</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-nup-modal" title="Mehrseiten-Drucklayout (2-auf-1, 4-auf-1) oder Faltbroschüre erzeugen">
+                        <span class="rb-icon">📖</span>
+                        <span class="rb-label">Broschüre / N-up</span>
+                    </button>
                 </div>
                 <div class="ribbon-section-title">Geometrie &amp; Zuschnitt</div>
             </div>
@@ -384,6 +400,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn" data-cmd="delete-page">
                         <span class="rb-icon">🗑️</span>
                         <span class="rb-label">Löschen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-bookmarks-modal" title="Lesezeichen (Outlines) bearbeiten und automatisches Inhaltsverzeichnis als erste Seite einfügen">
+                        <span class="rb-icon">🔖</span>
+                        <span class="rb-label">Lesezeichen / IHV</span>
                     </button>
                 </div>
                 <div class="ribbon-section-title">Seitenverwaltung</div>
@@ -409,6 +429,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn" data-cmd="flatten-form" title="Alle Formularfelder dauerhaft in festen Text umwandeln">
                         <span class="rb-icon">🔒</span>
                         <span class="rb-label">Sperren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-mailmerge-modal" title="Formulardaten nach CSV/JSON exportieren oder PDF-Formular per CSV-Tabelle als Serienbrief befüllen">
+                        <span class="rb-icon">📊</span>
+                        <span class="rb-label">Serienbrief / CSV</span>
                     </button>
                 </div>
                 <div class="ribbon-section-title">Interaktive PDF-Formulare (AcroForms)</div>
@@ -442,8 +466,12 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🧾</span>
                         <span class="rb-label">E-Rechnung</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-attachments-modal" title="Eingebettete Dateianlagen (PDF-Portfolio) verwalten oder Dateien ins PDF einbetten">
+                        <span class="rb-icon">📎</span>
+                        <span class="rb-label">Anlagen</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Vergleich &amp; E-Rechnung</div>
+                <div class="ribbon-section-title">Vergleich, Anlagen &amp; E-Rechnung</div>
             </div>
         </div>
 
@@ -454,6 +482,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn" data-cmd="open-crop-modal">
                         <span class="rb-icon">📐</span>
                         <span class="rb-label">Zuschneiden</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-nup-modal" title="2 oder 4 Seiten auf ein Blatt setzen oder Faltbroschüre erstellen">
+                        <span class="rb-icon">📖</span>
+                        <span class="rb-label">Broschüre / N-up</span>
                     </button>
                     <button type="button" class="ribbon-btn" data-cmd="open-bates-modal">
                         <span class="rb-icon">📑</span>
@@ -479,9 +511,17 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">📉</span>
                         <span class="rb-label">PDF komprimieren</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-autoredact-modal" title="Intelligente Mustersuche &amp; Auto-Schwärzung (IBAN, E-Mail, Telefon, Datum, Namen)">
+                        <span class="rb-icon">🔍⬛</span>
+                        <span class="rb-label">Auto-Schwärzen</span>
+                    </button>
                     <button type="button" class="ribbon-btn" data-cmd="sanitize-redactions">
                         <span class="rb-icon">🛡️</span>
                         <span class="rb-label">Sicher schwärzen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-sanitize-meta-modal" title="Metadaten- &amp; Forensik-Bereinigung: Versteckte Autoren, Zeitstempel, Skripte und Historien mit 1 Klick löschen">
+                        <span class="rb-icon">🧹</span>
+                        <span class="rb-label">Spuren löschen</span>
                     </button>
                     <button type="button" class="ribbon-btn" data-cmd="open-compress-modal" title="PDF-Metadaten (Titel, Autor, Betreff) bearbeiten">
                         <span class="rb-icon">🏷️</span>
@@ -1827,6 +1867,304 @@ $serverInfo = pdfstudio_get_server_info();
                     💾 Passwort speichern
                 </button>
             <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 1: INTELLIGENTE MUSTERSUCHE & AUTO-SCHWÄRZUNG (DSGVO)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalAutoRedact">
+    <div class="modal-window" style="max-width:720px;">
+        <div class="modal-header">
+            <span>🔍⬛ Intelligente Mustersuche &amp; Auto-Schwärzung (DSGVO / Akten)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalAutoRedact">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:74vh;overflow-y:auto;">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.45;">
+                Durchsucht das geöffnete PDF automatisch nach sensiblen personenbezogenen Daten oder eigenen Suchbegriffen, zeigt alle Fundstellen mit Seitenzahl an und versieht sie auf Knopfdruck mit Schwärzungsbalken.
+            </p>
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-bottom:12px;">
+                <div style="font-size:12.5px;font-weight:700;margin-bottom:8px;">1. Zu suchende Muster auswählen:</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;font-size:12px;">
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="arPatIban" checked> 💳 IBAN / Bankverbindungen
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="arPatEmail" checked> 📧 E-Mail-Adressen
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="arPatPhone" checked> 📞 Telefon- &amp; Mobilnummern
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="arPatDate" checked> 📅 Geburtsdaten / Datumsangaben
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="arPatTaxId"> 🏛️ Steuer-ID / Aktenzeichen / PLZ
+                    </label>
+                </div>
+                <div class="form-row" style="margin-top:10px;margin-bottom:8px;">
+                    <label for="arCustomTerms">Zusätzliche Namen / Begriffe / Kennzeichen (kommagetrennt, optional):</label>
+                    <input type="text" id="arCustomTerms" class="form-control" placeholder="z. B. Max Mustermann, Musterstraße 12, B-MW 1234">
+                </div>
+                <button type="button" class="tool-btn btn-primary" id="btnScanAutoRedact">
+                    🔍 Gesamtes PDF jetzt nach Fundstellen durchsuchen
+                </button>
+            </div>
+
+            <div id="arResultsContainer" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <strong id="arResultsTitle" style="font-size:12.5px;">Gefundene Treffer (0)</strong>
+                    <label style="font-size:11.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
+                        <input type="checkbox" id="arSelectAllToggle" checked> Alle auswählen
+                    </label>
+                </div>
+                <div id="arMatchesList" style="max-height:220px;overflow-y:auto;font-size:12px;display:flex;flex-direction:column;gap:4px;">
+                    <div style="color:var(--text-muted);padding:8px 0;">Klicken Sie oben auf „Gesamtes PDF jetzt nach Fundstellen durchsuchen“.</div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
+            <button type="button" class="tool-btn" data-close-modal="modalAutoRedact">Schließen</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn btn-primary" id="btnApplyAutoRedactBoxes">
+                    ⬛ Ausgewählte Treffer schwärzen (Vorschau)
+                </button>
+                <button type="button" class="tool-btn btn-danger" id="btnApplyAndSanitizeAutoRedact" title="Schwärzungsbalken setzen und betroffene Seiten sofort physisch flachrechnen (unwiderruflich)">
+                    🛡️ Schwärzen &amp; sofort physisch brennen (Sanitize)
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 3: PDF-ANLAGEN / EINGEBETTETE DATEIEN VERWALTEN (PORTFOLIO)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalAttachments">
+    <div class="modal-window" style="max-width:660px;">
+        <div class="modal-header">
+            <span>📎 PDF-Anlagen / Eingebettete Dateien verwalten</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalAttachments">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:74vh;overflow-y:auto;">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.45;">
+                Zeigt alle im PDF eingebetteten Dateianhänge (z. B. Excel-Tabellen, Word-Dokumente, Bilder, Nachweise, XML) an und erlaubt das Hinzufügen beliebiger Begleitdateien direkt in den PDF-Container.
+            </p>
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+                    <strong style="font-size:12.5px;">Vorhandene Dateianlagen im PDF</strong>
+                    <button type="button" class="tool-btn btn-primary" id="btnAddAttachmentFiles">
+                        ➕ Datei(en) in dieses PDF einbetten…
+                    </button>
+                    <input type="file" id="hiddenAttachmentInput" multiple class="hidden">
+                </div>
+                <div id="pdfAttachmentsList" style="display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;font-size:12.5px;">
+                    <div style="color:var(--text-muted);padding:8px 0;">Prüfe PDF auf eingebettete Anlagen…</div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalAttachments">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 4: LESEZEICHEN- & INHALTSVERZEICHNIS-EDITOR (OUTLINES + DECKBLATT)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalBookmarks">
+    <div class="modal-window" style="max-width:720px;">
+        <div class="modal-header">
+            <span>🔖 Lesezeichen-Editor &amp; automatisches Inhaltsverzeichnis</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalBookmarks">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:74vh;overflow-y:auto;">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.45;">
+                Verwalten Sie die interaktiven PDF-Lesezeichen (<code>/Outlines</code>) für schnelle Navigation und Barrierefreiheit (Pflicht ab 21 Seiten) oder fügen Sie auf Knopfdruck ein formatiertes <strong>Inhaltsverzeichnis-Deckblatt</strong> als Seite 1 ein.
+            </p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                <button type="button" class="tool-btn" id="btnAutoDetectBookmarks" title="Erkennt Überschriften und Kapitel automatisch anhand der Schriftgrößen im Dokument">
+                    🪄 Überschriften automatisch aus PDF erkennen
+                </button>
+                <button type="button" class="tool-btn" id="btnAddBookmarkRow">
+                    ➕ Lesezeichen hinzufügen
+                </button>
+                <button type="button" class="tool-btn" id="btnClearBookmarks" style="margin-left:auto;">
+                    🗑 Alle leeren
+                </button>
+            </div>
+
+            <div id="bookmarksEditorList" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px;margin-bottom:12px;">
+            </div>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+                <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;cursor:pointer;">
+                    <input type="checkbox" id="bmInsertTocPage">
+                    <span>📄 Zusätzlich ein sichtbares, klickbares <strong>Inhaltsverzeichnis-Deckblatt</strong> als erste Seite ins PDF einfügen</span>
+                </label>
+                <div class="form-row" style="margin-top:8px;margin-bottom:0;">
+                    <label for="bmTocTitleInput">Überschrift des Inhaltsverzeichnisses:</label>
+                    <input type="text" id="bmTocTitleInput" class="form-control" value="Inhaltsverzeichnis" placeholder="Inhaltsverzeichnis">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
+            <button type="button" class="tool-btn" data-close-modal="modalBookmarks">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnSaveBookmarksAndToc">
+                🔖 Lesezeichen (&amp; optionales Inhaltsverzeichnis) ins PDF übernehmen
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 5: METADATEN- & FORENSIK-BEREINIGUNG (SANITIZE PDF)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalSanitizeMeta">
+    <div class="modal-window" style="max-width:600px;">
+        <div class="modal-header">
+            <span>🧹 Metadaten- &amp; Forensik-Bereinigung („Sanitize PDF“)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalSanitizeMeta">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.45;">
+                Entfernt vor der Weitergabe oder Veröffentlichung sämtliche unsichtbaren Datenspuren, Bearbeitungshistorien, Autorennamen und aktive Skripte aus dem PDF.
+            </p>
+            <div id="sanitizeForensicReport" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;line-height:1.6;">
+                Prüfe Dokument auf Metadaten und versteckte Spuren…
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="sanOptInfoXmp" checked>
+                    <span><strong>Autoren-, Programm- &amp; Zeitstempel-Metadaten löschen</strong> (Author, Creator, Producer, CreationDate, ModDate, XMP-Historie)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="sanOptScripts" checked>
+                    <span><strong>Eingebettetes JavaScript &amp; automatische OpenActions entfernen</strong> (Schutz vor aktiven Inhalten)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="sanOptAttachments">
+                    <span><strong>Eingebettete Dateianhänge (`/EmbeddedFiles`) entfernen</strong></span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="sanOptAnnotations">
+                    <span><strong>Alle Kommentare, Notizen &amp; Formularfelder flachrechnen</strong></span>
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalSanitizeMeta">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnRunSanitizeMeta">
+                🧹 PDF jetzt vollständig bereinigen
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 6: MEHRSEITEN-DRUCKLAYOUT (N-UP: 2-AUF-1, 4-AUF-1 & BROSCHÜRE)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalNupBooklet">
+    <div class="modal-window" style="max-width:560px;">
+        <div class="modal-header">
+            <span>📖 Mehrseiten-Layout (N-up) &amp; Broschürendruck</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalNupBooklet">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.45;">
+                Platziert mehrere PDF-Seiten platzsparend auf einem A4-Blatt (Handout) oder ordnet die Seiten automatisch für ein gefaltetes A5-Broschürenheft (Duplex-Druck) an.
+            </p>
+            <div class="form-row">
+                <label for="nupLayoutMode">Layout-Modus wählen:</label>
+                <select id="nupLayoutMode" class="form-control">
+                    <option value="2up">2 Seiten auf 1 Blatt (A4 Querformat — nebeneinander)</option>
+                    <option value="4up">4 Seiten auf 1 Blatt (A4 Hochformat — 2×2 Raster)</option>
+                    <option value="booklet">Falt-Broschüre / Heftdruck (automatische Bogen-Ausschießung für A4-Duplexdruck)</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label for="nupPageMargin">Abstand / Rand zwischen den Seiten (Punkte):</label>
+                <input type="number" id="nupPageMargin" class="form-control" value="18" min="0" max="60">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px;margin-top:8px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="nupDrawBorder" checked>
+                    <span>Feinen Rahmen um jede platzierte Einzel-Seite zeichnen</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="nupDrawFoldLine" checked>
+                    <span>Falt- bzw. Trennlinie in der Blattmitte einzeichnen</span>
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalNupBooklet">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnRunNupBooklet">
+                📖 Neues Layout-PDF erzeugen
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 7: FORMULARDATEN-EXPORT & SERIENBRIEF-BEFÜLLUNG (CSV / EXCEL ↔ PDF)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalMailMerge">
+    <div class="modal-window" style="max-width:700px;">
+        <div class="modal-header">
+            <span>📊 Formulardaten-Export &amp; Serienbrief-Befüllung (CSV / Excel ↔ PDF)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalMailMerge">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:74vh;overflow-y:auto;">
+            <!-- Section A: Export Form Fields -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
+                <div style="font-size:13px;font-weight:700;margin-bottom:6px;color:var(--accent-primary);">
+                    1. Ausgefüllte PDF-Formularfelder auslesen &amp; exportieren
+                </div>
+                <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">
+                    Erkennt alle AcroForm- und Studio-Formularfelder im aktuellen PDF. Sie können die aktuellen Feldwerte als Excel-kompatible CSV- oder JSON-Datei herunterladen.
+                </p>
+                <div id="mmDetectedFieldsBox" style="font-size:12px;padding:8px 10px;background:var(--bg-app);border:1px solid var(--border-subtle);border-radius:6px;margin-bottom:10px;max-height:130px;overflow-y:auto;">
+                    Prüfe Formularfelder im geöffneten PDF…
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="tool-btn btn-primary" id="btnExportFormCsv">
+                        📥 Feldwerte als CSV (Excel) exportieren
+                    </button>
+                    <button type="button" class="tool-btn" id="btnExportFormJson">
+                        📥 Feldwerte als JSON exportieren
+                    </button>
+                    <button type="button" class="tool-btn" id="btnDownloadCsvTemplate" title="Erzeugt eine passende CSV-Vorlage mit den Feldnamen dieses PDFs als Spaltenüberschriften">
+                        📋 Leere CSV-Vorlage für Serienbrief herunterladen
+                    </button>
+                </div>
+            </div>
+
+            <!-- Section B: Mail Merge from CSV / XLSX -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
+                <div style="font-size:13px;font-weight:700;margin-bottom:6px;color:#10b981;">
+                    2. Serienbrief-Befüllung: PDF-Vorlage automatisch aus CSV- / Excel-Tabelle befüllen
+                </div>
+                <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">
+                    Laden Sie eine <code>.csv</code>- oder <code>.xlsx</code>-Tabelle hoch, deren Spaltenüberschriften den Formularfeldnamen im PDF entsprechen. Für jede Tabellenzeile wird automatisch ein ausgefülltes PDF erzeugt und als <code>.zip</code>-Archiv bereitgestellt.
+                </p>
+                <div class="form-row">
+                    <label for="mmCsvFileInput">CSV- oder Excel-Datei (<code>.csv</code>, <code>.xlsx</code>) auswählen:</label>
+                    <input type="file" id="mmCsvFileInput" accept=".csv,.xlsx,.xls,text/csv" class="form-control">
+                </div>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:10px;">
+                    <input type="checkbox" id="mmFlattenFilledPdfs">
+                    <span>Erzeugte Serienbrief-PDFs direkt schreibschützen / Formularfelder flachrechnen</span>
+                </label>
+                <div id="mmStatusBox" style="display:none;padding:8px 10px;border-radius:6px;font-size:12px;margin-bottom:10px;"></div>
+                <button type="button" class="tool-btn btn-primary" id="btnRunMailMerge">
+                    🗂️ Serienbrief starten &amp; ausgefüllte PDFs als ZIP herunterladen
+                </button>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalMailMerge">Schließen</button>
         </div>
     </div>
 </div>
