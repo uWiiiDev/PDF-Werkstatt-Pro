@@ -4426,54 +4426,60 @@
      * 3. Builds complete /StructTreeRoot with /ParentTree Number-Tree, /ParentTreeNextKey, <Link>/<Form> /OBJR & page /StructParents
      * 4. Embeds TrueType Font (/FontFile2 LiberationSans + /Widths + /ToUnicode incl. /Differences) into all unembedded fonts
      */
-    async function remediatePdfAccessibility() {
-        var doc = getActiveDoc();
-        if (!doc) return;
-        await bakeAnnotationsIntoDocument(doc);
+    async function remediatePdfAccessibility(customDoc, silentBatchMode) {
+        var doc = customDoc || getActiveDoc();
+        if (!doc) return null;
+        if (!silentBatchMode) {
+            await bakeAnnotationsIntoDocument(doc);
+        }
 
         // Check if the document is a pure image scan without extractable text (0 characters)
         // If so, automatically run offline Sandwich-OCR (Tesseract) before PDF/UA tagging!
-        try {
-            var preCheckJsDoc = await loadPdfJsDocument(doc.bytes);
-            var preScanPages = Math.min(preCheckJsDoc.numPages, 15);
-            var existingTextChars = 0;
-            for (var sp = 1; sp <= preScanPages; sp++) {
-                var spPage = await preCheckJsDoc.getPage(sp);
-                var spTc = await spPage.getTextContent();
-                var spTxt = spTc.items.map(function (it) { return it.str; }).join('').trim();
-                existingTextChars += spTxt.length;
-                if (existingTextChars > 0) break;
-            }
-            if (existingTextChars === 0 && window.Tesseract) {
-                var progBox = document.getElementById('a11yAuditProgressBox');
-                var progLabel = document.getElementById('a11yAuditStepLabel');
-                var progPct = document.getElementById('a11yAuditStepPercent');
-                var progFill = document.getElementById('a11yAuditProgressFill');
-                if (progBox) {
-                    progBox.style.display = 'block';
-                    if (progFill) progFill.style.width = '25%';
-                    if (progPct) progPct.textContent = 'OCR…';
-                    if (progLabel) {
-                        progLabel.textContent = '🔎 Reiner Bild-Scan erkannt — führe automatisch Offline-OCR (Texterkennung) für alle Seiten durch…';
-                    }
+        if (!silentBatchMode) {
+            try {
+                var preCheckJsDoc = await loadPdfJsDocument(doc.bytes);
+                var preScanPages = Math.min(preCheckJsDoc.numPages, 15);
+                var existingTextChars = 0;
+                for (var sp = 1; sp <= preScanPages; sp++) {
+                    var spPage = await preCheckJsDoc.getPage(sp);
+                    var spTc = await spPage.getTextContent();
+                    var spTxt = spTc.items.map(function (it) { return it.str; }).join('').trim();
+                    existingTextChars += spTxt.length;
+                    if (existingTextChars > 0) break;
                 }
-                showToast('Reiner Bild-Scan erkannt: Starte automatische Offline-Texterkennung (Sandwich-OCR)…', 'info');
-                var scopeEl = document.getElementById('ocrScope');
-                var prevScope = scopeEl ? scopeEl.value : 'all';
-                if (scopeEl) scopeEl.value = 'all';
-                await convertToSearchableSandwichPdf();
-                if (scopeEl) scopeEl.value = prevScope;
+                if (existingTextChars === 0 && window.Tesseract) {
+                    var progBox = document.getElementById('a11yAuditProgressBox');
+                    var progLabel = document.getElementById('a11yAuditStepLabel');
+                    var progPct = document.getElementById('a11yAuditStepPercent');
+                    var progFill = document.getElementById('a11yAuditProgressFill');
+                    if (progBox) {
+                        progBox.style.display = 'block';
+                        if (progFill) progFill.style.width = '25%';
+                        if (progPct) progPct.textContent = 'OCR…';
+                        if (progLabel) {
+                            progLabel.textContent = '🔎 Reiner Bild-Scan erkannt — führe automatisch Offline-OCR (Texterkennung) für alle Seiten durch…';
+                        }
+                    }
+                    showToast('Reiner Bild-Scan erkannt: Starte automatische Offline-Texterkennung (Sandwich-OCR)…', 'info');
+                    var scopeEl = document.getElementById('ocrScope');
+                    var prevScope = scopeEl ? scopeEl.value : 'all';
+                    if (scopeEl) scopeEl.value = 'all';
+                    await convertToSearchableSandwichPdf();
+                    if (scopeEl) scopeEl.value = prevScope;
+                }
+            } catch (ocrPreErr) {
+                console.warn('Auto-OCR pre-check warning:', ocrPreErr);
             }
-        } catch (ocrPreErr) {
-            console.warn('Auto-OCR pre-check warning:', ocrPreErr);
         }
 
-        var fixTitle = (document.getElementById('a11yFixTitle').value || '').trim();
+        var fixTitle = silentBatchMode ? '' : ((document.getElementById('a11yFixTitle') && document.getElementById('a11yFixTitle').value) || '').trim();
         if (!fixTitle || /\.pdf$/i.test(fixTitle)) {
             fixTitle = doc.name.replace(/\.pdf$/i, '').replace(/_/g, ' ') + ' - Barrierefreies Dokument';
-            document.getElementById('a11yFixTitle').value = fixTitle;
+            if (!silentBatchMode && document.getElementById('a11yFixTitle')) {
+                document.getElementById('a11yFixTitle').value = fixTitle;
+            }
         }
-        var fixLang = document.getElementById('a11yFixLang').value || 'de-DE';
+        var fixLang = (document.getElementById('a11yFixLang') && document.getElementById('a11yFixLang').value) || 'de-DE';
 
         var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
         var context = pdfDoc.context;
@@ -4937,6 +4943,9 @@
         catalog.set(PDFLib.PDFName.of('Metadata'), metadataRef);
 
         doc.bytes = await pdfDoc.save({ useObjectStreams: false });
+        if (silentBatchMode) {
+            return doc.bytes;
+        }
         doc.meta.title = fixTitle;
         doc.meta.author = fixAuthor;
         doc.meta.subject = fixSubject;
@@ -4948,6 +4957,7 @@
         trackUsageEvent('a11y_autofix');
         await updateAccessibilityUI(true);
         showToast('PAC 2026 Tiefen-Reparatur (PDF/UA-1 + WCAG 2.1/2.2) abgeschlossen! Klicken Sie auf "💾 PDF herunterladen", um die Datei im PAC zu prüfen.', 'success');
+        return doc.bytes;
     }
 
     async function exportAccessibilityReportPdf() {
@@ -6993,7 +7003,862 @@
                 var content = document.getElementById('ocrOutputText').value;
                 downloadBlob(content, 'Extrahierter_Text.txt', 'text/plain;charset=utf-8');
                 break;
+            case 'open-email-modal':
+                await openEmailPdfModal();
+                break;
+            case 'open-batch-modal':
+                openModal('modalBatchProcess');
+                break;
+            case 'open-zugferd-modal':
+                await openZugferdModal();
+                break;
+            case 'open-qrcode-modal':
+                await openQrCodeModal();
+                break;
         }
+    }
+
+    // =========================================================================
+    // 1. Direct PDF Email Sender (via SMTP configured in admin.php)
+    // =========================================================================
+    async function openEmailPdfModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst eine PDF-Datei, die Sie per E-Mail versenden möchten.', 'error');
+            return;
+        }
+        var subjInp = document.getElementById('emailPdfSubject');
+        var msgInp = document.getElementById('emailPdfMessage');
+        var statusBox = document.getElementById('emailPdfStatusBox');
+        if (subjInp && !subjInp.value.trim()) {
+            subjInp.value = 'PDF-Dokument: ' + doc.name;
+        }
+        if (msgInp && !msgInp.value.trim()) {
+            msgInp.value = 'Guten Tag,\n\nanbei erhalten Sie das PDF-Dokument "' + doc.name + '".\n\nMit freundlichen Grüßen';
+        }
+        if (statusBox) {
+            statusBox.style.display = 'none';
+            statusBox.textContent = '';
+        }
+        openModal('modalSendEmail');
+    }
+
+    async function sendCurrentPdfByEmail() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+
+        var rcpt = (document.getElementById('emailPdfRecipient').value || '').trim();
+        var replyTo = (document.getElementById('emailPdfReplyTo').value || '').trim();
+        var subj = (document.getElementById('emailPdfSubject').value || '').trim();
+        var msg = (document.getElementById('emailPdfMessage').value || '').trim();
+        var statusBox = document.getElementById('emailPdfStatusBox');
+        var sendBtn = document.getElementById('btnSendPdfEmailNow');
+
+        if (!rcpt || rcpt.indexOf('@') === -1) {
+            showToast('Bitte geben Sie eine gültige Empfänger-E-Mail-Adresse ein.', 'error');
+            return;
+        }
+
+        if (sendBtn) sendBtn.disabled = true;
+        if (statusBox) {
+            statusBox.style.display = 'block';
+            statusBox.style.background = 'rgba(59,130,246,0.14)';
+            statusBox.style.color = '#93c5fd';
+            statusBox.textContent = '⏳ Bereite PDF-Anhang vor und verbinde mit SMTP-Server…';
+        }
+
+        try {
+            await bakeAnnotationsIntoDocument(doc);
+            var fd = new FormData();
+            fd.append('action', 'send_pdf_email');
+            fd.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+            fd.append('to_email', rcpt);
+            fd.append('reply_to', replyTo);
+            fd.append('subject', subj || ('PDF-Dokument: ' + doc.name));
+            fd.append('message', msg);
+            fd.append('filename', doc.name);
+            fd.append('pdf_file', new Blob([doc.bytes], { type: 'application/pdf' }), doc.name);
+
+            var resp = await fetch('api.php', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': window.PDFSTUDIO_CSRF_TOKEN || '' },
+                body: fd
+            });
+            var data = await resp.json();
+            if (data && data.ok) {
+                if (statusBox) {
+                    statusBox.style.background = 'rgba(16,185,129,0.16)';
+                    statusBox.style.color = '#6ee7b7';
+                    statusBox.textContent = '✔ ' + (data.message || 'E-Mail erfolgreich gesendet!');
+                }
+                showToast(data.message || 'PDF erfolgreich per E-Mail gesendet!', 'success');
+                setTimeout(function () {
+                    closeModal('modalSendEmail');
+                }, 1400);
+            } else {
+                var errTxt = (data && data.error) ? data.error : 'Versand fehlgeschlagen.';
+                if (statusBox) {
+                    statusBox.style.background = 'rgba(239,68,68,0.16)';
+                    statusBox.style.color = '#fca5a5';
+                    statusBox.textContent = '⚠️ ' + errTxt;
+                }
+                showToast(errTxt, 'error');
+            }
+        } catch (err) {
+            if (statusBox) {
+                statusBox.style.background = 'rgba(239,68,68,0.16)';
+                statusBox.style.color = '#fca5a5';
+                statusBox.textContent = '⚠️ Netzwerkfehler beim E-Mail-Versand: ' + err.message;
+            }
+        } finally {
+            if (sendBtn) sendBtn.disabled = false;
+        }
+    }
+
+    // =========================================================================
+    // 2. Multi-PDF Batch Processing (Stapelverarbeitung -> ZIP)
+    // =========================================================================
+    async function runBatchProcessing() {
+        var fileInp = document.getElementById('batchPdfFilesInput');
+        var useOpenTabs = document.getElementById('batchUseOpenTabs') && document.getElementById('batchUseOpenTabs').checked;
+        var doPdfUa = document.getElementById('batchActionPdfUa') && document.getElementById('batchActionPdfUa').checked;
+        var doPageNums = document.getElementById('batchActionPageNumbers') && document.getElementById('batchActionPageNumbers').checked;
+        var doWatermark = document.getElementById('batchActionWatermark') && document.getElementById('batchActionWatermark').checked;
+        var wmText = (document.getElementById('batchWatermarkText') && document.getElementById('batchWatermarkText').value) || 'VERTRAULICH';
+
+        var items = [];
+        if (fileInp && fileInp.files && fileInp.files.length > 0) {
+            for (var fIdx = 0; fIdx < fileInp.files.length; fIdx++) {
+                var f = fileInp.files[fIdx];
+                var ab = await f.arrayBuffer();
+                items.push({ name: f.name, bytes: new Uint8Array(ab) });
+            }
+        }
+        if (useOpenTabs && state.docs && state.docs.length > 0) {
+            for (var dIdx = 0; dIdx < state.docs.length; dIdx++) {
+                var openDoc = state.docs[dIdx];
+                await bakeAnnotationsIntoDocument(openDoc);
+                items.push({ name: openDoc.name, bytes: new Uint8Array(openDoc.bytes) });
+            }
+        }
+
+        if (items.length === 0) {
+            showToast('Bitte wählen Sie mindestens eine PDF-Datei aus oder öffnen Sie ein PDF-Tab.', 'error');
+            return;
+        }
+        if (!doPdfUa && !doPageNums && !doWatermark) {
+            showToast('Bitte wählen Sie mindestens eine Stapel-Aktion aus.', 'error');
+            return;
+        }
+
+        var progBox = document.getElementById('batchProgressBox');
+        var progLbl = document.getElementById('batchProgressLabel');
+        var progBar = document.getElementById('batchProgressBar');
+        var runBtn = document.getElementById('btnRunBatchProcess');
+        if (runBtn) runBtn.disabled = true;
+        if (progBox) progBox.style.display = 'block';
+
+        try {
+            var zip = new window.JSZip();
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                var pct = Math.round(((i) / items.length) * 100);
+                if (progBar) progBar.style.width = pct + '%';
+                if (progLbl) progLbl.textContent = 'Verarbeite Datei ' + (i + 1) + ' von ' + items.length + ': ' + item.name + '…';
+
+                var currentBytes = item.bytes;
+
+                // Optional Action A: Watermark & Page Numbers
+                if (doPageNums || doWatermark) {
+                    var pDoc = await PDFLib.PDFDocument.load(currentBytes, { ignoreEncryption: true });
+                    var font = await pDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+                    var pages = pDoc.getPages();
+                    for (var p = 0; p < pages.length; p++) {
+                        var pg = pages[p];
+                        var sz = pg.getSize();
+                        if (doWatermark && wmText.trim()) {
+                            pg.drawText(wmText.trim(), {
+                                x: sz.width * 0.18,
+                                y: sz.height * 0.45,
+                                size: Math.min(48, Math.max(24, sz.width * 0.07)),
+                                font: font,
+                                color: PDFLib.rgb(0.75, 0.15, 0.15),
+                                opacity: 0.22,
+                                rotate: PDFLib.degrees(35)
+                            });
+                        }
+                        if (doPageNums) {
+                            var numStr = 'Seite ' + (p + 1) + ' / ' + pages.length;
+                            pg.drawText(numStr, {
+                                x: sz.width / 2 - 28,
+                                y: 18,
+                                size: 9.5,
+                                font: font,
+                                color: PDFLib.rgb(0.2, 0.2, 0.2)
+                            });
+                        }
+                    }
+                    currentBytes = await pDoc.save({ useObjectStreams: false });
+                }
+
+                // Optional Action B: Full PDF/UA-1 & WCAG 2.1 Auto-Fix
+                if (doPdfUa) {
+                    var tempDocObj = {
+                        name: item.name,
+                        bytes: currentBytes,
+                        meta: {},
+                        savedA11yTags: []
+                    };
+                    var fixedBytes = await remediatePdfAccessibility(tempDocObj, true);
+                    if (fixedBytes) {
+                        currentBytes = fixedBytes;
+                    }
+                }
+
+                var outName = item.name.replace(/\.pdf$/i, '') + (doPdfUa ? '_barrierefrei.pdf' : '_bearbeitet.pdf');
+                zip.file(outName, currentBytes);
+            }
+
+            if (progBar) progBar.style.width = '100%';
+            if (progLbl) progLbl.textContent = '✔ Alle ' + items.length + ' PDF-Dateien verarbeitet — erzeuge ZIP-Archiv…';
+
+            var zipBlob = await zip.generateAsync({ type: 'blob' });
+            downloadBlob(zipBlob, 'PDF-Werkstatt-Stapel_' + items.length + '_Dateien.zip', 'application/zip');
+            trackUsageEvent('batch_processed');
+            showToast('Stapelverarbeitung für ' + items.length + ' PDF-Dateien erfolgreich abgeschlossen!', 'success');
+        } catch (err) {
+            showToast('Fehler bei der Stapelverarbeitung: ' + err.message, 'error');
+        } finally {
+            if (runBtn) runBtn.disabled = false;
+        }
+    }
+
+    // =========================================================================
+    // 3. E-Rechnung: ZUGFeRD 2.x / Factur-X & XRechnung (Inspector & Embedder)
+    // =========================================================================
+    var currentExtractedZugferdXml = '';
+
+    function extractZugferdXmlFromPdfBytes(pdfBytes) {
+        try {
+            var rawLatin1 = bytesToLatin1String(pdfBytes);
+            // 1. Check direct uncompressed XML inside PDF binary
+            var xmlStartMarkers = ['<rsm:CrossIndustryInvoice', '<rsm:CrossIndustryDocument', '<CrossIndustryInvoice', '<ubl:Invoice', '<Invoice'];
+            for (var m = 0; m < xmlStartMarkers.length; m++) {
+                var pos = rawLatin1.indexOf(xmlStartMarkers[m]);
+                if (pos !== -1) {
+                    var startIdx = rawLatin1.lastIndexOf('<?xml', pos);
+                    if (startIdx === -1 || (pos - startIdx) > 400) startIdx = pos;
+                    var endTags = ['</rsm:CrossIndustryInvoice>', '</rsm:CrossIndustryDocument>', '</CrossIndustryInvoice>', '</ubl:Invoice>', '</Invoice>'];
+                    for (var e = 0; e < endTags.length; e++) {
+                        var endPos = rawLatin1.indexOf(endTags[e], pos);
+                        if (endPos !== -1) {
+                            var sliceBytes = pdfBytes.subarray(startIdx, endPos + endTags[e].length);
+                            return new TextDecoder('utf-8').decode(sliceBytes);
+                        }
+                    }
+                }
+            }
+        } catch (err) {}
+        return null;
+    }
+
+    async function findZugferdXmlInDocument(doc) {
+        if (!doc || !doc.bytes) return null;
+        var direct = extractZugferdXmlFromPdfBytes(doc.bytes);
+        if (direct) return direct;
+
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+            var allObjs = pdfDoc.context.enumerateIndirectObjects();
+            for (var i = 0; i < allObjs.length; i++) {
+                var obj = allObjs[i][1];
+                if (obj && (obj instanceof PDFLib.PDFRawStream || obj.contents)) {
+                    try {
+                        var decBytes = PDFLib.decodePDFRawStream(obj).decode();
+                        var xmlStr = new TextDecoder('utf-8').decode(decBytes);
+                        if (xmlStr.indexOf('CrossIndustryInvoice') !== -1 || xmlStr.indexOf('CrossIndustryDocument') !== -1 || xmlStr.indexOf(':Invoice') !== -1 || xmlStr.indexOf('<Invoice') !== -1) {
+                            return xmlStr;
+                        }
+                    } catch (e) {}
+                }
+            }
+        } catch (err) {}
+        return null;
+    }
+
+    function parseZugferdOrXRechnungXml(xmlString) {
+        var parser = new DOMParser();
+        var xmlDoc = parser.parseFromString(xmlString, 'text/xml');
+        if (!xmlDoc || xmlDoc.getElementsByTagName('parsererror').length > 0) {
+            return null;
+        }
+
+        function firstText(localNames, rootNode) {
+            var ctx = rootNode || xmlDoc;
+            var all = ctx.getElementsByTagName('*');
+            for (var n = 0; n < localNames.length; n++) {
+                var target = localNames[n].toLowerCase();
+                for (var i = 0; i < all.length; i++) {
+                    var ln = (all[i].localName || all[i].nodeName.replace(/^.*:/, '')).toLowerCase();
+                    if (ln === target && all[i].textContent && all[i].textContent.trim()) {
+                        return all[i].textContent.trim();
+                    }
+                }
+            }
+            return '';
+        }
+
+        function findNodeByLocalName(localName, rootNode) {
+            var ctx = rootNode || xmlDoc;
+            var all = ctx.getElementsByTagName('*');
+            var target = localName.toLowerCase();
+            for (var i = 0; i < all.length; i++) {
+                var ln = (all[i].localName || all[i].nodeName.replace(/^.*:/, '')).toLowerCase();
+                if (ln === target) return all[i];
+            }
+            return null;
+        }
+
+        var exchDoc = findNodeByLocalName('ExchangedDocument');
+        var invId = exchDoc ? firstText(['ID'], exchDoc) : firstText(['ID']);
+        var rawDate = exchDoc ? firstText(['IssueDateTime', 'DateTimeString'], exchDoc) : firstText(['IssueDate', 'DateTimeString']);
+        if (/^\d{8}$/.test(rawDate)) {
+            rawDate = rawDate.slice(6, 8) + '.' + rawDate.slice(4, 6) + '.' + rawDate.slice(0, 4);
+        }
+        var buyerRef = firstText(['BuyerReference']);
+
+        var sellerNode = findNodeByLocalName('SellerTradeParty') || findNodeByLocalName('AccountingSupplierParty');
+        var sellerName = sellerNode ? firstText(['Name', 'RegistrationName'], sellerNode) : '—';
+        var sellerCity = sellerNode ? firstText(['CityName'], sellerNode) : '';
+
+        var buyerNode = findNodeByLocalName('BuyerTradeParty') || findNodeByLocalName('AccountingCustomerParty');
+        var buyerName = buyerNode ? firstText(['Name', 'RegistrationName'], buyerNode) : '—';
+        var buyerCity = buyerNode ? firstText(['CityName'], buyerNode) : '';
+
+        var iban = firstText(['IBANID', 'ID'], findNodeByLocalName('PayeePartyCreditorFinancialAccount') || findNodeByLocalName('PayeeFinancialAccount') || xmlDoc);
+        var sumNode = findNodeByLocalName('SpecifiedTradeSettlementHeaderMonetarySummation') || findNodeByLocalName('LegalMonetaryTotal');
+        var netAmt = sumNode ? firstText(['TaxBasisTotalAmount', 'LineTotalAmount', 'TaxExclusiveAmount'], sumNode) : '0.00';
+        var taxAmt = sumNode ? firstText(['TaxTotalAmount'], sumNode) : firstText(['TaxAmount']);
+        var grossAmt = sumNode ? firstText(['GrandTotalAmount', 'TaxInclusiveAmount'], sumNode) : '0.00';
+        var dueAmt = sumNode ? firstText(['DuePayableAmount', 'PayableAmount'], sumNode) : grossAmt;
+
+        var items = [];
+        var allNodes = xmlDoc.getElementsByTagName('*');
+        for (var idx = 0; idx < allNodes.length; idx++) {
+            var ln = (allNodes[idx].localName || allNodes[idx].nodeName.replace(/^.*:/, '')).toLowerCase();
+            if (ln === 'includedsuupplychaintradelineitem' || ln === 'includedsupplychaintradelineitem' || ln === 'invoiceline') {
+                var itemNode = allNodes[idx];
+                items.push({
+                    name: firstText(['Name', 'Description'], itemNode) || ('Position ' + (items.length + 1)),
+                    qty: firstText(['BilledQuantity', 'InvoicedQuantity'], itemNode) || '1',
+                    total: firstText(['LineTotalAmount', 'LineExtensionAmount'], itemNode) || '—'
+                });
+            }
+        }
+
+        return {
+            invId: invId || '—',
+            invDate: rawDate || '—',
+            buyerRef: buyerRef || '—',
+            sellerName: sellerName,
+            sellerCity: sellerCity,
+            buyerName: buyerName,
+            buyerCity: buyerCity,
+            iban: iban || '—',
+            netAmt: netAmt || '0.00',
+            taxAmt: taxAmt || '0.00',
+            grossAmt: grossAmt || '0.00',
+            dueAmt: dueAmt || '0.00',
+            items: items
+        };
+    }
+
+    function renderZugferdDataInModal(xmlStr) {
+        var titleEl = document.getElementById('zugferdStatusTitle');
+        var subEl = document.getElementById('zugferdStatusSub');
+        var viewEl = document.getElementById('zugferdInvoiceView');
+        var dlBtn = document.getElementById('btnZugferdDownloadXml');
+
+        if (!xmlStr) {
+            currentExtractedZugferdXml = '';
+            if (titleEl) titleEl.textContent = 'ℹ️ Keine eingebettete E-Rechnung (ZUGFeRD / XRechnung) im aktuellen PDF gefunden.';
+            if (subEl) subEl.textContent = 'Sie können unten im Formular eine ZUGFeRD 2.2 (EN 16931) E-Rechnung direkt in dieses PDF einbetten oder oben eine externe XML-Datei laden.';
+            if (viewEl) viewEl.style.display = 'none';
+            if (dlBtn) dlBtn.style.display = 'none';
+            return;
+        }
+
+        var parsed = parseZugferdOrXRechnungXml(xmlStr);
+        if (!parsed) {
+            if (titleEl) titleEl.textContent = '⚠️ Eingebettete XML-Daten konnten nicht als ZUGFeRD/XRechnung gelesen werden.';
+            return;
+        }
+
+        currentExtractedZugferdXml = xmlStr;
+        if (titleEl) titleEl.textContent = '✔ E-Rechnung erkannt (ZUGFeRD / Factur-X / XRechnung EN 16931)';
+        if (subEl) subEl.textContent = 'Strukturierter XML-Rechnungsdatensatz wurde erfolgreich ausgelesen.';
+        if (viewEl) viewEl.style.display = 'block';
+        if (dlBtn) dlBtn.style.display = 'inline-flex';
+
+        document.getElementById('zfInvIdDate').textContent = parsed.invId + ' vom ' + parsed.invDate;
+        document.getElementById('zfBuyerRef').textContent = 'Leitweg-ID / Referenz: ' + parsed.buyerRef;
+        document.getElementById('zfSellerInfo').textContent = parsed.sellerName + (parsed.sellerCity ? (' (' + parsed.sellerCity + ')') : '');
+        document.getElementById('zfBuyerInfo').textContent = parsed.buyerName + (parsed.buyerCity ? (' (' + parsed.buyerCity + ')') : '');
+        document.getElementById('zfPaymentInfo').textContent = 'IBAN: ' + parsed.iban;
+        document.getElementById('zfTotalsInfo').textContent = 'Netto: ' + parsed.netAmt + ' € | MwSt: ' + parsed.taxAmt + ' € | Brutto: ' + parsed.grossAmt + ' €';
+
+        // Pre-fill form
+        if (parsed.invId !== '—') document.getElementById('zfGenInvNumber').value = parsed.invId;
+        if (parsed.buyerRef !== '—') document.getElementById('zfGenLeitweg').value = parsed.buyerRef;
+        if (parsed.sellerName !== '—') document.getElementById('zfGenSeller').value = parsed.sellerName;
+        if (parsed.buyerName !== '—') document.getElementById('zfGenBuyer').value = parsed.buyerName;
+        if (parsed.iban !== '—') document.getElementById('zfGenIban').value = parsed.iban;
+        if (!isNaN(parseFloat(parsed.netAmt))) document.getElementById('zfGenNet').value = parseFloat(parsed.netAmt).toFixed(2);
+
+        var tblWrap = document.getElementById('zfLineItemsTable');
+        if (tblWrap) {
+            if (parsed.items.length === 0) {
+                tblWrap.innerHTML = '<div style="color:var(--text-secondary);">Keine Einzelpositionen angegeben.</div>';
+            } else {
+                var html = '<table style="width:100%;border-collapse:collapse;"><thead><tr style="border-bottom:1px solid var(--border-subtle);text-align:left;">' +
+                           '<th style="padding:4px;">Pos.</th><th style="padding:4px;">Bezeichnung</th><th style="padding:4px;">Menge</th><th style="padding:4px;text-align:right;">Betrag</th></tr></thead><tbody>';
+                for (var r = 0; r < parsed.items.length; r++) {
+                    html += '<tr style="border-bottom:1px solid var(--border-subtle);">' +
+                            '<td style="padding:4px;">' + (r + 1) + '</td>' +
+                            '<td style="padding:4px;">' + escapeHtml(parsed.items[r].name) + '</td>' +
+                            '<td style="padding:4px;">' + escapeHtml(parsed.items[r].qty) + '</td>' +
+                            '<td style="padding:4px;text-align:right;font-weight:600;">' + escapeHtml(parsed.items[r].total) + ' €</td></tr>';
+                }
+                html += '</tbody></table>';
+                tblWrap.innerHTML = html;
+            }
+        }
+    }
+
+    async function openZugferdModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            await createNewBlankPdfTab();
+            doc = getActiveDoc();
+        }
+        openModal('modalZugferd');
+        var xmlStr = await findZugferdXmlInDocument(doc);
+        renderZugferdDataInModal(xmlStr);
+    }
+
+    function buildZugferdFacturXXmlString() {
+        var invNum = (document.getElementById('zfGenInvNumber').value || 'RE-2026-1001').trim();
+        var rawDate = (document.getElementById('zfGenInvDate').value || '2026-11-04').replace(/-/g, '');
+        var leitweg = (document.getElementById('zfGenLeitweg').value || '991-00000-00').trim();
+        var seller = (document.getElementById('zfGenSeller').value || 'Muster Organisation').trim();
+        var buyer = (document.getElementById('zfGenBuyer').value || 'Rechnungsempfänger').trim();
+        var iban = (document.getElementById('zfGenIban').value || 'DE00000000000000000000').replace(/\s+/g, '');
+        var net = parseFloat(document.getElementById('zfGenNet').value) || 100.0;
+        var taxRate = parseFloat(document.getElementById('zfGenTaxRate').value) || 19.0;
+        var taxAmt = Math.round(net * (taxRate / 100) * 100) / 100;
+        var gross = Math.round((net + taxAmt) * 100) / 100;
+
+        return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+            '<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"\n' +
+            '    xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"\n' +
+            '    xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">\n' +
+            '  <rsm:ExchangedDocumentContext>\n' +
+            '    <ram:GuidelineSpecifiedDocumentContextParameter>\n' +
+            '      <ram:ID>urn:cen.eu:en16931:2017</ram:ID>\n' +
+            '    </ram:GuidelineSpecifiedDocumentContextParameter>\n' +
+            '  </rsm:ExchangedDocumentContext>\n' +
+            '  <rsm:ExchangedDocument>\n' +
+            '    <ram:ID>' + escapeXmlAttr(invNum) + '</ram:ID>\n' +
+            '    <ram:TypeCode>380</ram:TypeCode>\n' +
+            '    <ram:IssueDateTime><udt:DateTimeString format="102">' + escapeXmlAttr(rawDate) + '</udt:DateTimeString></ram:IssueDateTime>\n' +
+            '  </rsm:ExchangedDocument>\n' +
+            '  <rsm:SupplyChainTradeTransaction>\n' +
+            '    <ram:IncludedSupplyChainTradeLineItem>\n' +
+            '      <ram:AssociatedDocumentLineDocument><ram:LineID>1</ram:LineID></ram:AssociatedDocumentLineDocument>\n' +
+            '      <ram:SpecifiedTradeProduct><ram:Name>Rechnungsposition (' + escapeXmlAttr(invNum) + ')</ram:Name></ram:SpecifiedTradeProduct>\n' +
+            '      <ram:SpecifiedLineTradeDelivery><ram:BilledQuantity unitCode="C62">1.00</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery>\n' +
+            '      <ram:SpecifiedLineTradeSettlement>\n' +
+            '        <ram:SpecifiedTradeSettlementLineMonetarySummation><ram:LineTotalAmount>' + net.toFixed(2) + '</ram:LineTotalAmount></ram:SpecifiedTradeSettlementLineMonetarySummation>\n' +
+            '      </ram:SpecifiedLineTradeSettlement>\n' +
+            '    </ram:IncludedSupplyChainTradeLineItem>\n' +
+            '    <ram:ApplicableHeaderTradeAgreement>\n' +
+            '      <ram:BuyerReference>' + escapeXmlAttr(leitweg) + '</ram:BuyerReference>\n' +
+            '      <ram:SellerTradeParty><ram:Name>' + escapeXmlAttr(seller) + '</ram:Name></ram:SellerTradeParty>\n' +
+            '      <ram:BuyerTradeParty><ram:Name>' + escapeXmlAttr(buyer) + '</ram:Name></ram:BuyerTradeParty>\n' +
+            '    </ram:ApplicableHeaderTradeAgreement>\n' +
+            '    <ram:ApplicableHeaderTradeDelivery/>\n' +
+            '    <ram:ApplicableHeaderTradeSettlement>\n' +
+            '      <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>\n' +
+            '      <ram:SpecifiedTradeSettlementPaymentMeans>\n' +
+            '        <ram:TypeCode>58</ram:TypeCode>\n' +
+            '        <ram:PayeePartyCreditorFinancialAccount><ram:IBANID>' + escapeXmlAttr(iban) + '</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>\n' +
+            '      </ram:SpecifiedTradeSettlementPaymentMeans>\n' +
+            '      <ram:ApplicableTradeTax>\n' +
+            '        <ram:CalculatedAmount>' + taxAmt.toFixed(2) + '</ram:CalculatedAmount>\n' +
+            '        <ram:TypeCode>VAT</ram:TypeCode>\n' +
+            '        <ram:BasisAmount>' + net.toFixed(2) + '</ram:BasisAmount>\n' +
+            '        <ram:CategoryCode>S</ram:CategoryCode>\n' +
+            '        <ram:RateApplicablePercent>' + taxRate.toFixed(2) + '</ram:RateApplicablePercent>\n' +
+            '      </ram:ApplicableTradeTax>\n' +
+            '      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>\n' +
+            '        <ram:LineTotalAmount>' + net.toFixed(2) + '</ram:LineTotalAmount>\n' +
+            '        <ram:TaxBasisTotalAmount>' + net.toFixed(2) + '</ram:TaxBasisTotalAmount>\n' +
+            '        <ram:TaxTotalAmount currencyID="EUR">' + taxAmt.toFixed(2) + '</ram:TaxTotalAmount>\n' +
+            '        <ram:GrandTotalAmount>' + gross.toFixed(2) + '</ram:GrandTotalAmount>\n' +
+            '        <ram:DuePayableAmount>' + gross.toFixed(2) + '</ram:DuePayableAmount>\n' +
+            '      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>\n' +
+            '    </ram:ApplicableHeaderTradeSettlement>\n' +
+            '  </rsm:SupplyChainTradeTransaction>\n' +
+            '</rsm:CrossIndustryInvoice>\n';
+    }
+
+    async function embedZugferdXmlIntoActivePdf() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        await bakeAnnotationsIntoDocument(doc);
+
+        var xmlString = buildZugferdFacturXXmlString();
+        var xmlBytes = new TextEncoder().encode(xmlString);
+
+        var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+        var context = pdfDoc.context;
+        var catalog = pdfDoc.catalog;
+
+        var efStream = context.flateStream(xmlBytes, {
+            Type: 'EmbeddedFile',
+            Subtype: 'text/xml',
+            Params: context.obj({
+                Size: xmlBytes.length,
+                ModDate: PDFLib.PDFString.of('D:20261104120000Z')
+            })
+        });
+        var efStreamRef = context.register(efStream);
+
+        var fileSpec = context.obj({
+            Type: 'Filespec',
+            F: PDFLib.PDFString.of('factur-x.xml'),
+            UF: PDFLib.PDFHexString.fromText('factur-x.xml'),
+            Desc: PDFLib.PDFString.of('Factur-X / ZUGFeRD 2.2 EN 16931 E-Rechnung'),
+            AFRelationship: PDFLib.PDFName.of('Alternative'),
+            EF: context.obj({
+                F: efStreamRef,
+                UF: efStreamRef
+            })
+        });
+        var fileSpecRef = context.register(fileSpec);
+
+        var embeddedFilesTree = context.obj({
+            Names: [PDFLib.PDFString.of('factur-x.xml'), fileSpecRef]
+        });
+        catalog.set(PDFLib.PDFName.of('Names'), context.obj({
+            EmbeddedFiles: embeddedFilesTree
+        }));
+        catalog.set(PDFLib.PDFName.of('AF'), context.obj([fileSpecRef]));
+
+        doc.bytes = await pdfDoc.save({ useObjectStreams: false });
+        doc.modified = true;
+        renderTabsBar();
+        renderZugferdDataInModal(xmlString);
+        trackUsageEvent('zugferd_used');
+        showToast('ZUGFeRD 2.2 / Factur-X (factur-x.xml) erfolgreich in das PDF eingebettet!', 'success');
+    }
+
+    // =========================================================================
+    // 4. 100% Offline QR-Code Generator (ISO/IEC 18004 Byte Mode + Reed-Solomon)
+    // =========================================================================
+    function generateQrCodeMatrix(text) {
+        var utf8 = Array.from(new TextEncoder().encode(String(text || 'https://runready.cloud')));
+        // Capacities for ECC Level L (Byte Mode, Versions 1..10)
+        var vTable = [
+            null,
+            { ver: 1, totalCodewords: 26, ecCodewordsPerBlock: 7, blocks: 1, align: [] },
+            { ver: 2, totalCodewords: 44, ecCodewordsPerBlock: 10, blocks: 1, align: [6, 18] },
+            { ver: 3, totalCodewords: 70, ecCodewordsPerBlock: 15, blocks: 1, align: [6, 22] },
+            { ver: 4, totalCodewords: 100, ecCodewordsPerBlock: 20, blocks: 1, align: [6, 26] },
+            { ver: 5, totalCodewords: 134, ecCodewordsPerBlock: 26, blocks: 1, align: [6, 30] },
+            { ver: 6, totalCodewords: 172, ecCodewordsPerBlock: 18, blocks: 2, align: [6, 34] },
+            { ver: 7, totalCodewords: 196, ecCodewordsPerBlock: 20, blocks: 2, align: [6, 22, 38] },
+            { ver: 8, totalCodewords: 242, ecCodewordsPerBlock: 24, blocks: 2, align: [6, 24, 42] },
+            { ver: 9, totalCodewords: 292, ecCodewordsPerBlock: 30, blocks: 2, align: [6, 26, 46] }
+        ];
+
+        var spec = vTable[9];
+        for (var v = 1; v <= 9; v++) {
+            var dataCap = vTable[v].totalCodewords - vTable[v].ecCodewordsPerBlock * vTable[v].blocks;
+            var headerBytes = v >= 10 ? 3 : 2;
+            if (utf8.length + headerBytes <= dataCap) {
+                spec = vTable[v];
+                break;
+            }
+        }
+        var maxBytes = (spec.totalCodewords - spec.ecCodewordsPerBlock * spec.blocks) - 2;
+        if (utf8.length > maxBytes) utf8 = utf8.slice(0, maxBytes);
+
+        var dataCapWords = spec.totalCodewords - spec.ecCodewordsPerBlock * spec.blocks;
+        var bits = [];
+        function pushBits(val, len) {
+            for (var b = len - 1; b >= 0; b--) bits.push((val >>> b) & 1);
+        }
+        pushBits(0x4, 4); // Byte mode
+        pushBits(utf8.length, 8);
+        for (var i = 0; i < utf8.length; i++) pushBits(utf8[i], 8);
+        var maxBits = dataCapWords * 8;
+        pushBits(0, Math.min(4, maxBits - bits.length));
+        while (bits.length % 8 !== 0) bits.push(0);
+
+        var codewords = [];
+        for (var bi = 0; bi < bits.length; bi += 8) {
+            var byteVal = 0;
+            for (var k = 0; k < 8; k++) byteVal = (byteVal << 1) | bits[bi + k];
+            codewords.push(byteVal);
+        }
+        var padBytes = [0xEC, 0x11];
+        var pIdx = 0;
+        while (codewords.length < dataCapWords) {
+            codewords.push(padBytes[pIdx % 2]);
+            pIdx++;
+        }
+
+        // GF(256) tables
+        var gfExp = new Array(512);
+        var gfLog = new Array(256);
+        var x = 1;
+        for (var gi = 0; gi < 255; gi++) {
+            gfExp[gi] = x;
+            gfLog[x] = gi;
+            x <<= 1;
+            if (x & 0x100) x ^= 0x11D;
+        }
+        for (var gj = 255; gj < 512; gj++) gfExp[gj] = gfExp[gj - 255];
+        function gfMul(a, b) {
+            if (a === 0 || b === 0) return 0;
+            return gfExp[gfLog[a] + gfLog[b]];
+        }
+        function rsGeneratorPoly(degree) {
+            var poly = [1];
+            for (var d = 0; d < degree; d++) {
+                var next = new Array(poly.length + 1).fill(0);
+                for (var pi = 0; pi < poly.length; pi++) {
+                    next[pi] ^= poly[pi];
+                    next[pi + 1] ^= gfMul(poly[pi], gfExp[d]);
+                }
+                poly = next;
+            }
+            return poly;
+        }
+        function rsEncode(dataWords, ecLen) {
+            var gen = rsGeneratorPoly(ecLen);
+            var rem = new Array(ecLen).fill(0);
+            for (var di = 0; di < dataWords.length; di++) {
+                var factor = dataWords[di] ^ rem[0];
+                rem.shift();
+                rem.push(0);
+                if (factor !== 0) {
+                    for (var j = 0; j < ecLen; j++) {
+                        rem[j] ^= gfMul(gen[j + 1], factor);
+                    }
+                }
+            }
+            return rem;
+        }
+
+        var dataBlocks = [];
+        var ecBlocks = [];
+        var wordsPerBlock = Math.floor(dataCapWords / spec.blocks);
+        var offset = 0;
+        for (var blk = 0; blk < spec.blocks; blk++) {
+            var blkData = codewords.slice(offset, offset + wordsPerBlock);
+            offset += wordsPerBlock;
+            dataBlocks.push(blkData);
+            ecBlocks.push(rsEncode(blkData, spec.ecCodewordsPerBlock));
+        }
+
+        var finalBytes = [];
+        for (var wi = 0; wi < wordsPerBlock; wi++) {
+            for (var b1 = 0; b1 < spec.blocks; b1++) finalBytes.push(dataBlocks[b1][wi]);
+        }
+        for (var ei = 0; ei < spec.ecCodewordsPerBlock; ei++) {
+            for (var b2 = 0; b2 < spec.blocks; b2++) finalBytes.push(ecBlocks[b2][ei]);
+        }
+
+        var size = spec.ver * 4 + 17;
+        var modules = [];
+        var isFunc = [];
+        for (var r = 0; r < size; r++) {
+            modules.push(new Array(size).fill(false));
+            isFunc.push(new Array(size).fill(false));
+        }
+
+        function setFunc(row, col, dark) {
+            if (row < 0 || row >= size || col < 0 || col >= size) return;
+            modules[row][col] = Boolean(dark);
+            isFunc[row][col] = true;
+        }
+
+        function drawFinder(row, col) {
+            for (var dy = -1; dy <= 7; dy++) {
+                for (var dx = -1; dx <= 7; dx++) {
+                    var dist = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
+                    setFunc(row + dy, col + dx, dist !== 2 && dist !== 4);
+                }
+            }
+        }
+        drawFinder(0, 0);
+        drawFinder(0, size - 7);
+        drawFinder(size - 7, 0);
+
+        for (var ti = 8; ti < size - 8; ti++) {
+            setFunc(6, ti, ti % 2 === 0);
+            setFunc(ti, 6, ti % 2 === 0);
+        }
+
+        var al = spec.align;
+        for (var ay = 0; ay < al.length; ay++) {
+            for (var ax = 0; ax < al.length; ax++) {
+                if ((ay === 0 && ax === 0) || (ay === 0 && ax === al.length - 1) || (ay === al.length - 1 && ax === 0)) continue;
+                var cy = al[ay], cx = al[ax];
+                for (var ddy = -2; ddy <= 2; ddy++) {
+                    for (var ddx = -2; ddx <= 2; ddx++) {
+                        setFunc(cy + ddy, cx + ddx, Math.max(Math.abs(ddx), Math.abs(ddy)) !== 1);
+                    }
+                }
+            }
+        }
+
+        // Reserve format areas
+        for (var fi = 0; fi <= 8; fi++) {
+            if (fi !== 6) {
+                setFunc(8, fi, false);
+                setFunc(fi, 8, false);
+            }
+        }
+        for (var fj = 0; fj < 8; fj++) {
+            setFunc(8, size - 1 - fj, false);
+            setFunc(size - 1 - fj, 8, false);
+        }
+        setFunc(size - 8, 8, true);
+
+        // Place data bits (upward/downward 2-column zig-zag)
+        var bitIdx = 0;
+        var totalBits = finalBytes.length * 8;
+        for (var right = size - 1; right >= 1; right -= 2) {
+            if (right === 6) right = 5;
+            for (var vert = 0; vert < size; vert++) {
+                var upward = ((right + 1) & 2) === 0;
+                var y = upward ? (size - 1 - vert) : vert;
+                for (var lr = 0; lr < 2; lr++) {
+                    var xCol = right - lr;
+                    if (!isFunc[y][xCol]) {
+                        var darkBit = false;
+                        if (bitIdx < totalBits) {
+                            darkBit = ((finalBytes[bitIdx >>> 3] >>> (7 - (bitIdx & 7))) & 1) !== 0;
+                            bitIdx++;
+                        }
+                        // Mask 0: (y + xCol) % 2 === 0
+                        if ((y + xCol) % 2 === 0) darkBit = !darkBit;
+                        modules[y][xCol] = darkBit;
+                    }
+                }
+            }
+        }
+
+        // Format info for ECC Level L (01) + Mask 0 (000) -> precomputed BCH 0x77C4
+        var fmtBits = 0x77C4;
+        for (var fb = 0; fb <= 5; fb++) setFunc(8, fb, ((fmtBits >>> fb) & 1) !== 0);
+        setFunc(8, 7, ((fmtBits >>> 6) & 1) !== 0);
+        setFunc(8, 8, ((fmtBits >>> 7) & 1) !== 0);
+        setFunc(7, 8, ((fmtBits >>> 8) & 1) !== 0);
+        for (var fb2 = 9; fb2 < 15; fb2++) setFunc(14 - fb2, 8, ((fmtBits >>> fb2) & 1) !== 0);
+        for (var fb3 = 0; fb3 < 8; fb3++) setFunc(8, size - 1 - fb3, ((fmtBits >>> fb3) & 1) !== 0);
+        for (var fb4 = 8; fb4 < 15; fb4++) setFunc(size - 15 + fb4, 8, ((fmtBits >>> fb4) & 1) !== 0);
+        setFunc(size - 8, 8, true);
+
+        return modules;
+    }
+
+    function renderQrPreviewCanvas() {
+        var canvas = document.getElementById('qrPreviewCanvas');
+        if (!canvas) return null;
+        var payload = (document.getElementById('qrPayloadInput') && document.getElementById('qrPayloadInput').value) || 'https://runready.cloud';
+        var color = (document.getElementById('qrColorSelect') && document.getElementById('qrColorSelect').value) || '#000000';
+        var caption = (document.getElementById('qrCaptionInput') && document.getElementById('qrCaptionInput').value || '').trim();
+
+        var matrix = generateQrCodeMatrix(payload);
+        var mSize = matrix.length;
+        var quiet = 3;
+        var scale = 6;
+        var qrPx = (mSize + quiet * 2) * scale;
+        var capHeight = caption ? 24 : 0;
+
+        canvas.width = qrPx;
+        canvas.height = qrPx + capHeight;
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = color;
+        for (var r = 0; r < mSize; r++) {
+            for (var c = 0; c < mSize; c++) {
+                if (matrix[r][c]) {
+                    ctx.fillRect((c + quiet) * scale, (r + quiet) * scale, scale, scale);
+                }
+            }
+        }
+
+        if (caption) {
+            ctx.fillStyle = color;
+            ctx.font = 'bold 12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(caption, canvas.width / 2, qrPx + 15, canvas.width - 8);
+        }
+        return canvas.toDataURL('image/png');
+    }
+
+    async function openQrCodeModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            await createNewBlankPdfTab();
+        }
+        openModal('modalQrCode');
+        renderQrPreviewCanvas();
+    }
+
+    async function insertQrCodeIntoActivePage() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        var dataUrl = renderQrPreviewCanvas();
+        if (!dataUrl) return;
+
+        var boxSize = parseInt((document.getElementById('qrSizeSelect') && document.getElementById('qrSizeSelect').value) || '105', 10);
+        var caption = (document.getElementById('qrCaptionInput') && document.getElementById('qrCaptionInput').value || '').trim();
+        var boxHeight = caption ? Math.round(boxSize * 1.14) : boxSize;
+
+        var img = new Image();
+        img.onload = function () {
+            pushUndoState(doc);
+            var anns = getPageAnnotations(doc, doc.currentPage);
+            anns.push({
+                type: 'image',
+                x: 60,
+                y: 60,
+                w: boxSize,
+                h: boxHeight,
+                dataUrl: dataUrl,
+                imgElement: img
+            });
+            state.selectedAnnotationIndex = anns.length - 1;
+            doc.modified = true;
+            closeModal('modalQrCode');
+            if (state.viewMode !== 'editor') {
+                switchView('editor');
+            } else {
+                redrawAnnotationOverlay();
+            }
+            renderTabsBar();
+            trackUsageEvent('qrcode_inserted');
+            showToast('QR-Code eingefügt! Sie können ihn mit der Maus frei verschieben.', 'success');
+        };
+        img.src = dataUrl;
     }
 
     // =========================================================================
@@ -7452,6 +8317,70 @@
             btnSearchClear.addEventListener('click', function () {
                 clearPdfFullTextSearch();
             });
+        }
+
+        // v1.3.0: Email, Batch Processing, ZUGFeRD & QR-Code Modal Listeners
+        var btnSendPdfEmailNow = document.getElementById('btnSendPdfEmailNow');
+        if (btnSendPdfEmailNow) {
+            btnSendPdfEmailNow.addEventListener('click', sendCurrentPdfByEmail);
+        }
+
+        var btnRunBatchProcess = document.getElementById('btnRunBatchProcess');
+        if (btnRunBatchProcess) {
+            btnRunBatchProcess.addEventListener('click', runBatchProcessing);
+        }
+
+        var btnEmbedZugferdXml = document.getElementById('btnEmbedZugferdXml');
+        if (btnEmbedZugferdXml) {
+            btnEmbedZugferdXml.addEventListener('click', embedZugferdXmlIntoActivePdf);
+        }
+
+        var btnZugferdDownloadXml = document.getElementById('btnZugferdDownloadXml');
+        if (btnZugferdDownloadXml) {
+            btnZugferdDownloadXml.addEventListener('click', function () {
+                if (!currentExtractedZugferdXml) return;
+                var blob = new Blob([currentExtractedZugferdXml], { type: 'application/xml;charset=utf-8' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'factur-x.xml';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+            });
+        }
+
+        var btnZugferdLoadExternalXml = document.getElementById('btnZugferdLoadExternalXml');
+        var hiddenZugferdXmlInput = document.getElementById('hiddenZugferdXmlInput');
+        if (btnZugferdLoadExternalXml && hiddenZugferdXmlInput) {
+            btnZugferdLoadExternalXml.addEventListener('click', function () {
+                hiddenZugferdXmlInput.value = '';
+                hiddenZugferdXmlInput.click();
+            });
+            hiddenZugferdXmlInput.addEventListener('change', function (e) {
+                var file = e.target.files && e.target.files[0];
+                if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function (ev) {
+                    var xmlText = String(ev.target.result || '');
+                    renderZugferdDataInModal(xmlText, file.name);
+                };
+                reader.readAsText(file, 'UTF-8');
+            });
+        }
+
+        ['qrPayloadInput', 'qrColorSelect', 'qrCaptionInput'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', renderQrPreviewCanvas);
+                el.addEventListener('change', renderQrPreviewCanvas);
+            }
+        });
+
+        var btnInsertQrIntoPdf = document.getElementById('btnInsertQrIntoPdf');
+        if (btnInsertQrIntoPdf) {
+            btnInsertQrIntoPdf.addEventListener('click', insertQrCodeIntoActivePage);
         }
 
         // Keyboard shortcuts (Desktop feel)

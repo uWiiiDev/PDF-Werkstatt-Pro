@@ -231,12 +231,29 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
                 $settings = pdfstudio_load_admin_settings();
                 $flashSuccess = 'Das Administrator-Passwort wurde erfolgreich geändert (Bcrypt-Hash aktualisiert).';
             }
+        } elseif ($act === 'reset_usage_stats') {
+            @unlink(PDFSTUDIO_STATS_JSON);
+            @unlink(PDFSTUDIO_STATS_TXT);
+            pdfstudio_save_stats_and_report(pdfstudio_load_stats());
+            $flashSuccess = 'Die Nutzungsstatistik wurde auf 0 zurückgesetzt.';
         }
     }
 }
 
+if ($isAdminLoggedIn && isset($_GET['download_stats_txt'])) {
+    if (!is_file(PDFSTUDIO_STATS_TXT)) {
+        pdfstudio_save_stats_and_report(pdfstudio_load_stats());
+    }
+    header('Content-Type: text/plain; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="PDF-Werkstatt-Nutzungsstatistik.txt"');
+    @readfile(PDFSTUDIO_STATS_TXT);
+    exit;
+}
+
 $localUsers = pdfstudio_load_local_users();
 $ldapExtLoaded = function_exists('ldap_connect');
+$usageStats = pdfstudio_load_stats();
+$statLabels = pdfstudio_get_stat_event_labels();
 ?><!DOCTYPE html>
 <html lang="de">
 <head>
@@ -929,6 +946,63 @@ $ldapExtLoaded = function_exists('ldap_connect');
                     </div>
                 </div>
             </form>
+        </div>
+
+        <!-- 6. USAGE & LOGIN STATISTICS -->
+        <div class="adm-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+                <h2 style="margin:0;">📊 6. Nutzungs-, Werkzeug- &amp; Anmeldestatistik</h2>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <a href="admin.php?download_stats_txt=1" class="adm-btn" style="height:30px;font-size:12px;">📥 Textbericht (.txt) herunterladen</a>
+                    <form method="post" action="admin.php" style="display:inline;" onsubmit="return confirm('Nutzungsstatistik wirklich auf 0 zurücksetzen?');">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+                        <input type="hidden" name="action" value="reset_usage_stats">
+                        <button type="submit" class="adm-btn adm-btn-danger" style="height:30px;font-size:12px;">↺ Zurücksetzen</button>
+                    </form>
+                </div>
+            </div>
+            <p class="adm-desc">
+                Anonymisierte Auswertung der Programmaufrufe, erfolgreichen/fehlgeschlagenen Logins und ausgeführten PDF-Werkzeuge (Stand: <?php echo htmlspecialchars((string)$usageStats['updated_at'], ENT_QUOTES, 'UTF-8'); ?>).
+            </p>
+
+            <div class="adm-grid-3" style="margin-bottom:18px;">
+                <div style="background:#121721;border:1px solid #263042;border-radius:8px;padding:12px 14px;">
+                    <div style="font-size:11.5px;color:#94a3b8;">Sitzungen &amp; Seitenaufrufe</div>
+                    <div style="font-size:20px;font-weight:700;margin-top:4px;color:#60a5fa;">
+                        <?php echo (int)$usageStats['total_sessions']; ?> <span style="font-size:12px;font-weight:400;color:#94a3b8;">Sitzungen (<?php echo (int)$usageStats['total_pageviews']; ?> Aufrufe)</span>
+                    </div>
+                </div>
+                <div style="background:#121721;border:1px solid #263042;border-radius:8px;padding:12px 14px;">
+                    <div style="font-size:11.5px;color:#94a3b8;">Anmeldungen (Erfolg / Fehlversuche)</div>
+                    <div style="font-size:20px;font-weight:700;margin-top:4px;color:#34d399;">
+                        <?php echo (int)$usageStats['total_logins']; ?> <span style="font-size:12px;font-weight:400;color:#fca5a5;">(<?php echo (int)$usageStats['failed_logins']; ?> Fehlversuche)</span>
+                    </div>
+                </div>
+                <div style="background:#121721;border:1px solid #263042;border-radius:8px;padding:12px 14px;">
+                    <div style="font-size:11.5px;color:#94a3b8;">Ausgeführte PDF-Werkzeug-Aktionen</div>
+                    <div style="font-size:20px;font-weight:700;margin-top:4px;color:#fbbf24;">
+                        <?php echo (int)$usageStats['total_tool_actions']; ?> <span style="font-size:12px;font-weight:400;color:#94a3b8;">Aktionen gesamt</span>
+                    </div>
+                </div>
+            </div>
+
+            <table class="adm-table">
+                <thead>
+                    <tr>
+                        <th>PDF-Werkzeug / Funktion</th>
+                        <th style="width:140px;text-align:right;">Anzahl Nutzungen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($statLabels as $ek => $elabel): ?>
+                        <?php $cnt = isset($usageStats['events'][$ek]) ? (int)$usageStats['events'][$ek] : 0; ?>
+                        <tr>
+                            <td><?php echo htmlspecialchars($elabel, ENT_QUOTES, 'UTF-8'); ?></td>
+                            <td style="text-align:right;font-weight:600;color:<?php echo $cnt > 0 ? '#60a5fa' : '#64748b'; ?>;"><?php echo $cnt; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
         </div>
 
     <?php endif; ?>

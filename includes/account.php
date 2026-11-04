@@ -755,6 +755,175 @@ function pdfstudio_send_email($toEmail, $subject, $bodyText, $replyToEmail = '')
 }
 
 /**
+ * Send an email with a binary PDF attachment (multipart/mixed) via configured SMTP server or PHP mail()
+ */
+function pdfstudio_send_email_with_pdf($toEmail, $subject, $bodyText, $pdfBinary, $pdfFilename, $replyToEmail = '')
+{
+    $toEmail = str_replace(array("\r", "\n", "\0", '<', '>'), '', trim((string)$toEmail));
+    $replyToEmail = str_replace(array("\r", "\n", "\0", '<', '>'), '', trim((string)$replyToEmail));
+    $subject = str_replace(array("\r", "\n", "\0"), ' ', trim((string)$subject));
+    $safeName = pdfstudio_sanitize_filename($pdfFilename);
+
+    $transport = strtolower(trim((string)pdfstudio_config('mail_transport', 'smtp')));
+    $fromAddr = str_replace(array("\r", "\n", "\0", '<', '>'), '', trim((string)pdfstudio_config('mail_from_address', 'noreply@pdf-werkstatt.local')));
+    $fromName = str_replace(array("\r", "\n", "\0"), ' ', trim((string)pdfstudio_config('mail_from_name', 'PDF-Werkstatt Pro')));
+    if ($fromAddr === '') {
+        $fromAddr = 'noreply@' . (isset($_SERVER['HTTP_HOST']) ? preg_replace('/[^a-zA-Z0-9\.\-]/', '', $_SERVER['HTTP_HOST']) : 'localhost');
+    }
+    if ($replyToEmail === '' || strpos($replyToEmail, '@') === false) {
+        $replyToEmail = $fromAddr;
+    }
+
+    $smtpHost = trim((string)pdfstudio_config('smtp_host', ''));
+    $smtpPort = (int)pdfstudio_config('smtp_port', 587);
+    $smtpEnc = strtolower(trim((string)pdfstudio_config('smtp_encryption', 'tls')));
+    $smtpAuth = (bool)pdfstudio_config('smtp_auth', true);
+    $smtpUser = (string)pdfstudio_config('smtp_username', '');
+    $smtpPass = (string)pdfstudio_config('smtp_password', '');
+    $smtpTimeout = max(3, (int)pdfstudio_config('smtp_timeout', 12));
+
+    $encodedSubject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
+    $encodedFromName = '=?UTF-8?B?' . base64_encode($fromName) . '?=';
+    $fromHeader = $encodedFromName . ' <' . $fromAddr . '>';
+
+    $boundary = '=_PDFStudio_' . md5(uniqid(mt_rand(), true));
+    $normText = str_replace(array("\r\n", "\r"), "\n", (string)$bodyText);
+    $normText = str_replace("\n", "\r\n", $normText);
+
+    $mimeBody = "--" . $boundary . "\r\n"
+              . "Content-Type: text/plain; charset=UTF-8\r\n"
+              . "Content-Transfer-Encoding: 8bit\r\n\r\n"
+              . $normText . "\r\n\r\n"
+              . "--" . $boundary . "\r\n"
+              . "Content-Type: application/pdf; name=\"" . $safeName . "\"\r\n"
+              . "Content-Disposition: attachment; filename=\"" . $safeName . "\"\r\n"
+              . "Content-Transfer-Encoding: base64\r\n\r\n"
+              . chunk_split(base64_encode((string)$pdfBinary), 76, "\r\n")
+              . "--" . $boundary . "--";
+
+    $sent = false;
+    $methodUsed = 'mail';
+    $errorMsg = '';
+
+    if ($transport === 'smtp' && $smtpHost !== '') {
+        $methodUsed = 'smtp';
+        $remote = ($smtpEnc === 'ssl' ? 'ssl://' : '') . $smtpHost;
+        $errno = 0;
+        $errstr = '';
+        $fp = @fsockopen($remote, $smtpPort, $errno, $errstr, $smtpTimeout);
+
+        if (!$fp) {
+            $errorMsg = 'SMTP-Verbindung fehlgeschlagen (' . $smtpHost . ':' . $smtpPort . '): ' . $errstr;
+        } else {
+            @stream_set_timeout($fp, $smtpTimeout);
+            $greet = pdfstudio_smtp_cmd($fp, null, array(220));
+            $ehloHost = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
+            $ehlo = $greet['ok'] ? pdfstudio_smtp_cmd($fp, 'EHLO ' . $ehloHost, array(250)) : $greet;
+
+            if ($ehlo['ok'] && $smtpEnc === 'tls') {
+                $tlsRes = pdfstudio_smtp_cmd($fp, 'STARTTLS', array(220));
+                if ($tlsRes['ok'] && function_exists('stream_socket_enable_crypto')) {
+                    $cryptoMethod = defined('STREAM_CRYPTO_METHOD_TLS_CLIENT') ? STREAM_CRYPTO_METHOD_TLS_CLIENT : 1;
+                    $cryptoOk = @stream_socket_enable_crypto($fp, true, $cryptoMethod);
+                    if (!$cryptoOk) {
+                        $ehlo = array('ok' => false, 'response' => 'STARTTLS-Verschlüsselung konnte nicht aktiviert werden.');
+                    } else {
+                        $ehlo = pdfstudio_smtp_cmd($fp, 'EHLO ' . $ehloHost, array(250));
+                    }
+                } else {
+                    $ehlo = $tlsRes;
+                }
+            }
+
+            if ($ehlo['ok'] && $smtpAuth && $smtpUser !== '') {
+                $authStart = pdfstudio_smtp_cmd($fp, 'AUTH LOGIN', array(334));
+                if ($authStart['ok']) {
+                    $uRes = pdfstudio_smtp_cmd($fp, base64_encode($smtpUser), array(334));
+                    if ($uRes['ok']) {
+                        $pRes = pdfstudio_smtp_cmd($fp, base64_encode($smtpPass), array(235));
+                        if (!$pRes['ok']) {
+                            $ehlo = $pRes;
+                        }
+                    } else {
+                        $ehlo = $uRes;
+                    }
+                } else {
+                    $ehlo = $authStart;
+                }
+            }
+
+            if ($ehlo['ok']) {
+                $mFrom = pdfstudio_smtp_cmd($fp, 'MAIL FROM:<' . $fromAddr . '>', array(250));
+                $rTo = $mFrom['ok'] ? pdfstudio_smtp_cmd($fp, 'RCPT TO:<' . $toEmail . '>', array(250, 251)) : $mFrom;
+                $dataCmd = $rTo['ok'] ? pdfstudio_smtp_cmd($fp, 'DATA', array(354)) : $rTo;
+
+                if ($dataCmd['ok']) {
+                    $lines = explode("\r\n", $mimeBody);
+                    $escapedLines = array();
+                    foreach ($lines as $ln) {
+                        if (isset($ln[0]) && $ln[0] === '.') {
+                            $ln = '.' . $ln;
+                        }
+                        $escapedLines[] = $ln;
+                    }
+
+                    $msgData = "Date: " . date('r') . "\r\n"
+                             . "From: " . $fromHeader . "\r\n"
+                             . "Reply-To: <" . $replyToEmail . ">\r\n"
+                             . "To: <" . $toEmail . ">\r\n"
+                             . "Subject: " . $encodedSubject . "\r\n"
+                             . "MIME-Version: 1.0\r\n"
+                             . "Content-Type: multipart/mixed; boundary=\"" . $boundary . "\"\r\n"
+                             . "\r\n"
+                             . implode("\r\n", $escapedLines) . "\r\n.";
+
+                    $sendRes = pdfstudio_smtp_cmd($fp, $msgData, array(250));
+                    if ($sendRes['ok']) {
+                        $sent = true;
+                    } else {
+                        $errorMsg = 'SMTP DATA Fehler: ' . $sendRes['response'];
+                    }
+                } else {
+                    $errorMsg = 'SMTP Adress-Fehler: ' . $dataCmd['response'];
+                }
+            } else {
+                $errorMsg = 'SMTP Handshake/Auth-Fehler: ' . $ehlo['response'];
+            }
+
+            @fwrite($fp, "QUIT\r\n");
+            @fclose($fp);
+        }
+    } else {
+        $headers = "MIME-Version: 1.0\r\n"
+                 . "From: " . $fromHeader . "\r\n"
+                 . "Reply-To: " . $replyToEmail . "\r\n"
+                 . "Content-Type: multipart/mixed; boundary=\"" . $boundary . "\"\r\n";
+        if (function_exists('mail')) {
+            $sent = @mail($toEmail, $encodedSubject, $mimeBody, $headers);
+            if (!$sent) {
+                $errorMsg = 'PHP mail()-Funktion meldete einen Fehler. Bitte konfigurieren Sie im Adminbereich einen SMTP-Server.';
+            }
+        } else {
+            $errorMsg = 'PHP mail() ist deaktiviert und kein SMTP-Server konfiguriert.';
+        }
+    }
+
+    $logEntry = "[" . date('Y-m-d H:i:s') . "] METHOD: " . strtoupper($methodUsed)
+              . " | FROM: " . $fromAddr
+              . " | TO: " . $toEmail
+              . " | FILE: " . $safeName . " (" . strlen((string)$pdfBinary) . " B)"
+              . " | STATUS: " . ($sent ? 'SENT' : 'ERROR (' . $errorMsg . ')') . "\n";
+    @file_put_contents(PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'mail_outbox.log', $logEntry, FILE_APPEND);
+
+    return array(
+        'sent' => $sent,
+        'method' => $methodUsed,
+        'from_address' => $fromAddr,
+        'error' => $errorMsg
+    );
+}
+
+/**
  * Default catalog of tracked tool/feature events with human-readable German labels
  */
 function pdfstudio_get_stat_event_labels()
@@ -776,7 +945,10 @@ function pdfstudio_get_stat_event_labels()
         'redaction_sanitized' => 'Sicher geschwaerzt (Sanitize)',
         'bates_header_footer' => 'Bates-Nummerierung / Kopf- & Fusszeilen',
         'pdf_compared'        => 'PDF-Vergleich (Visueller & Text-Diff)',
-        'email_shared'        => 'Dokument per E-Mail-Freigabelink geteilt',
+        'email_shared'        => 'Dokument direkt per E-Mail versendet',
+        'batch_processed'     => 'Stapelverarbeitung (Batch-Modus) ausgefuehrt',
+        'zugferd_used'        => 'E-Rechnung (ZUGFeRD / XRechnung) geprueft/eingebettet',
+        'qrcode_inserted'     => 'QR-Code auf PDF-Seite generiert',
         'converter_used'      => 'Konverter genutzt (Bilder/Office/Text -> PDF)'
     );
 }

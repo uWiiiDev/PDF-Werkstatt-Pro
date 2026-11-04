@@ -186,6 +186,14 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">♿</span>
                         <span class="rb-label">PDF/UA Check</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-batch-modal" title="Mehrere PDF-Dateien gleichzeitig verarbeiten (z. B. Auto-Fix PDF/UA, Wasserzeichen, Seitenzahlen) und als ZIP herunterladen">
+                        <span class="rb-icon">🗂️</span>
+                        <span class="rb-label">Stapel-Modus</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-zugferd-modal" title="ZUGFeRD / XRechnung (E-Rechnung) auslesen, prüfen oder XML in PDF einbetten">
+                        <span class="rb-icon">🧾</span>
+                        <span class="rb-label">E-Rechnung</span>
+                    </button>
                 </div>
                 <div class="ribbon-section-title">Direktwerkzeuge</div>
             </div>
@@ -197,6 +205,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn rb-primary" data-cmd="export-pdf">
                         <span class="rb-icon">💾</span>
                         <span class="rb-label">Download</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-email-modal" title="Aktuelles PDF direkt als E-Mail-Anhang über den konfigurierten SMTP-Server versenden">
+                        <span class="rb-icon">📧</span>
+                        <span class="rb-label">E-Mail</span>
                     </button>
                     <button type="button" class="ribbon-btn" data-cmd="print-pdf">
                         <span class="rb-icon">🖨️</span>
@@ -270,6 +282,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn" data-cmd="insert-image-overlay">
                         <span class="rb-icon">🖼️</span>
                         <span class="rb-label">Bild/Logo</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-qrcode-modal" title="QR-Code (Link, Text, Aktenzeichen) offline erzeugen und auf der PDF-Seite platzieren">
+                        <span class="rb-icon">📱</span>
+                        <span class="rb-label">QR-Code</span>
                     </button>
                 </div>
                 <div class="ribbon-section-title">Stempel, Signatur &amp; Schwärzen</div>
@@ -405,8 +421,12 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🔗</span>
                         <span class="rb-label">Link / Sprung</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-qrcode-modal" title="QR-Code offline erzeugen und auf der PDF-Seite platzieren">
+                        <span class="rb-icon">📱</span>
+                        <span class="rb-label">QR-Code</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Hyperlinks</div>
+                <div class="ribbon-section-title">Hyperlinks &amp; QR</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -417,8 +437,12 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">⚖️</span>
                         <span class="rb-label">PDF-Vergleich</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-zugferd-modal" title="ZUGFeRD 2.x / Factur-X / XRechnung prüfen, auslesen oder XML einbetten">
+                        <span class="rb-icon">🧾</span>
+                        <span class="rb-label">E-Rechnung</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Dokumenten-Diff</div>
+                <div class="ribbon-section-title">Vergleich &amp; E-Rechnung</div>
             </div>
         </div>
 
@@ -543,6 +567,10 @@ $serverInfo = pdfstudio_get_server_info();
                     <button type="button" class="ribbon-btn" data-cmd="export-a11y-report">
                         <span class="rb-icon">📊</span>
                         <span class="rb-label">Prüfbericht</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-batch-modal" title="Mehrere PDFs in einem Durchgang automatisch nach PDF/UA barrierefrei machen">
+                        <span class="rb-icon">🗂️</span>
+                        <span class="rb-label">Stapel Auto-Fix</span>
                     </button>
                 </div>
                 <div class="ribbon-section-title">Prüfung &amp; Auto-Reparatur</div>
@@ -1478,6 +1506,277 @@ $serverInfo = pdfstudio_get_server_info();
                     📑 Jetzt zusammenführen
                 </button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL: DIRECT PDF EMAIL SENDER (SMTP)
+     ====================================================================== -->
+<div class="modal-backdrop hidden" id="modalSendEmail">
+    <div class="modal-dialog" style="max-width:560px;">
+        <div class="modal-header">
+            <h3>📧 PDF direkt per E-Mail versenden</h3>
+            <button type="button" class="doc-tab-close" data-close-modal="modalSendEmail">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:14px;line-height:1.45;">
+                Das aktuell geöffnete PDF-Dokument wird samt allen Änderungen als Dateianhang über den im Adminbereich (⚙️) hinterlegten SMTP-Server versendet.
+            </p>
+            <div class="form-row">
+                <label for="emailPdfRecipient">Empfänger-E-Mail-Adresse *</label>
+                <input type="email" id="emailPdfRecipient" class="form-control" placeholder="z. B. empfaenger@organisation.de" required>
+            </div>
+            <div class="form-row">
+                <label for="emailPdfReplyTo">Antwortadresse / Reply-To (optional)</label>
+                <input type="email" id="emailPdfReplyTo" class="form-control" placeholder="Ihre eigene E-Mail-Adresse für Rückantworten">
+            </div>
+            <div class="form-row">
+                <label for="emailPdfSubject">Betreff</label>
+                <input type="text" id="emailPdfSubject" class="form-control" placeholder="PDF-Dokument">
+            </div>
+            <div class="form-row">
+                <label for="emailPdfMessage">Nachrichtentext</label>
+                <textarea id="emailPdfMessage" class="form-control" rows="4" placeholder="Guten Tag, anbei erhalten Sie das gewünschte PDF-Dokument."></textarea>
+            </div>
+            <div id="emailPdfStatusBox" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:12.5px;"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalSendEmail">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnSendPdfEmailNow">
+                📧 PDF jetzt als Anhang senden
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL: BATCH PROCESSING (STAPELVERARBEITUNG)
+     ====================================================================== -->
+<div class="modal-backdrop hidden" id="modalBatchProcess">
+    <div class="modal-dialog" style="max-width:680px;">
+        <div class="modal-header">
+            <h3>🗂️ Stapelverarbeitung (Batch-Modus für mehrere PDFs)</h3>
+            <button type="button" class="doc-tab-close" data-close-modal="modalBatchProcess">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:14px;line-height:1.45;">
+                Wählen Sie beliebig viele PDF-Dateien aus (oder nutzen Sie alle geöffneten Tabs), führen Sie die gewünschten Aktionen in einem Durchgang aus und laden Sie alle Ergebnisse gesammelt als <code>.zip</code>-Archiv herunter.
+            </p>
+
+            <div class="form-row" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+                <label style="font-weight:700;margin-bottom:6px;display:block;">1. Eingabe-Dateien für den Stapel auswählen</label>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                    <input type="file" id="batchPdfFilesInput" accept=".pdf,application/pdf" multiple class="form-control" style="flex:1;">
+                    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap;">
+                        <input type="checkbox" id="batchUseOpenTabs" checked>
+                        Auch alle aktuell geöffneten PDF-Tabs einbeziehen
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-row" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-top:10px;">
+                <label style="font-weight:700;margin-bottom:8px;display:block;">2. Auszuführende Stapel-Aktionen (mehrere kombinierbar)</label>
+                <div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="batchActionPdfUa" checked>
+                        <span><strong>⚡ Auto-Fix PDF/UA-1 &amp; WCAG 2.1 Barrierefreiheit</strong> (Tags, ParentTree, Schriften, XMP, Lesezeichen, Sprache <code>de-DE</code>)</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="batchActionPageNumbers">
+                        <span><strong>🔢 Seitenzahlen einfügen</strong> (Fußzeile „Seite X / Y“ auf allen Seiten)</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="batchActionWatermark">
+                        <span><strong>💧 Wasserzeichen / Stempel auf alle Seiten setzen:</strong></span>
+                    </label>
+                    <input type="text" id="batchWatermarkText" class="form-control" placeholder="z. B. VERTRAULICH oder EINGEGANGEN" value="VERTRAULICH" style="margin-left:24px;max-width:340px;height:30px;">
+                </div>
+            </div>
+
+            <div id="batchProgressBox" style="display:none;margin-top:12px;padding:12px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;">
+                <div id="batchProgressLabel" style="font-size:12.5px;font-weight:600;margin-bottom:6px;">Starte Stapelverarbeitung…</div>
+                <div style="height:8px;background:var(--bg-app);border-radius:99px;overflow:hidden;">
+                    <div id="batchProgressBar" style="width:0%;height:100%;background:var(--accent-primary);transition:width 0.2s;"></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalBatchProcess">Schließen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnRunBatchProcess">
+                🗂️ Stapel starten &amp; als ZIP herunterladen
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL: E-RECHNUNG / ZUGFeRD 2.x & XRECHNUNG (INSPECT & EMBED)
+     ====================================================================== -->
+<div class="modal-backdrop hidden" id="modalZugferd">
+    <div class="modal-dialog" style="max-width:780px;">
+        <div class="modal-header">
+            <h3>🧾 E-Rechnung: ZUGFeRD 2.x / Factur-X &amp; XRechnung (EN 16931)</h3>
+            <button type="button" class="doc-tab-close" data-close-modal="modalZugferd">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:74vh;overflow-y:auto;">
+            <!-- Detection & Summary Area -->
+            <div id="zugferdDetectBanner" style="padding:12px 14px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border-subtle);margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                    <div>
+                        <strong id="zugferdStatusTitle">🔍 Prüfe geöffnetes PDF auf eingebettete E-Rechnungsdaten…</strong>
+                        <div id="zugferdStatusSub" style="font-size:12px;color:var(--text-secondary);margin-top:2px;">Unterstützt ZUGFeRD 1.0/2.x, Factur-X (CII) sowie XRechnung (CII &amp; UBL).</div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button type="button" class="tool-btn" id="btnZugferdLoadExternalXml" title="Separate .xml E-Rechnung zur Prüfung oder Einbettung laden">
+                            📂 XML-Datei laden
+                        </button>
+                        <button type="button" class="tool-btn" id="btnZugferdDownloadXml" style="display:none;">
+                            💾 XML extrahieren
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <input type="file" id="hiddenZugferdXmlInput" accept=".xml,text/xml,application/xml" class="hidden">
+
+            <!-- Visual Invoice Data Display -->
+            <div id="zugferdInvoiceView" style="display:none;margin-bottom:16px;">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px;">
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:11px;color:var(--text-muted);">Rechnungsnummer &amp; Datum</div>
+                        <div id="zfInvIdDate" style="font-size:13.5px;font-weight:700;margin-top:3px;">—</div>
+                        <div id="zfBuyerRef" style="font-size:11.5px;color:var(--accent-primary);margin-top:2px;">Leitweg-ID: —</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:11px;color:var(--text-muted);">Rechnungssteller (Verkäufer)</div>
+                        <div id="zfSellerInfo" style="font-size:12.5px;font-weight:600;margin-top:3px;line-height:1.35;">—</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:11px;color:var(--text-muted);">Rechnungsempfänger (Käufer)</div>
+                        <div id="zfBuyerInfo" style="font-size:12.5px;font-weight:600;margin-top:3px;line-height:1.35;">—</div>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px;">
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:11px;color:var(--text-muted);">Zahlungsverbindung (IBAN / Fälligkeit)</div>
+                        <div id="zfPaymentInfo" style="font-size:12.5px;font-weight:600;margin-top:3px;">—</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:11px;color:var(--text-muted);">Beträge (Netto / Steuer / Brutto)</div>
+                        <div id="zfTotalsInfo" style="font-size:13.5px;font-weight:700;color:#10b981;margin-top:3px;">—</div>
+                    </div>
+                </div>
+
+                <div id="zfLineItemsWrap" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:12px;font-weight:700;margin-bottom:6px;">Rechnungspositionen</div>
+                    <div id="zfLineItemsTable" style="font-size:12px;overflow-x:auto;"></div>
+                </div>
+            </div>
+
+            <!-- Embed / Generate ZUGFeRD EN 16931 XML into current PDF -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
+                <div style="font-size:13px;font-weight:700;margin-bottom:6px;">
+                    ➕ ZUGFeRD 2.2 / Factur-X (EN 16931) XML in das aktuelle PDF einbetten
+                </div>
+                <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">
+                    Erzeugt einen normkonformen <code>factur-x.xml</code>-Datensatz (oder nutzt eine geladene XML-Datei) und bettet ihn als strukturierte E-Rechnung in das geöffnete PDF ein.
+                </p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenInvNumber">Rechnungsnummer</label>
+                        <input type="text" id="zfGenInvNumber" class="form-control" placeholder="z. B. RE-2026-1042" value="RE-2026-1001">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenInvDate">Rechnungsdatum</label>
+                        <input type="date" id="zfGenInvDate" class="form-control" value="<?php echo date('Y-m-d'); ?>">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenLeitweg">Leitweg-ID / Käuferreferenz</label>
+                        <input type="text" id="zfGenLeitweg" class="form-control" placeholder="z. B. 08-12345-67">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenSeller">Verkäufer (Name)</label>
+                        <input type="text" id="zfGenSeller" class="form-control" placeholder="Muster GmbH / Dienststelle">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenBuyer">Käufer (Name)</label>
+                        <input type="text" id="zfGenBuyer" class="form-control" placeholder="Rechnungsempfänger">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenIban">IBAN</label>
+                        <input type="text" id="zfGenIban" class="form-control" placeholder="DE00 0000 0000 0000 0000 00">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenNet">Nettobetrag (EUR)</label>
+                        <input type="number" step="0.01" id="zfGenNet" class="form-control" value="100.00">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                        <label for="zfGenTaxRate">MwSt.-Satz (%)</label>
+                        <input type="number" step="0.1" id="zfGenTaxRate" class="form-control" value="19">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
+            <button type="button" class="tool-btn" data-close-modal="modalZugferd">Schließen</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn btn-primary" id="btnEmbedZugferdXml">
+                    🧾 E-Rechnungs-XML (factur-x.xml) ins PDF einbetten
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL: OFFLINE QR-CODE GENERATOR ON PDF
+     ====================================================================== -->
+<div class="modal-backdrop hidden" id="modalQrCode">
+    <div class="modal-dialog" style="max-width:520px;">
+        <div class="modal-header">
+            <h3>📱 QR-Code direkt auf der PDF-Seite platzieren</h3>
+            <button type="button" class="doc-tab-close" data-close-modal="modalQrCode">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;">
+                Erzeugt zu 100 % offline im Browser einen gestochen scharfen QR-Code (ISO/IEC 18004) und fügt ihn verschieb- und skalierbar auf der aktuellen PDF-Seite ein.
+            </p>
+            <div class="form-row">
+                <label for="qrPayloadInput">Inhalt (Web-Adresse, E-Mail, Aktenzeichen oder Text)</label>
+                <input type="text" id="qrPayloadInput" class="form-control" value="https://runready.cloud" placeholder="https://... oder Aktenzeichen">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div class="form-row">
+                    <label for="qrSizeSelect">Größe auf der Seite</label>
+                    <select id="qrSizeSelect" class="form-control">
+                        <option value="75">Klein (ca. 26 mm)</option>
+                        <option value="105" selected>Mittel (ca. 37 mm)</option>
+                        <option value="145">Groß (ca. 50 mm)</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label for="qrColorSelect">Farbe</label>
+                    <select id="qrColorSelect" class="form-control">
+                        <option value="#000000" selected>Schwarz (#000000)</option>
+                        <option value="#1e3a8a">Behörden-Dunkelblau (#1E3A8A)</option>
+                        <option value="#7f1d1d">Dunkelrot (#7F1D1D)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <label for="qrCaptionInput">Optionale Beschriftung unter dem QR-Code</label>
+                <input type="text" id="qrCaptionInput" class="form-control" placeholder="z. B. Online-Bewerbung / Kennziffer 1026">
+            </div>
+            <div style="display:flex;justify-content:center;padding:12px;background:#ffffff;border-radius:8px;margin-top:8px;">
+                <canvas id="qrPreviewCanvas" width="180" height="180" style="max-width:160px;height:auto;"></canvas>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalQrCode">Abbrechen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnInsertQrIntoPdf">
+                📱 QR-Code auf aktueller Seite einfügen
+            </button>
         </div>
     </div>
 </div>

@@ -1451,6 +1451,67 @@ switch ($action) {
         ));
         break;
 
+    case 'send_pdf_email':
+        pdfstudio_require_csrf();
+        @session_write_close();
+
+        $rl = pdfstudio_check_rate_limit('send_pdf_email');
+        if (empty($rl['allowed'])) {
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => 'Zu viele E-Mail-Anfragen. Bitte warten Sie ' . (int)$rl['retry_after'] . ' Sekunden.'
+            ), 429);
+        }
+
+        $toEmail = isset($_POST['to_email']) ? trim((string)$_POST['to_email']) : '';
+        $replyTo = isset($_POST['reply_to']) ? trim((string)$_POST['reply_to']) : '';
+        $subject = isset($_POST['subject']) ? trim((string)$_POST['subject']) : '';
+        $message = isset($_POST['message']) ? trim((string)$_POST['message']) : '';
+        $filename = isset($_POST['filename']) ? pdfstudio_sanitize_filename($_POST['filename']) : 'dokument.pdf';
+
+        if ($toEmail === '' || strpos($toEmail, '@') === false) {
+            pdfstudio_json_response(array('ok' => false, 'error' => 'Bitte eine gültige Empfänger-E-Mail-Adresse eingeben.'), 400);
+        }
+        if ($subject === '') {
+            $subject = 'PDF-Dokument: ' . $filename;
+        }
+        if ($message === '') {
+            $message = "Guten Tag,\n\nanbei erhalten Sie das PDF-Dokument \"" . $filename . "\".\n\nMit freundlichen Grüßen\nPDF-Werkstatt Pro";
+        }
+
+        $pdfBytes = '';
+        if (isset($_FILES['pdf_file']) && isset($_FILES['pdf_file']['tmp_name']) && is_uploaded_file($_FILES['pdf_file']['tmp_name'])) {
+            $pdfBytes = (string)@file_get_contents($_FILES['pdf_file']['tmp_name']);
+        } elseif (!empty($_POST['pdf_base64'])) {
+            $decoded = @base64_decode((string)$_POST['pdf_base64'], true);
+            if ($decoded !== false) {
+                $pdfBytes = $decoded;
+            }
+        }
+
+        if (strlen($pdfBytes) < 8 || strncmp($pdfBytes, '%PDF-', 5) !== 0) {
+            pdfstudio_json_response(array('ok' => false, 'error' => 'Ungültige oder fehlende PDF-Daten für den E-Mail-Anhang.'), 400);
+        }
+
+        $sendRes = pdfstudio_send_email_with_pdf($toEmail, $subject, $message, $pdfBytes, $filename, $replyTo);
+        if (!empty($sendRes['sent'])) {
+            pdfstudio_record_stat('tool', 'email_shared');
+            pdfstudio_json_response(array(
+                'ok' => true,
+                'method' => $sendRes['method'],
+                'message' => 'PDF "' . $filename . '" wurde erfolgreich per E-Mail an ' . $toEmail . ' gesendet!'
+            ));
+        } else {
+            pdfstudio_record_rate_limit_failure('send_pdf_email');
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => !empty($sendRes['error'])
+                    ? $sendRes['error']
+                    : 'E-Mail konnte nicht versendet werden. Bitte prüfen Sie die SMTP-Einstellungen im Adminbereich (⚙️).'
+            ), 500);
+        }
+        break;
+
     case 'track_event':
         pdfstudio_require_csrf();
         @session_write_close();
