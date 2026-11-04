@@ -4272,7 +4272,8 @@
         var nowSec = new Date(Math.floor(Date.now() / 1000) * 1000);
         var isoDateStr = nowSec.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-        // 0. Remove any stray non-Catalog /Metadata keys & clean nested BDC/EMC inside Form XObjects (/Subtype /Form)
+        // 0. Purge any pre-existing /StructElem & /StructTreeRoot objects (e.g. old <Figure> elements without /Alt),
+        //    remove stray non-Catalog /Metadata keys & clean nested BDC/EMC inside Form XObjects (/Subtype /Form)
         var allIndirect = context.enumerateIndirectObjects();
         for (var ioIdx = 0; ioIdx < allIndirect.length; ioIdx++) {
             var ioRef = allIndirect[ioIdx][0];
@@ -4281,13 +4282,24 @@
             var ioDict = ioObj.dict ? ioObj.dict : (typeof ioObj.get === 'function' ? ioObj : null);
             if (!ioDict || typeof ioDict.get !== 'function') continue;
 
+            var ioType = String(ioDict.get(PDFLib.PDFName.of('Type')) || '');
+            var ioSubtype = String(ioDict.get(PDFLib.PDFName.of('Subtype')) || '');
+            var ioStructS = String(ioDict.get(PDFLib.PDFName.of('S')) || '');
+
+            // Delete old structure tree elements so no orphaned <Figure> without /Alt remains in the PDF
+            if (ioType === '/StructElem' || ioType === '/StructTreeRoot' || (ioStructS && !ioSubtype && ioDict.get(PDFLib.PDFName.of('P')))) {
+                if (typeof context.delete === 'function') {
+                    context.delete(ioRef);
+                }
+                continue;
+            }
+
             if (ioDict !== catalog && ioDict.get(PDFLib.PDFName.of('Metadata'))) {
                 if (typeof ioDict.delete === 'function') {
                     ioDict.delete(PDFLib.PDFName.of('Metadata'));
                 }
             }
 
-            var ioSubtype = String(ioDict.get(PDFLib.PDFName.of('Subtype')) || '');
             if (ioSubtype === '/Form' && (ioObj instanceof PDFLib.PDFRawStream || ioObj.contents)) {
                 var formSrc = decodeRawPdfStreamToString(ioObj);
                 if (formSrc && (formSrc.indexOf('BDC') !== -1 || formSrc.indexOf('BMC') !== -1 || formSrc.indexOf('EMC') !== -1)) {
