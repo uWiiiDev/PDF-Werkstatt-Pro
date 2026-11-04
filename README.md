@@ -12,24 +12,24 @@
   * Visuelles **Seiten-Studio (`☷`)** zum Sortieren per Drag & Drop, Drehen (`90°`), Duplizieren, Löschen sowie dokumentübergreifende **Sammelmappe**
 * **✎ Visueller PDF-Editor & Inline-Textänderung:**
   * Vorhandenen Originaltext im PDF direkt anklicken und umschreiben (`I✎ Text ändern`)
-  * Freitext, Freihand-Stift, Textmarker, Rechtecke, Bilder/Logos und Stempel (`BEZAHLT`, `GENEHMIGT`, `VERTRAULICH` + eigene Tresor-Stempel)
+  * Freitext, Freihand-Stift, Textmarker, Rechtecke, Bilder/Logos und Stempel (`BEZAHLT`, `GENEHMIGT`, `VERTRAULICH`, `ENTWURF`, `KOPIE`, `GEPRÜFT`)
   * **Revisionssicheres Schwärzen (`🛡️ Sanitize`)**: Rastert geschwärzte Seiten physisch neu, sodass darunterliegender Text unwiderruflich aus dem PDF-Datenstrom entfernt wird
-* **✍️ Unterschreiben & persönlicher Signatur-Tresor:**
-  * Unterschrift per Maus/Touch zeichnen oder als Schreibschrift generieren und im persönlichen Konto-Tresor hinterlegen
+* **✍️ Unterschreiben:**
+  * Unterschrift per Maus/Touch zeichnen oder als Schreibschrift generieren und frei verschiebbar auf der PDF-Seite platzieren
 * **🔎 Offline Sandwich-OCR (Durchsuchbares PDF):**
   * Integrierte **Tesseract.js Offline-OCR-Engine** (Deutsch `deu` & Englisch `eng` lokal im Paket enthalten)
   * Wandelt gescannte PDFs und Bilder (auch bei gedrehten Scanner-Seiten) in **echte durchsuchbare Sandwich-PDFs** mit unsichtbar hinterlegter Textebene um
   * Integrierte PDF-Volltextsuche (`Strg + F`) mit farbiger Treffer-Markierung
-* **♿ Barrierefreiheit nach PDF/UA-1, BITV 2.0 & EN 301 549:**
-  * 10-Punkte-Live-Prüfung auf Dokumenttitel (`/Title`), Sprache (`/Lang`), `/DisplayDocTitle`, Tagged PDF (`/MarkInfo`), Strukturbaum (`/StructTreeRoot`), Lesezeichen (`/Outlines`), Tab-Reihenfolge (`/Tabs`) und XMP-Metadaten (`pdfuaid:part=1`)
-  * **1-Klick Auto-Remediation (`🛠️ Barrierefreiheit nachrüsten`)** sowie visueller Tag-Editor (`H1`, `H2`, `P`, `Figure` + `/Alt`-Alternativtext)
+* **♿ Barrierefreiheit nach PDF/UA-1 (PAC 2026), WCAG 2.1/2.2, BITV 2.0 & EN 301 549:**
+  * 12-Punkte-Live-Prüfung auf Dokumenttitel (`/Title`), Sprache (`/Lang`), `/DisplayDocTitle`, Tagged PDF (`/MarkInfo`), Content-Tagging-Baum (`/StructTreeRoot` + `MCID`s), Schrifteinbettung & `/Widths`-Metriken, Tabellen-Kopfzellen (`/TH`), Alternativtexte (`<Figure> /Alt` & `/BBox`), Text-Farbkontrast (WCAG 1.4.3 ≥ 4,5:1), Lesezeichen (`/Outlines`), Tab-Reihenfolge (`/Tabs /S`) und XMP-Metadaten (`pdfuaid:part=1`)
+  * **1-Klick Auto-Remediation (`🛠️ Barrierefreiheit nachrüsten`)** inkl. automatischer Offline-OCR bei Bild-Scans sowie visueller Tag-Editor (`H1`, `H2`, `P`, `Figure` + `/Alt`-Alternativtext)
 * **📋 Zusatzwerkzeuge (Acrobat-Pro-Klasse):**
   * Interaktive PDF-Formulare (**AcroForms**: Textfelder, Checkboxen, Dropdowns) & klickbare Hyperlinks
   * **Visueller & textueller PDF-Vergleich (`⚖️ PDF-Diff`)**
   * **Bates-Nummerierung**, 3-spaltige Kopf-/Fußzeilen, Wasserzeichen, Seitenzuschneiden (**CropBox/MediaBox** in mm) & **PDF-Komprimierung** (96 / 140 / 200 DPI)
   * **Office- & Bild-Konverter** (`.docx`, `.xlsx`, `.csv`, `.html`, `.md`, `.txt`, `JPG/PNG/WebP` → PDF)
-* **☁️ Optionaler persönlicher Tresor & 5-Minuten-Auto-Save:**
-  * Passwortgeschützte Benutzerkonten (mit Selbstlöschungs-Funktion nach DSGVO), automatische Versionshistorie und E-Mail-Freigabelinks
+* **⏱️ Automatische 5-Minuten-Sicherung (Lokaler Auto-Save):**
+  * Automatische Zwischenspeicherung im Browser (`IndexedDB`) inklusive aller beweglichen Annotationen und 1-Klick-Wiederherstellung nach Neustart
 
 ---
 

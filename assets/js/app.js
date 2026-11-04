@@ -5704,11 +5704,7 @@
         try {
             var timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
             var savedLocal = await saveLocalAutoSaveSnapshot(doc);
-            var savedVault = false;
-            if (state.user) {
-                savedVault = await saveActivePdfToServer({ isAutoSave: true });
-            }
-            var targetLabel = savedVault ? 'Tresor & Lokal' : (savedLocal ? 'Lokal' : 'Aktiv');
+            var targetLabel = savedLocal ? 'Lokal' : 'Aktiv';
             updateAutoSaveStatusUI(timeStr, targetLabel);
             setStatus('Automatische 5-Minuten-Sicherung durchgeführt (' + timeStr + ' Uhr — ' + targetLabel + ')');
         } catch (e) {
@@ -6849,11 +6845,15 @@
             case 'focus-watermark':
                 if (!doc) await createNewBlankPdfTab();
                 switchView('editor');
+                var rdWm = document.getElementById('rightDock');
+                if (rdWm) rdWm.classList.remove('collapsed');
                 document.getElementById('wmText').focus();
                 break;
             case 'focus-ocr':
                 if (!doc) await createNewBlankPdfTab();
                 switchView('editor');
+                var rdOcr = document.getElementById('rightDock');
+                if (rdOcr) rdOcr.classList.remove('collapsed');
                 document.getElementById('ocrLang').focus();
                 break;
             case 'apply-watermark':
@@ -7281,375 +7281,6 @@
             });
         }
 
-        // Account Login, Register, Logout, Profile & Stamp Vault Listeners
-        document.getElementById('btnSubmitLogin').addEventListener('click', async function () {
-            var loginId = document.getElementById('loginUsername').value.trim();
-            var pass = document.getElementById('loginPassword').value;
-            var fd = new FormData();
-            fd.append('action', 'login');
-            fd.append('login_id', loginId);
-            fd.append('password', pass);
-
-            var resp = await apiFetch('api.php?action=login', { method: 'POST', body: fd });
-            var data = await resp.json();
-            if (!data.ok) {
-                showToast(data.error || 'Anmeldung fehlgeschlagen', 'error');
-                return;
-            }
-            updateCsrfFromData(data);
-            state.user = data.user;
-            state.quota = data.quota || null;
-            state.workspaceFiles = data.files || [];
-            document.getElementById('loginPassword').value = '';
-            applyUserAccountStateToUI();
-            renderQuotaInfoUI();
-            renderServerFilesList(state.workspaceFiles);
-            switchLeftDockTab('server');
-            showToast('Willkommen zurück, ' + (state.user.display_name || state.user.username) + '! Ihr persönlicher Tresor ist aktiv.', 'success');
-        });
-
-        document.getElementById('btnSubmitRegister').addEventListener('click', async function () {
-            var regPass = document.getElementById('regPassword').value;
-            if (regPass.length < 8) {
-                showToast('Das Passwort muss mindestens 8 Zeichen lang sein.', 'error');
-                return;
-            }
-            var fd = new FormData();
-            fd.append('action', 'register');
-            fd.append('username', document.getElementById('regUsername').value.trim());
-            fd.append('display_name', document.getElementById('regDisplayName').value.trim());
-            fd.append('email', document.getElementById('regEmail').value.trim());
-            fd.append('organization', document.getElementById('regOrg').value.trim());
-            fd.append('password', regPass);
-
-            var resp = await apiFetch('api.php?action=register', { method: 'POST', body: fd });
-            var data = await resp.json();
-            if (!data.ok) {
-                showToast(data.error || 'Registrierung fehlgeschlagen', 'error');
-                return;
-            }
-            updateCsrfFromData(data);
-            state.user = data.user;
-            state.quota = data.quota || null;
-            state.workspaceFiles = data.files || [];
-            document.getElementById('regPassword').value = '';
-            applyUserAccountStateToUI();
-            renderQuotaInfoUI();
-            renderServerFilesList(state.workspaceFiles);
-            switchLeftDockTab('server');
-            showToast('Konto erfolgreich angelegt! Ihr persönlicher Tresor & Ihre Vorlagen sind bereit.', 'success');
-        });
-
-        document.getElementById('btnLogoutAccount').addEventListener('click', async function () {
-            await performLogoutAccount();
-        });
-
-        var btnJumpPass = document.getElementById('btnJumpToPasswordSection');
-        if (btnJumpPass) {
-            btnJumpPass.addEventListener('click', function () {
-                openPasswordChangeModal();
-            });
-        }
-
-        var btnChangePassDirect = document.getElementById('btnChangePasswordDirect');
-        if (btnChangePassDirect) {
-            btnChangePassDirect.addEventListener('click', async function () {
-                var curPass = document.getElementById('changePassCurrent').value;
-                var newPass = document.getElementById('changePassNew').value;
-                var confPass = document.getElementById('changePassConfirm').value;
-
-                if (!curPass) {
-                    showToast('Bitte geben Sie Ihr aktuelles Passwort ein.', 'error');
-                    return;
-                }
-                if (newPass.length < 8) {
-                    showToast('Das neue Passwort muss mindestens 8 Zeichen lang sein.', 'error');
-                    return;
-                }
-                if (newPass !== confPass) {
-                    showToast('Die beiden neuen Passwörter stimmen nicht überein.', 'error');
-                    return;
-                }
-
-                var fd = new FormData();
-                fd.append('action', 'change_password');
-                fd.append('current_password', curPass);
-                fd.append('new_password', newPass);
-                fd.append('new_password_confirm', confPass);
-
-                var resp = await apiFetch('api.php?action=change_password', { method: 'POST', body: fd });
-                var data = await resp.json();
-                if (!data.ok) {
-                    showToast(data.error || 'Passwortänderung fehlgeschlagen', 'error');
-                    return;
-                }
-                updateCsrfFromData(data);
-                document.getElementById('changePassCurrent').value = '';
-                document.getElementById('changePassNew').value = '';
-                document.getElementById('changePassConfirm').value = '';
-                showToast('Ihr Passwort wurde erfolgreich geändert!', 'success');
-            });
-        }
-
-        document.getElementById('btnSaveAccountProfile').addEventListener('click', async function () {
-            var fd = new FormData();
-            fd.append('action', 'save_profile');
-            fd.append('display_name', document.getElementById('profDisplayName').value.trim());
-            fd.append('email', document.getElementById('profEmail').value.trim());
-            fd.append('default_author', document.getElementById('profAuthor').value.trim());
-            fd.append('organization', document.getElementById('profOrg').value.trim());
-            fd.append('default_lang', document.getElementById('profLang').value);
-            fd.append('default_watermark', document.getElementById('profWatermark').value.trim());
-            fd.append('bates_prefix', document.getElementById('profBatesPrefix').value.trim());
-            fd.append('bates_counter', document.getElementById('profBatesCounter').value);
-            fd.append('footer_left', document.getElementById('profFooterLeft').value.trim());
-            fd.append('footer_right', document.getElementById('profFooterRight').value.trim());
-            var newPassEl = document.getElementById('profNewPassword');
-            if (newPassEl && newPassEl.value.trim() !== '') {
-                if (newPassEl.value.length < 8) {
-                    showToast('Das neue Passwort muss mindestens 8 Zeichen lang sein.', 'error');
-                    return;
-                }
-                fd.append('new_password', newPassEl.value);
-            }
-
-            var resp = await apiFetch('api.php?action=save_profile', { method: 'POST', body: fd });
-            var data = await resp.json();
-            if (!data.ok) {
-                showToast(data.error || 'Speichern fehlgeschlagen', 'error');
-                return;
-            }
-            if (data.user) {
-                state.user = data.user;
-                if (newPassEl) newPassEl.value = '';
-                applyUserAccountStateToUI();
-                showToast('Persönliche Profil-Vorlagen & Einstellungen gespeichert!', 'success');
-            }
-        });
-
-        var btnDeleteMyAcc = document.getElementById('btnDeleteMyAccount');
-        if (btnDeleteMyAcc) {
-            btnDeleteMyAcc.addEventListener('click', async function () {
-                var passInput = document.getElementById('deleteAccountPassConfirm');
-                var curPass = passInput ? passInput.value : '';
-                if (!curPass) {
-                    showToast('Bitte geben Sie zur Bestätigung Ihr aktuelles Passwort ein.', 'error');
-                    if (passInput) passInput.focus();
-                    return;
-                }
-
-                var confirmed = window.confirm(
-                    'Möchten Sie Ihr Benutzerkonto inklusive aller im Tresor gespeicherten PDF-Dokumente, Versionen, Unterschriften und E-Mail-Freigaben wirklich unwiderruflich löschen?'
-                );
-                if (!confirmed) {
-                    return;
-                }
-
-                var fd = new FormData();
-                fd.append('action', 'delete_account');
-                fd.append('current_password', curPass);
-
-                var resp = await apiFetch('api.php?action=delete_account', { method: 'POST', body: fd });
-                var data = await resp.json();
-                if (!data.ok) {
-                    showToast(data.error || 'Kontolöschung fehlgeschlagen', 'error');
-                    return;
-                }
-
-                updateCsrfFromData(data);
-                if (passInput) passInput.value = '';
-                state.user = null;
-                state.quota = null;
-                state.workspaceFiles = [];
-                applyUserAccountStateToUI();
-                renderQuotaInfoUI();
-                renderServerFilesList([]);
-                closeModal('modalAccount');
-                showToast('Ihr Benutzerkonto und alle zugehörigen Tresor-Daten wurden vollständig gelöscht.', 'success');
-            });
-        }
-
-        // Password Reset via Email Link Listeners
-        document.getElementById('btnToggleForgotPass').addEventListener('click', function (e) {
-            e.preventDefault();
-            var box = document.getElementById('forgotPasswordBox');
-            box.classList.toggle('hidden');
-            var loginVal = document.getElementById('loginUsername').value.trim();
-            if (loginVal && !document.getElementById('forgotPassInput').value) {
-                document.getElementById('forgotPassInput').value = loginVal;
-            }
-        });
-
-        document.getElementById('btnRequestPasswordReset').addEventListener('click', async function () {
-            var loginId = document.getElementById('forgotPassInput').value.trim();
-            if (!loginId) {
-                showToast('Bitte geben Sie Ihren Benutzernamen oder Ihre E-Mail-Adresse ein.', 'error');
-                return;
-            }
-
-            var fd = new FormData();
-            fd.append('action', 'request_password_reset');
-            fd.append('login_id', loginId);
-
-            var resp = await apiFetch('api.php?action=request_password_reset', { method: 'POST', body: fd });
-            var data = await resp.json();
-            if (!data.ok) {
-                showToast(data.error || 'Anfrage fehlgeschlagen', 'error');
-                return;
-            }
-
-            var resBox = document.getElementById('forgotPassResultBox');
-            resBox.classList.remove('hidden');
-            var mailtoEl = document.getElementById('forgotPassMailtoLink');
-            var directEl = document.getElementById('forgotPassDirectLink');
-
-            if (data.reset_url) {
-                directEl.href = data.reset_url;
-                directEl.classList.remove('hidden');
-                if (data.mailto_url) {
-                    mailtoEl.href = data.mailto_url;
-                    mailtoEl.classList.remove('hidden');
-                }
-            } else {
-                directEl.classList.add('hidden');
-                mailtoEl.classList.add('hidden');
-            }
-
-            document.getElementById('forgotPassResultText').textContent = data.mail_sent
-                ? '✔ E-Mail mit dem Zurücksetzungs-Link wurde an ' + data.email + ' gesendet (60 Min. gültig)!'
-                : '✔ Zurücksetzungs-Anfrage für ' + data.email + ' verarbeitet (bitte Postfach prüfen).';
-
-            showToast('Passwort-Zurücksetzung für ' + data.email + ' ausgelöst!', 'success');
-        });
-
-        document.getElementById('btnCancelPasswordReset').addEventListener('click', function () {
-            if (window.history && window.history.replaceState) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
-            applyUserAccountStateToUI();
-        });
-
-        document.getElementById('btnConfirmPasswordReset').addEventListener('click', async function () {
-            var token = document.getElementById('resetPassTokenHidden').value;
-            var p1 = document.getElementById('resetNewPassword').value;
-            var p2 = document.getElementById('resetNewPasswordConfirm').value;
-
-            if (p1.length < 8) {
-                showToast('Das neue Passwort muss mindestens 8 Zeichen lang sein.', 'error');
-                return;
-            }
-            if (p1 !== p2) {
-                showToast('Die beiden eingegebenen Passwörter stimmen nicht überein.', 'error');
-                return;
-            }
-
-            var fd = new FormData();
-            fd.append('action', 'confirm_password_reset');
-            fd.append('token', token);
-            fd.append('new_password', p1);
-
-            var resp = await apiFetch('api.php?action=confirm_password_reset', { method: 'POST', body: fd });
-            var data = await resp.json();
-            if (!data.ok) {
-                showToast(data.error || 'Zurücksetzen fehlgeschlagen', 'error');
-                return;
-            }
-            updateCsrfFromData(data);
-
-            if (window.history && window.history.replaceState) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
-
-            document.getElementById('resetNewPassword').value = '';
-            document.getElementById('resetNewPasswordConfirm').value = '';
-            state.user = data.user;
-            state.quota = data.quota || null;
-            state.workspaceFiles = data.files || [];
-            applyUserAccountStateToUI();
-            renderQuotaInfoUI();
-            renderServerFilesList(state.workspaceFiles);
-            switchLeftDockTab('server');
-            showToast('Ihr Passwort wurde erfolgreich geändert und Sie sind jetzt angemeldet!', 'success');
-        });
-
-        document.getElementById('btnAddVaultStamp').addEventListener('click', async function () {
-            var txt = document.getElementById('newVaultStampText').value.trim();
-            var col = document.getElementById('newVaultStampColor').value || '#16a34a';
-            if (!txt) {
-                showToast('Bitte geben Sie einen Stempel-Text ein.', 'error');
-                return;
-            }
-            var fd = new FormData();
-            fd.append('action', 'save_stamp_vault');
-            fd.append('text', txt);
-            fd.append('color', col);
-            var resp = await apiFetch('api.php?action=save_stamp_vault', { method: 'POST', body: fd });
-            var data = await resp.json();
-            if (data.ok && data.user) {
-                state.user = data.user;
-                document.getElementById('newVaultStampText').value = '';
-                renderUserStampsVault();
-                showToast('Eigener Stempel im Tresor hinterlegt!', 'success');
-            }
-        });
-
-        // Email Share Modal Listeners
-        document.getElementById('btnCreateEmailShare').addEventListener('click', async function () {
-            var selectedName = document.getElementById('shareFilenameSelect').value;
-            var recipient = document.getElementById('shareRecipientEmail').value.trim();
-            var allowEdit = document.getElementById('shareAllowEdit').value;
-            var expiresDays = document.getElementById('shareExpiresDays').value;
-            var msg = document.getElementById('shareCustomMessage').value.trim();
-
-            if (!recipient || recipient.indexOf('@') === -1) {
-                showToast('Bitte geben Sie eine gültige Empfänger-E-Mail-Adresse ein.', 'error');
-                return;
-            }
-
-            setProgress(40, 'Erzeuge E-Mail-Freigabe & speichere aktuellen Stand…');
-
-            // If the selected document is the currently open tab, save it to the vault first so the latest state is shared
-            var activeDoc = getActiveDoc();
-            if (activeDoc && activeDoc.name === selectedName) {
-                await saveActivePdfToServer();
-            }
-
-            var fd = new FormData();
-            fd.append('action', 'create_share');
-            fd.append('filename', selectedName || (activeDoc ? activeDoc.name : 'dokument.pdf'));
-            fd.append('recipient_email', recipient);
-            fd.append('allow_edit', allowEdit);
-            fd.append('expires_days', expiresDays);
-            fd.append('message', msg);
-
-            var resp = await apiFetch('api.php?action=create_share', { method: 'POST', body: fd });
-            var data = await resp.json();
-            setProgress(null);
-
-            if (!data.ok) {
-                showToast(data.error || 'Freigabe fehlgeschlagen', 'error');
-                return;
-            }
-
-            var resBox = document.getElementById('shareResultBox');
-            resBox.classList.remove('hidden');
-            document.getElementById('shareResultUrlInput').value = data.share_url;
-            document.getElementById('shareMailtoLink').href = data.mailto_url;
-            document.getElementById('shareResultStatusText').textContent = data.mail_sent
-                ? '✔ E-Mail an ' + recipient + ' wurde vom Server versendet!'
-                : '✔ Freigabe-Link für ' + recipient + ' bereit (klicken Sie unten, um die E-Mail im Mail-Programm zu senden):';
-
-            await refreshActiveSharesList();
-            showToast('Freigabe-Link erstellt für ' + recipient, 'success');
-        });
-
-        document.getElementById('btnCopyShareUrl').addEventListener('click', function () {
-            var inp = document.getElementById('shareResultUrlInput');
-            inp.select();
-            navigator.clipboard.writeText(inp.value);
-            showToast('Freigabe-Link in die Zwischenablage kopiert!', 'success');
-        });
-
         // Global Drag & Drop of files into the window
         var dropOverlay = document.getElementById('dropOverlay');
         window.addEventListener('dragover', function (e) {
@@ -7798,11 +7429,11 @@
             cmdLabel: '▶️ Seiten-Studio öffnen'
         },
         'sign-stamp': {
-            title: '✍️ Unterschrift, Signatur-Tresor & Stempel',
+            title: '✍️ Unterschrift & Stempel',
             keywords: ['unterschrift', 'signatur', 'unterschreiben', 'signieren', 'stempel', 'bezahlt', 'genehmigt', 'bild', 'logo'],
             html: '<strong>Unterschreiben &amp; Stempeln:</strong><br>' +
-                  '• <strong>Unterschrift:</strong> Klicken Sie auf <em>✍️ Signatur</em>. Zeichnen Sie mit der Maus oder tippen Sie Ihren Namen als Schreibschrift ein. Mit <em>„⭐ Im Konto-Tresor speichern“</em> steht Ihre Unterschrift künftig per 1-Klick bereit.<br>' +
-                  '• <strong>Stempel:</strong> Wählen Sie unter <em>✎ Bearbeiten → 🏷️ Stempel</em> und rechts im Inspektor den gewünschten Stempeltext (oder eigene Tresor-Stempel).',
+                  '• <strong>Unterschrift:</strong> Klicken Sie auf <em>✍️ Signatur</em>. Zeichnen Sie mit der Maus oder tippen Sie Ihren Namen als Schreibschrift ein.<br>' +
+                  '• <strong>Stempel:</strong> Wählen Sie unter <em>✎ Bearbeiten → 🏷️ Stempel</em> und im rechten Inspektor (Button <code>◨</code> oben rechts) den gewünschten Stempeltext.',
             cmd: 'open-signature-modal',
             cmdLabel: '▶️ Unterschriften-Fenster öffnen'
         },
@@ -7835,43 +7466,33 @@
             cmdLabel: '▶️ Durchsuchbares PDF (OCR) starten'
         },
         'a11y': {
-            title: '♿ Barrierefreiheit (PDF/UA & BITV 2.0)',
-            keywords: ['barrierefrei', 'barrierefreiheit', 'pdf/ua', 'bitv', 'wcag', 'screenreader', 'blinde', 'alt-text', 'tags', 'strukturbaum', 'auto-fix'],
-            html: '<strong>Barrierefreie PDFs nach PDF/UA &amp; BITV 2.0:</strong><br>' +
-                  '• Im Reiter <em>♿ Barrierefreiheit</em> prüft <strong>♿ PDF/UA Prüfung</strong> Ihr Dokument auf alle 10 Pflichtkriterien.<br>' +
-                  '• Mit <strong>⚡ Auto-Fix PDF/UA</strong> rüsten Sie fehlende Metadaten, Dokumenttitel, Sprache (<code>de-DE</code>), XMP-Header und den Strukturbaum (<code>/StructTreeRoot</code>) mit einem Klick nach.<br>' +
-                  '• Mit <strong>H1/H2/P/🖼️ Alt-Text</strong> vergeben Sie Lesereihenfolge und Alternativtexte für Bilder.',
+            title: '♿ Barrierefreiheit (PDF/UA-1, WCAG 2.1 & BITV 2.0)',
+            keywords: ['barrierefrei', 'barrierefreiheit', 'pdf/ua', 'bitv', 'wcag', 'screenreader', 'blinde', 'alt-text', 'tags', 'strukturbaum', 'auto-fix', 'pac'],
+            html: '<strong>Barrierefreie PDFs nach PDF/UA-1 (PAC 2026) &amp; WCAG 2.1:</strong><br>' +
+                  '• Im Reiter <em>♿ Barrierefreiheit</em> prüft <strong>♿ PDF/UA Prüfung</strong> Ihr Dokument auf alle 12 PDF/UA-1- &amp; WCAG-Kriterien.<br>' +
+                  '• Mit <strong>⚡ Auto-Fix PDF/UA</strong> rüsten Sie fehlende Metadaten, Dokumenttitel, Sprache (<code>de-DE</code>), XMP-Header, Schriftmetriken, Kontraste, Alt-Texte, den getaggten Strukturbaum (<code>/StructTreeRoot</code> + MCIDs) und bei Scans sogar automatisch eine Offline-OCR-Schicht mit einem Klick nach!',
             cmd: 'open-a11y-modal',
             cmdLabel: '▶️ PDF/UA Barrierefreiheits-Assistent öffnen'
         },
-        'vault': {
-            title: '☁️ Persönlicher Tresor, Versionen & 5-Min.-Auto-Save',
-            keywords: ['tresor', 'speichern', 'server', 'cloud', 'autosave', 'auto-save', 'automatisch', 'sicherung', 'version', 'versionshistorie', 'wiederherstellen', 'teilen', 'e-mail'],
-            html: '<strong>Persönlicher Tresor &amp; 5-Minuten-Auto-Save:</strong><br>' +
-                  '• <strong>Tresor:</strong> Angemeldete Kontoinhaber speichern Dokumente über <em>☁️ Im Tresor speichern</em> geschützt auf dem Server — inklusive editierbarem Projektstand und automatischer Versionshistorie.<br>' +
-                  '• <strong>5-Minuten-Auto-Save:</strong> Alle 5 Minuten sichert PDF-Werkstatt Pro Ihr geöffnetes Dokument automatisch im Tresor (und lokal im Browser). Unten in der Statusleiste sehen Sie jederzeit den Status (<code>⏱️ Auto-Save (5 Min.)</code>).',
-            cmd: 'open-server-modal',
-            cmdLabel: '▶️ Server-Tresor öffnen'
-        },
-        'account': {
-            title: '🔑 Benutzerkonto, Passwort ändern & Abmelden',
-            keywords: ['konto', 'login', 'anmelden', 'abmelden', 'logout', 'passwort', 'registrieren', 'benutzer', 'vergessen', 'bates', 'kopfzeile', 'fußzeile', 'wasserzeichen'],
-            html: '<strong>Benutzerkonto, Passwort ändern &amp; Abmelden:</strong><br>' +
-                  '• Oben rechts in der Titelleiste finden Sie <strong>👤 Konto</strong> sowie nach der Anmeldung direkt die Buttons <strong>🔑 Passwort</strong> und <strong>🚪 Abmelden</strong>.<br>' +
-                  '• Das Passwort muss mindestens <strong>8 Zeichen</strong> lang sein und lässt sich jederzeit im Konto unter <em>„1. Passwort ändern“</em> aktualisieren.<br>' +
-                  '• Im Konto speichern Sie außerdem Ihre Standard-Vorlagen für Wasserzeichen, Kopf-/Fußzeilen und den fortlaufenden Bates-Zähler.',
-            cmd: 'open-account-modal',
-            cmdLabel: '▶️ Benutzerkonto / Login öffnen'
+        'autosave': {
+            title: '⏱️ Automatische 5-Minuten-Sicherung (Auto-Save)',
+            keywords: ['autosave', 'auto-save', 'automatisch', 'sicherung', 'speichern', 'wiederherstellen', 'absturz', 'browser'],
+            html: '<strong>Automatische 5-Minuten-Sicherung im Browser:</strong><br>' +
+                  '• Alle 5 Minuten sichert PDF-Werkstatt Pro Ihr geöffnetes Dokument inklusive aller Textfelder, Zeichnungen und Barrierefreiheits-Tags automatisch lokal in Ihrem Browser (IndexedDB).<br>' +
+                  '• Unten in der Statusleiste sehen Sie jederzeit den Status (<code>⏱️ Auto-Save (5 Min.)</code>) und können die Sicherung per Klick ein- oder ausschalten.',
+            cmd: 'toggle-autosave',
+            cmdLabel: '▶️ Auto-Save umschalten'
         },
         'shortcuts': {
             title: '⌨️ Tastenkürzel & Vollbildmodus',
-            keywords: ['tastenkürzel', 'tasten', 'shortcut', 'strg', 'vollbild', 'f11', 'f1', 'rückgängig', 'undo', 'zoom', 'design', 'dark', 'light'],
-            html: '<strong>Wichtige Tastenkombinationen:</strong><br>' +
+            keywords: ['tastenkürzel', 'tasten', 'shortcut', 'strg', 'vollbild', 'f11', 'f1', 'rückgängig', 'undo', 'zoom', 'design', 'dark', 'light', 'eigenschaften'],
+            html: '<strong>Wichtige Tastenkombinationen &amp; Ansichten:</strong><br>' +
                   '• <code>Strg + O</code> : PDF-Datei öffnen<br>' +
                   '• <code>Strg + S</code> : PDF speichern / herunterladen<br>' +
+                  '• <code>Strg + F</code> : Volltextsuche im PDF<br>' +
                   '• <code>Strg + Z</code> : Letzte Aktion rückgängig machen<br>' +
                   '• <code>Entf</code> : Ausgewähltes Element löschen<br>' +
-                  '• <code>Doppelklick</code> : Text eines Elements im Editor direkt ändern<br>' +
+                  '• <code>◨</code> (oben rechts) : Werkzeug-Eigenschaften rechts ein-/ausblenden<br>' +
                   '• <code>F11</code> (oder Button <code>⛶</code> oben rechts) : Vollbildmodus umschalten<br>' +
                   '• <code>F1</code> : Großes Benutzerhandbuch öffnen',
             cmd: 'toggle-fullscreen',
@@ -7886,7 +7507,7 @@
         var docInfo = doc ? ('Dokument <em>„' + escapeHtml(doc.name) + '“</em> (Seite ' + (doc.currentPage + 1) + '/' + doc.pageCount + ') — ') : 'Noch kein PDF geöffnet — ';
 
         if (state.viewMode === 'launcher') {
-            bannerEl.innerHTML = docInfo + 'Sie befinden sich im <strong>Start-Dashboard (Alle Tools)</strong>. Klicken Sie auf eine Kachel oder ziehen Sie eine PDF-Datei ins Fenster.';
+            bannerEl.innerHTML = docInfo + 'Sie befinden sich auf der <strong>Start-Ansicht</strong>. Klicken Sie auf <strong>📂 PDF-Datei öffnen</strong> oder ziehen Sie eine PDF-Datei ins Fenster.';
         } else if (state.viewMode === 'organizer') {
             bannerEl.innerHTML = docInfo + 'Sie sind im <strong>Seiten-Studio</strong>. Ziehen Sie Seiten per Maus an eine neue Position oder drehen/löschen Sie Seiten direkt auf der Karte.';
         } else {
@@ -7895,7 +7516,7 @@
                 'edit-text': 'Werkzeug <strong>I✎ Text ändern</strong> aktiv: Klicken Sie auf eine <strong>blau umrahmte Textzeile</strong> im PDF, um den Originaltext direkt umzuschreiben.',
                 text: 'Werkzeug <strong>T+ Neuer Text</strong> aktiv: Klicken Sie auf eine freie Stelle im PDF, um neuen Text einzufügen.',
                 redact: 'Werkzeug <strong>⬛ Schwärzen</strong> aktiv: Ziehen Sie Rahmen über sensible Stellen und klicken Sie danach auf <strong>🛡️ Sanitize</strong>.',
-                stamp: 'Werkzeug <strong>🏷️ Stempel</strong> aktiv: Wählen Sie rechts im Inspektor den Stempeltext und klicken Sie auf die Seite.'
+                stamp: 'Werkzeug <strong>🏷️ Stempel</strong> aktiv: Blenden Sie bei Bedarf oben rechts mit <code>◨</code> die Werkzeug-Eigenschaften ein, um den Stempeltext zu wählen.'
             };
             bannerEl.innerHTML = docInfo + (toolTips[state.activeTool] || ('Visueller <strong>PDF-Editor</strong> aktiv (Werkzeug: ' + escapeHtml(state.activeTool) + ').'));
         }
@@ -8211,7 +7832,5 @@
     initEventListeners();
     initFloatingAssistant();
     initAutoSaveTimer();
-    loadServerWorkspaceFiles();
-    checkIncomingSharedDocumentLink();
-    checkIncomingPasswordResetToken();
+    renderUserStampsVault();
 })();

@@ -87,8 +87,8 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
         <div class="titlebar-center">
             <!-- Compact Workspace Mode Switcher -->
             <div class="mode-switcher">
-                <button type="button" class="mode-btn active" id="modeBtnLauncher" data-cmd="view-launcher" title="Alle Werkzeuge als Kacheln">
-                    ⊞ Alle Tools
+                <button type="button" class="mode-btn active" id="modeBtnLauncher" data-cmd="view-launcher" title="Startansicht">
+                    🏠 Start
                 </button>
                 <button type="button" class="mode-btn" id="modeBtnOrganizer" data-cmd="view-organizer" title="Seiten-Sortierer">
                     ☷ Seiten-Studio
@@ -100,18 +100,8 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
         </div>
 
         <div class="titlebar-right">
-            <button type="button" class="php-pill" id="accountHeaderBtn" data-cmd="open-account-modal" style="cursor:pointer;background:rgba(59,130,246,0.16);color:#60a5fa;border-color:rgba(59,130,246,0.35);" title="Persönliches Konto, Tresor &amp; Profil-Vorlagen öffnen">
-                👤 <span id="accountHeaderLabel">Konto / Login (Gast)</span>
-            </button>
-            <button type="button" class="php-pill hidden" id="headerChangePassBtn" data-cmd="open-password-change" style="cursor:pointer;background:rgba(245,158,11,0.16);color:#fbbf24;border-color:rgba(245,158,11,0.35);" title="Passwort Ihres Benutzerkontos ändern">
-                🔑 Passwort
-            </button>
-            <button type="button" class="php-pill hidden" id="headerLogoutBtn" data-cmd="logout-account" style="cursor:pointer;background:rgba(239,68,68,0.16);color:#f87171;border-color:rgba(239,68,68,0.35);" title="Aus Ihrem Benutzerkonto abmelden">
-                🚪 Abmelden
-            </button>
-
             <button type="button" class="qa-btn" data-cmd="toggle-left-dock" title="Linke Seitenleiste ein-/ausblenden">◧</button>
-            <button type="button" class="qa-btn" data-cmd="toggle-right-dock" title="Rechten Inspektor ein-/ausblenden">◨</button>
+            <button type="button" class="qa-btn" data-cmd="toggle-right-dock" title="Werkzeug-Eigenschaften rechts ein-/ausblenden">◨</button>
             <button type="button" class="qa-btn" data-cmd="toggle-theme" title="Dark / Light Theme wechseln">◐</button>
             <button type="button" class="qa-btn" id="btnFullscreenTitlebar" data-cmd="toggle-fullscreen" title="Vollbild-Modus umschalten — Browserelemente ausblenden (F11)">⛶</button>
             <button type="button" class="qa-btn" data-cmd="open-help" title="Benutzerhandbuch &amp; Funktionshilfe öffnen (F1)">❓</button>
@@ -197,22 +187,6 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                         <span class="rb-icon">💾</span>
                         <span class="rb-label">Download</span>
                     </button>
-                    <button type="button" class="ribbon-btn" data-cmd="save-server" title="PDF inklusive editierbarem Projektstand &amp; Versionshistorie im Tresor speichern">
-                        <span class="rb-icon">☁️</span>
-                        <span class="rb-label">Im Tresor speichern</span>
-                    </button>
-                    <button type="button" class="ribbon-btn" data-cmd="open-share-modal" title="Dokument per E-Mail-Freigabelink mit Kollegen teilen">
-                        <span class="rb-icon">✉️</span>
-                        <span class="rb-label">Per E-Mail teilen</span>
-                    </button>
-                    <button type="button" class="ribbon-btn" data-cmd="open-account-modal" title="Persönliches Konto, Passwort ändern, Stempel-Tresor &amp; Profil-Vorlagen">
-                        <span class="rb-icon">👤</span>
-                        <span class="rb-label">Mein Konto</span>
-                    </button>
-                    <button type="button" class="ribbon-btn hidden" id="ribbonLogoutBtn" data-cmd="logout-account" title="Aus Ihrem Benutzerkonto abmelden">
-                        <span class="rb-icon">🚪</span>
-                        <span class="rb-label">Abmelden</span>
-                    </button>
                     <button type="button" class="ribbon-btn" data-cmd="print-pdf">
                         <span class="rb-icon">🖨️</span>
                         <span class="rb-label">Drucken</span>
@@ -226,7 +200,7 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                         <span class="rb-label">Hilfe</span>
                     </button>
                 </div>
-                <div class="ribbon-section-title">Tresor, E-Mail-Freigabe &amp; Ansicht</div>
+                <div class="ribbon-section-title">Export, Drucken &amp; Ansicht</div>
             </div>
         </div>
 
@@ -615,12 +589,11 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
          ================================================================== -->
     <div class="workspace" id="mainWorkspace">
 
-        <!-- LEFT DOCK: Pages / Sammelmappe / Server Storage -->
+        <!-- LEFT DOCK: Pages & Sammelmappe -->
         <aside class="left-dock" id="leftDock">
             <div class="dock-tabs">
                 <button type="button" class="dock-tab active" data-docktab="pages">Seiten</button>
                 <button type="button" class="dock-tab" data-docktab="tray">Sammelmappe (<span id="trayCountBadge">0</span>)</button>
-                <button type="button" class="dock-tab" data-docktab="server">☁️ Tresor</button>
             </div>
 
             <!-- Tab 1: Page Thumbnails -->
@@ -657,41 +630,6 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                     <div class="thumb-list" id="trayList"></div>
                 </div>
             </div>
-
-            <!-- Tab 3: Personal Account Vault (Login Protected) -->
-            <div class="dock-panel hidden" id="dockPanelServer">
-                <div class="dock-header-actions">
-                    <span id="vaultStatusLabel">🔒 Tresor (Login erforderlich)</span>
-                    <div style="display:flex;gap:4px;">
-                        <button type="button" class="thumb-icon-btn" data-cmd="open-account-modal" title="Konto &amp; Profil-Einstellungen">👤</button>
-                        <button type="button" class="thumb-icon-btn" data-cmd="refresh-server-files" title="Aktualisieren">↻</button>
-                    </div>
-                </div>
-                <div class="dock-body">
-                    <div id="vaultAuthControls" class="hidden">
-                        <!-- Storage Quota Progress Bar (configured in config.php) -->
-                        <div id="vaultQuotaBox" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:6px;padding:7px 9px;margin-bottom:8px;">
-                            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px;">
-                                <span style="color:var(--text-secondary);">Speicherplatz:</span>
-                                <span id="vaultQuotaText" style="font-weight:700;color:var(--text-primary);">— / —</span>
-                            </div>
-                            <div style="height:5px;background:var(--bg-input);border-radius:999px;overflow:hidden;">
-                                <div id="vaultQuotaFill" style="height:100%;width:0%;background:var(--accent-primary);transition:width 0.25s ease;"></div>
-                            </div>
-                        </div>
-
-                        <div style="display:flex;gap:6px;margin-bottom:10px;">
-                            <button type="button" class="tool-btn btn-primary" data-cmd="save-server" style="flex:1;" title="Speichert das PDF + alle verschiebbaren Textfelder/Stempel als Projekt + legt automatisch eine neue Version an">
-                                ☁️ Projekt &amp; PDF speichern
-                            </button>
-                            <button type="button" class="tool-btn" data-cmd="open-share-modal" title="Aktuelles Dokument per E-Mail teilen">
-                                ✉️
-                            </button>
-                        </div>
-                    </div>
-                    <div id="serverFilesList" style="display:flex;flex-direction:column;gap:8px;"></div>
-                </div>
-            </div>
         </aside>
 
         <!-- CENTER VIEWPORT -->
@@ -703,161 +641,19 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                 <p style="color:var(--text-secondary);">PDFs, Bilder (JPG/PNG/WebP), Word (.docx), Excel (.xlsx) oder Textdateien</p>
             </div>
 
-            <!-- VIEW A: LAUNCHER DASHBOARD -->
+            <!-- VIEW A: START VIEW -->
             <section class="launcher-view" id="viewLauncher">
                 <div class="launcher-hero">
                     <div class="launcher-hero-text">
-                        <h1>PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?> — Ihre Desktop-PDF-Suite im Browser</h1>
+                        <h1>PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?></h1>
                         <p>
-                            Professionelle PDF-Bearbeitung, Konvertierung, OCR-Texterkennung und Barrierefreiheits-Prüfung (PDF/UA) als schnelle Desktop-Oberfläche (100 % Offline • Automatische 5-Minuten-Sicherung).
-                            Ziehen Sie Dateien einfach per Drag &amp; Drop in dieses Fenster oder starten Sie mit einem Werkzeug:
+                            Ziehen Sie eine PDF-Datei per Drag &amp; Drop in dieses Fenster oder klicken Sie rechts auf <strong>PDF-Datei öffnen</strong>.
                         </p>
                     </div>
                     <div class="launcher-hero-actions">
-                        <button type="button" class="tool-btn btn-primary" data-cmd="open-pdf" style="height:38px;padding:0 16px;font-size:13px;">
+                        <button type="button" class="tool-btn btn-primary" data-cmd="open-pdf" style="height:40px;padding:0 18px;font-size:13.5px;">
                             📂 PDF-Datei öffnen
                         </button>
-                        <button type="button" class="tool-btn" data-cmd="new-blank-pdf" style="height:38px;padding:0 16px;font-size:13px;">
-                            📄 Neues leeres PDF (A4)
-                        </button>
-                        <button type="button" class="tool-btn" data-cmd="open-help" style="height:38px;padding:0 16px;font-size:13px;">
-                            ❓ Handbuch &amp; Hilfe
-                        </button>
-                    </div>
-                </div>
-
-                <div class="launcher-section-title">1. Seiten organisieren, zusammenfügen &amp; teilen</div>
-                <div class="tools-grid">
-                    <div class="tool-tile" data-cmd="merge-files">
-                        <div class="tool-tile-icon">📑</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF zusammenfügen</h3>
-                            <p>Mehrere PDF-Dateien auswählen, Reihenfolge anpassen und zu einem PDF verbinden.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-split-modal">
-                        <div class="tool-tile-icon">✂️</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF teilen &amp; extrahieren</h3>
-                            <p>Seitenbereiche (z. B. 1-3, 5) extrahieren oder jede Seite als einzelnes PDF speichern.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="view-organizer">
-                        <div class="tool-tile-icon">☷</div>
-                        <div class="tool-tile-body">
-                            <h3>Seiten sortieren, drehen &amp; löschen</h3>
-                            <p>Übersichtliches Seiten-Studio zum Umsortieren per Drag &amp; Drop, Drehen und Entfernen.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-tray-panel">
-                        <div class="tool-tile-icon">🗂️</div>
-                        <div class="tool-tile-body">
-                            <h3>Sammelmappe</h3>
-                            <p>Einzelne Seiten aus verschiedenen Dokument-Tabs sammeln und neu kombinieren.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="launcher-section-title">2. Visueller PDF-Editor, Signatur &amp; Sicherheit</div>
-                <div class="tools-grid">
-                    <div class="tool-tile" data-cmd="launch-tool-edit-text">
-                        <div class="tool-tile-icon">✎</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF-Originaltext ändern &amp; kommentieren</h3>
-                            <p>Bestehenden PDF-Text direkt anklicken &amp; umschreiben, neuen Freitext, Marker, Formen und Bilder platzieren.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-signature-modal">
-                        <div class="tool-tile-icon">✍️</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF unterschreiben</h3>
-                            <p>Unterschrift per Maus/Touch zeichnen, als Schreibschrift tippen oder als Bild einfügen.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="launch-tool-redact">
-                        <div class="tool-tile-icon">⬛</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF schwärzen &amp; Stempel</h3>
-                            <p>Vertrauliche Textstellen abdecken oder Stempel (BEZAHLT, GENEHMIGT, DATUM) setzen.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="focus-watermark">
-                        <div class="tool-tile-icon">💧</div>
-                        <div class="tool-tile-body">
-                            <h3>Wasserzeichen &amp; Seitenzahlen</h3>
-                            <p>Schräge Wasserzeichen und fortlaufende Seitenzahlen (Seite X von Y) einbrennen.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="launcher-section-title">3. Konvertieren, Komprimieren &amp; OCR-Texterkennung</div>
-                <div class="tools-grid">
-                    <div class="tool-tile" data-cmd="open-images">
-                        <div class="tool-tile-icon">🖼️</div>
-                        <div class="tool-tile-body">
-                            <h3>Bilder in PDF / PDF in Bilder</h3>
-                            <p>JPG, PNG &amp; WebP in PDF umwandeln oder alle PDF-Seiten als Bilder (ZIP) speichern.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-converter-modal">
-                        <div class="tool-tile-icon">🔄</div>
-                        <div class="tool-tile-body">
-                            <h3>Office, HTML &amp; Text → PDF</h3>
-                            <p>Word (.docx), Excel (.xlsx), HTML, Markdown oder Text direkt in ein PDF konvertieren.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="focus-compress">
-                        <div class="tool-tile-icon">📉</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF komprimieren &amp; Metadaten</h3>
-                            <p>Dateigröße durch gezielte DPI-/Qualitäts-Optimierung verkleinern &amp; Metadaten ändern.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="make-searchable-pdf">
-                        <div class="tool-tile-icon">🔎</div>
-                        <div class="tool-tile-body">
-                            <h3>In durchsuchbares PDF umwandeln (OCR)</h3>
-                            <p>Erkennt Text in Scans/Bildern offline und hinterlegt ihn exakt positioniert als durchsuchbare Textebene im PDF.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-a11y-modal">
-                        <div class="tool-tile-icon">♿</div>
-                        <div class="tool-tile-body">
-                            <h3>Barrierefreiheit (PDF/UA &amp; BITV)</h3>
-                            <p>Dokumente auf Barrierefreiheit prüfen, Prüfbericht erstellen &amp; Tags/Sprache/Titel nachrüsten.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="launcher-section-title">4. Acrobat Pro Zusatzfunktionen (Formulare, Vergleich, Zuschnitt &amp; Bates)</div>
-                <div class="tools-grid">
-                    <div class="tool-tile" data-cmd="launch-tool-forms">
-                        <div class="tool-tile-icon">📋</div>
-                        <div class="tool-tile-body">
-                            <h3>Interaktive Formulare (AcroForms)</h3>
-                            <p>Ausfüllbare Textfelder, Checkboxen, Dropdown-Menüs und Klick-Links im PDF anlegen.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-compare-modal">
-                        <div class="tool-tile-icon">⚖️</div>
-                        <div class="tool-tile-body">
-                            <h3>PDF-Vergleich (Visuell &amp; Text)</h3>
-                            <p>Zwei PDF-Versionen nebeneinander vergleichen – markiert Abweichungen farbig im Bild &amp; Text.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-crop-modal">
-                        <div class="tool-tile-icon">📐</div>
-                        <div class="tool-tile-body">
-                            <h3>Seiten zuschneiden (Crop)</h3>
-                            <p>Seitenränder (Oben, Unten, Links, Rechts in mm) für einzelne oder alle Seiten beschneiden.</p>
-                        </div>
-                    </div>
-                    <div class="tool-tile" data-cmd="open-bates-modal">
-                        <div class="tool-tile-icon">🔢</div>
-                        <div class="tool-tile-body">
-                            <h3>Bates-Nummerierung &amp; Kopf-/Fußzeile</h3>
-                            <p>Juristische Bates-Nummern (z. B. AZ-2026-000001) sowie 3-spaltige Kopf- &amp; Fußzeilen.</p>
-                        </div>
                     </div>
                 </div>
             </section>
@@ -912,8 +708,8 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
             </section>
         </main>
 
-        <!-- RIGHT DOCK: CONTEXT INSPECTOR & POWER TOOLS -->
-        <aside class="right-dock" id="rightDock">
+        <!-- RIGHT DOCK: CONTEXT INSPECTOR & POWER TOOLS (Standardmäßig ausgeblendet) -->
+        <aside class="right-dock collapsed" id="rightDock">
 
             <!-- 1. Active Tool Properties -->
             <div class="inspector-section" id="inspectorToolSection">
@@ -1166,11 +962,11 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
      MODALS (Signature Pad, Split PDF, Office/HTML Converter, Server Info)
      ====================================================================== -->
 
-<!-- 1. SIGNATURE MODAL (WITH PERSONAL SIGNATURE VAULT) -->
+<!-- 1. SIGNATURE MODAL -->
 <div class="modal-backdrop" id="modalSignature">
     <div class="modal-window" style="max-width:640px;">
         <div class="modal-header">
-            <span>✍️ Unterschrift erstellen &amp; Konto-Tresor</span>
+            <span>✍️ Unterschrift erstellen &amp; einfügen</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalSignature">✕</button>
         </div>
         <div class="modal-body">
@@ -1193,22 +989,6 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                         <option value="#15803d">Dokumentengrün (#15803d)</option>
                     </select>
                 </div>
-            </div>
-
-            <!-- Save to Personal Account Signature Vault -->
-            <div style="display:flex;gap:8px;align-items:center;background:var(--bg-card);border:1px solid var(--border-subtle);padding:8px 10px;border-radius:6px;margin-top:4px;">
-                <input type="text" id="sigVaultTitleInput" class="form-control" placeholder="Bezeichnung (z. B. Hauptunterschrift / Paraphe)" style="flex:1;">
-                <button type="button" class="tool-btn" id="btnSaveSigToVault" title="Unterschrift dauerhaft in Ihrem Benutzerkonto hinterlegen">
-                    ⭐ Im Konto-Tresor speichern
-                </button>
-            </div>
-
-            <!-- Saved Signatures Gallery -->
-            <div style="margin-top:12px;">
-                <div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);margin-bottom:6px;">
-                    Hinterlegte Unterschriften &amp; Paraphen im Konto-Tresor:
-                </div>
-                <div id="sigVaultList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;max-height:145px;overflow-y:auto;"></div>
             </div>
         </div>
         <div class="modal-footer">
@@ -1278,7 +1058,7 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
 <div class="modal-backdrop" id="modalServer">
     <div class="modal-window">
         <div class="modal-header">
-            <span>🖥️ System- &amp; Tresor-Umgebung</span>
+            <span>🖥️ System-Umgebung</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalServer">✕</button>
         </div>
         <div class="modal-body">
@@ -1294,28 +1074,6 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                 <tr style="border-bottom:1px solid var(--border-subtle);">
                     <td style="padding:8px 0;color:var(--text-secondary);">PHP Memory Limit</td>
                     <td style="padding:8px 0;font-weight:600;"><?php echo htmlspecialchars($serverInfo['memory_limit'], ENT_QUOTES, 'UTF-8'); ?></td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td style="padding:8px 0;color:var(--text-secondary);">Speicher-Kontingent pro Konto (<code>config.php</code>)</td>
-                    <td style="padding:8px 0;font-weight:600;">
-                        <?php echo ($serverInfo['user_quota_mb'] > 0) ? htmlspecialchars($serverInfo['user_quota_mb'] . ' MB (nur für angemeldete Kontoinhaber)', ENT_QUOTES, 'UTF-8') : 'Unbegrenzt (nur für angemeldete Kontoinhaber)'; ?>
-                    </td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td style="padding:8px 0;color:var(--text-secondary);">E-Mail-Absenderadresse (<code>config.php</code>)</td>
-                    <td style="padding:8px 0;font-weight:600;"><?php echo htmlspecialchars($serverInfo['mail_from_name'] . ' <' . $serverInfo['mail_from_address'] . '>', ENT_QUOTES, 'UTF-8'); ?></td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td style="padding:8px 0;color:var(--text-secondary);">E-Mail-Versand / SMTP-Server (<code>config.php</code>)</td>
-                    <td style="padding:8px 0;font-weight:600;">
-                        <?php
-                        if ($serverInfo['mail_transport'] === 'smtp') {
-                            echo 'Direkter SMTP (' . htmlspecialchars($serverInfo['smtp_host'] !== '' ? $serverInfo['smtp_host'] : 'Nicht eingetragen', ENT_QUOTES, 'UTF-8') . ')';
-                        } else {
-                            echo 'PHP mail()';
-                        }
-                        ?>
-                    </td>
                 </tr>
                 <tr>
                     <td style="padding:8px 0;color:var(--text-secondary);">Server-Workspace (`storage/`)</td>
@@ -1584,351 +1342,7 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
     </div>
 </div>
 
-<!-- 9. OPTIONAL USER ACCOUNT, PROFILE TEMPLATES & STAMP VAULT MODAL -->
-<div class="modal-backdrop" id="modalAccount">
-    <div class="modal-window" style="max-width:740px;">
-        <div class="modal-header">
-            <span>👤 Persönliches Benutzerkonto, Profil-Vorlagen &amp; Stempel-Tresor</span>
-            <button type="button" class="doc-tab-close" data-close-modal="modalAccount">✕</button>
-        </div>
-        <div class="modal-body" style="max-height:76vh;overflow-y:auto;">
-
-            <!-- VIEW 1: GUEST (LOGIN / REGISTER) -->
-            <div id="accountGuestSection">
-                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-secondary);line-height:1.45;">
-                    <strong style="color:var(--text-primary);">Optionales Konto (100 % lokal auf Ihrem Webspace im geschützten <code>storage/</code>-Ordner):</strong><br>
-                    Speichern Sie Dokumente inklusive verschiebbarer Textfelder/Annotationen zum späteren Weiterbearbeiten, nutzen Sie Ihren persönlichen Unterschriften- &amp; Stempel-Tresor, automatische Versionshistorie, fortlaufende Bates-Zähler und teilen Sie Dokumente per E-Mail-Link.
-                </div>
-
-                <div class="form-grid-2" style="gap:16px;align-items:start;">
-                    <!-- Login Box -->
-                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
-                        <h3 style="font-size:14px;margin-bottom:10px;">🔑 Anmelden (Bestehendes Konto)</h3>
-                        <div class="form-row">
-                            <label for="loginUsername">Benutzername oder E-Mail-Adresse</label>
-                            <input type="text" id="loginUsername" class="form-control" placeholder="z. B. mmustermann">
-                        </div>
-                        <div class="form-row">
-                            <label for="loginPassword">Passwort</label>
-                            <input type="password" id="loginPassword" class="form-control" placeholder="••••••••">
-                        </div>
-                        <button type="button" class="tool-btn btn-primary" id="btnSubmitLogin" style="width:100%;margin-top:6px;">
-                            🔑 Jetzt anmelden
-                        </button>
-
-                        <div style="margin-top:10px;text-align:center;">
-                            <a href="#" id="btnToggleForgotPass" style="font-size:11.5px;color:var(--accent-primary);text-decoration:underline;">
-                                Passwort vergessen? Zurücksetzungs-Link per E-Mail anfordern
-                            </a>
-                        </div>
-
-                        <!-- Collapsible Forgot Password Request Form -->
-                        <div id="forgotPasswordBox" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-subtle);">
-                            <div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-primary);">
-                                ✉️ Passwort per E-Mail-Link zurücksetzen
-                            </div>
-                            <div class="form-row">
-                                <label for="forgotPassInput">Ihr Benutzername oder Ihre E-Mail-Adresse</label>
-                                <input type="text" id="forgotPassInput" class="form-control" placeholder="name@firma.de oder Benutzername">
-                            </div>
-                            <button type="button" class="tool-btn" id="btnRequestPasswordReset" style="width:100%;">
-                                ✉️ Link zum Zurücksetzen per E-Mail senden
-                            </button>
-
-                            <div id="forgotPassResultBox" class="hidden" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--accent-primary);border-radius:6px;padding:8px 10px;font-size:11.5px;line-height:1.45;">
-                                <div id="forgotPassResultText" style="color:var(--accent-success);font-weight:700;margin-bottom:6px;"></div>
-                                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                                    <a id="forgotPassMailtoLink" href="#" class="tool-btn" style="text-decoration:none;font-size:11px;height:24px;">📧 Im E-Mail-Programm öffnen</a>
-                                    <a id="forgotPassDirectLink" href="#" class="tool-btn btn-primary" style="text-decoration:none;font-size:11px;height:24px;">🔗 Zurücksetzungs-Link direkt öffnen</a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Register Box -->
-                    <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;">
-                        <h3 style="font-size:14px;margin-bottom:10px;">✨ Neues Konto anlegen</h3>
-                        <div class="form-row">
-                            <label for="regUsername">Benutzername (mind. 3 Zeichen)</label>
-                            <input type="text" id="regUsername" class="form-control" placeholder="z. B. mmustermann">
-                        </div>
-                        <div class="form-row">
-                            <label for="regDisplayName">Ihr vollständiger Name (Standard-Autor für PDF/UA)</label>
-                            <input type="text" id="regDisplayName" class="form-control" placeholder="z. B. Max Mustermann">
-                        </div>
-                        <div class="form-row">
-                            <label for="regEmail">E-Mail-Adresse (für Dokumenten-Freigaben)</label>
-                            <input type="email" id="regEmail" class="form-control" placeholder="name@firma.de">
-                        </div>
-                        <div class="form-row">
-                            <label for="regOrg">Firma / Behörde / Abteilung (optional)</label>
-                            <input type="text" id="regOrg" class="form-control" placeholder="z. B. Musterbehörde / Abteilung Recht">
-                        </div>
-                        <div class="form-row">
-                            <label for="regPassword">Passwort (mind. 8 Zeichen)</label>
-                            <input type="password" id="regPassword" class="form-control" minlength="8" placeholder="Mindestens 8 Zeichen">
-                        </div>
-                        <button type="button" class="tool-btn btn-success" id="btnSubmitRegister" style="width:100%;margin-top:6px;">
-                            ✨ Konto erstellen &amp; direkt starten
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- VIEW 2: LOGGED-IN USER DASHBOARD -->
-            <div id="accountUserSection" class="hidden">
-                <!-- User Header Banner -->
-                <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 16px;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-                    <div>
-                        <div style="font-size:15px;font-weight:700;" id="accProfileBannerName">Angemeldet</div>
-                        <div style="font-size:12px;color:var(--text-secondary);" id="accProfileBannerSub">—</div>
-                        <div style="font-size:11.5px;color:var(--accent-primary);margin-top:4px;font-weight:600;" id="accProfileQuotaLabel">Speicherplatz: —</div>
-                    </div>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <button type="button" class="tool-btn" id="btnJumpToPasswordSection">🔑 Passwort ändern</button>
-                        <button type="button" class="tool-btn" data-cmd="open-share-modal">✉️ Meine E-Mail-Freigaben</button>
-                        <button type="button" class="tool-btn btn-danger" id="btnLogoutAccount">🚪 Abmelden</button>
-                    </div>
-                </div>
-
-                <!-- Section A: Dedicated Password Change Box -->
-                <div id="accountPasswordChangeCard" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
-                    <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--accent-primary);">
-                        1. Passwort ändern
-                    </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;">
-                        <div class="form-row">
-                            <label for="changePassCurrent">Aktuelles Passwort</label>
-                            <input type="password" id="changePassCurrent" class="form-control" placeholder="Aktuelles Passwort">
-                        </div>
-                        <div class="form-row">
-                            <label for="changePassNew">Neues Passwort (mind. 8 Zeichen)</label>
-                            <input type="password" id="changePassNew" class="form-control" minlength="8" placeholder="Mindestens 8 Zeichen">
-                        </div>
-                        <div class="form-row">
-                            <label for="changePassConfirm">Neues Passwort wiederholen</label>
-                            <input type="password" id="changePassConfirm" class="form-control" minlength="8" placeholder="Neues Passwort bestätigen">
-                        </div>
-                    </div>
-                    <button type="button" class="tool-btn btn-primary" id="btnChangePasswordDirect" style="margin-top:6px;">
-                        🔒 Passwort jetzt ändern
-                    </button>
-                </div>
-
-                <!-- Section B: Profile Templates & Auto-Incrementing Bates Counter -->
-                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
-                    <div style="font-weight:700;font-size:13px;margin-bottom:10px;color:var(--accent-primary);">
-                        2. Persönliche Profil-Vorlagen &amp; fortlaufender Bates-Zähler
-                    </div>
-                    <div class="form-grid-2">
-                        <div class="form-row">
-                            <label for="profDisplayName">Anzeigename</label>
-                            <input type="text" id="profDisplayName" class="form-control">
-                        </div>
-                        <div class="form-row">
-                            <label for="profEmail">Absender-E-Mail (für Freigaben)</label>
-                            <input type="email" id="profEmail" class="form-control">
-                        </div>
-                        <div class="form-row">
-                            <label for="profAuthor">Standard-Autor (PDF-Metadaten &amp; PDF/UA)</label>
-                            <input type="text" id="profAuthor" class="form-control">
-                        </div>
-                        <div class="form-row">
-                            <label for="profOrg">Firma / Behörde / Organisation</label>
-                            <input type="text" id="profOrg" class="form-control">
-                        </div>
-                        <div class="form-row">
-                            <label for="profLang">Standard-Dokumentsprache (PDF/UA <code>/Lang</code>)</label>
-                            <select id="profLang" class="form-control">
-                                <option value="de-DE">de-DE (Deutsch — Deutschland)</option>
-                                <option value="de-AT">de-AT (Deutsch — Österreich)</option>
-                                <option value="de-CH">de-CH (Deutsch — Schweiz)</option>
-                                <option value="en-US">en-US (Englisch — USA)</option>
-                                <option value="en-GB">en-GB (Englisch — UK)</option>
-                                <option value="fr-FR">fr-FR (Französisch)</option>
-                            </select>
-                        </div>
-                        <div class="form-row">
-                            <label for="profWatermark">Standard-Wasserzeichen</label>
-                            <input type="text" id="profWatermark" class="form-control">
-                        </div>
-                        <div class="form-row">
-                            <label for="profBatesPrefix">Bates-Aktenzeichen-Präfix</label>
-                            <input type="text" id="profBatesPrefix" class="form-control" placeholder="z. B. AZ-2026-">
-                        </div>
-                        <div class="form-row">
-                            <label for="profBatesCounter">Nächste fortlaufende Bates-Nummer (merkt sich den Stand!)</label>
-                            <input type="number" id="profBatesCounter" class="form-control" min="1" value="1">
-                        </div>
-                        <div class="form-row">
-                            <label for="profFooterLeft">Standard-Fußzeile Links</label>
-                            <input type="text" id="profFooterLeft" class="form-control">
-                        </div>
-                        <div class="form-row">
-                            <label for="profFooterRight">Standard-Fußzeile Rechts</label>
-                            <input type="text" id="profFooterRight" class="form-control">
-                        </div>
-                    </div>
-                    <button type="button" class="tool-btn btn-primary" id="btnSaveAccountProfile" style="margin-top:6px;">
-                        💾 Profil-Vorlagen &amp; Einstellungen speichern
-                    </button>
-                </div>
-
-                <!-- Section C: Personal Stamp Vault -->
-                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
-                    <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--accent-primary);">
-                        3. Persönlicher Stempel-Tresor (Eigene Stempel-Vorlagen)
-                    </div>
-                    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
-                        <input type="text" id="newVaultStampText" class="form-control" placeholder="z. B. FREIGEGEBEN — ABTEILUNG RECHT" style="flex:1;">
-                        <input type="color" id="newVaultStampColor" value="#16a34a" style="width:36px;height:30px;border:none;background:none;cursor:pointer;">
-                        <button type="button" class="tool-btn btn-success" id="btnAddVaultStamp">+ Stempel speichern</button>
-                    </div>
-                    <div id="accountStampsList" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
-                </div>
-
-                <!-- Section D: Delete User Account Permanently -->
-                <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.35);border-radius:8px;padding:14px;">
-                    <div style="font-weight:700;font-size:13px;margin-bottom:6px;color:#f87171;">
-                        4. Benutzerkonto &amp; Tresor dauerhaft löschen
-                    </div>
-                    <p style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px;line-height:1.45;">
-                        Hiermit löschen Sie Ihr persönliches Benutzerkonto inklusive aller im Tresor gespeicherten PDF-Dokumente, Versionen, Unterschriften, Stempel und aktiven E-Mail-Freigabelinks unwiderruflich vom Server.
-                    </p>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                        <input type="password" id="deleteAccountPassConfirm" class="form-control" placeholder="Aktuelles Passwort zur Bestätigung eingeben" style="flex:1;min-width:220px;">
-                        <button type="button" class="tool-btn btn-danger" id="btnDeleteMyAccount">
-                            🗑️ Mein Benutzerkonto unwiderruflich löschen
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- VIEW 3: PASSWORD RESET VIA EMAIL TOKEN LINK -->
-            <div id="accountResetPasswordSection" class="hidden">
-                <div style="background:var(--bg-card);border:1px solid var(--accent-primary);border-radius:8px;padding:18px;max-width:460px;margin:0 auto;">
-                    <h3 style="font-size:15px;margin-bottom:6px;">🔒 Neues Passwort vergeben</h3>
-                    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;" id="resetPassAccountBadge">
-                        Bitte geben Sie Ihr neues Passwort ein:
-                    </p>
-                    <input type="hidden" id="resetPassTokenHidden" value="">
-                    <div class="form-row">
-                        <label for="resetNewPassword">Neues Passwort (mindestens 8 Zeichen)</label>
-                        <input type="password" id="resetNewPassword" class="form-control" minlength="8" placeholder="Mindestens 8 Zeichen">
-                    </div>
-                    <div class="form-row">
-                        <label for="resetNewPasswordConfirm">Neues Passwort wiederholen</label>
-                        <input type="password" id="resetNewPasswordConfirm" class="form-control" placeholder="••••••••">
-                    </div>
-                    <div style="display:flex;gap:8px;margin-top:10px;">
-                        <button type="button" class="tool-btn" id="btnCancelPasswordReset" style="flex:1;">Abbrechen</button>
-                        <button type="button" class="tool-btn btn-success" id="btnConfirmPasswordReset" style="flex:2;">
-                            🔒 Neues Passwort speichern &amp; anmelden
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-        <div class="modal-footer">
-            <button type="button" class="tool-btn" data-close-modal="modalAccount">Schließen</button>
-        </div>
-    </div>
-</div>
-
-<!-- 10. VERSION HISTORY & 1-CLICK DIFF MODAL -->
-<div class="modal-backdrop" id="modalVersions">
-    <div class="modal-window" style="max-width:640px;">
-        <div class="modal-header">
-            <span>🕒 Versionshistorie: <span id="versionModalDocTitle">—</span></span>
-            <button type="button" class="doc-tab-close" data-close-modal="modalVersions">✕</button>
-        </div>
-        <div class="modal-body">
-            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">
-                Bei jedem Überschreiben im Tresor legt PDF-Werkstatt Pro automatisch eine Sicherungsversion an. Sie können ältere Stände jederzeit als Tab öffnen oder direkt im <strong>visuellen PDF-Diff</strong> mit dem aktuellen Stand vergleichen:
-            </p>
-            <div id="versionHistoryList" style="display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;"></div>
-        </div>
-        <div class="modal-footer">
-            <button type="button" class="tool-btn" data-close-modal="modalVersions">Schließen</button>
-        </div>
-    </div>
-</div>
-
-<!-- 11. EMAIL SHARE & FREIGABE-LINKS MODAL -->
-<div class="modal-backdrop" id="modalShare">
-    <div class="modal-window" style="max-width:680px;">
-        <div class="modal-header">
-            <span>✉️ PDF-Dokument per E-Mail teilen &amp; Freigabe-Links</span>
-            <button type="button" class="doc-tab-close" data-close-modal="modalShare">✕</button>
-        </div>
-        <div class="modal-body" style="max-height:75vh;overflow-y:auto;">
-            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:14px;">
-                <div style="font-weight:700;font-size:13px;margin-bottom:10px;">Neue E-Mail-Freigabe versenden</div>
-                <div class="form-grid-2">
-                    <div class="form-row">
-                        <label for="shareFilenameSelect">Zu teilendes Dokument</label>
-                        <select id="shareFilenameSelect" class="form-control"></select>
-                    </div>
-                    <div class="form-row">
-                        <label for="shareRecipientEmail">Empfänger-E-Mail-Adresse</label>
-                        <input type="email" id="shareRecipientEmail" class="form-control" placeholder="kollege@firma.de">
-                    </div>
-                    <div class="form-row">
-                        <label for="shareAllowEdit">Berechtigung für den Empfänger</label>
-                        <select id="shareAllowEdit" class="form-control">
-                            <option value="1">Im Editor öffnen, kommentieren &amp; gegenzeichnen erlaubt</option>
-                            <option value="0">Nur Lesen &amp; PDF-Download</option>
-                        </select>
-                    </div>
-                    <div class="form-row">
-                        <label for="shareExpiresDays">Gültigkeit des Freigabe-Links</label>
-                        <select id="shareExpiresDays" class="form-control">
-                            <option value="7">7 Tage gültig</option>
-                            <option value="14" selected>14 Tage gültig</option>
-                            <option value="30">30 Tage gültig</option>
-                            <option value="0">Unbegrenzt gültig</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <label for="shareCustomMessage">Persönliche Nachricht in der E-Mail (optional)</label>
-                    <textarea id="shareCustomMessage" class="form-control" rows="2" placeholder="z. B. Bitte auf Seite 2 prüfen und gegenzeichnen."></textarea>
-                </div>
-                <button type="button" class="tool-btn btn-primary" id="btnCreateEmailShare" style="width:100%;">
-                    ✉️ Freigabe-Link erzeugen &amp; per E-Mail senden
-                </button>
-
-                <!-- Result box after creating share -->
-                <div id="shareResultBox" class="hidden" style="margin-top:12px;background:var(--bg-input);border:1px solid var(--accent-primary);border-radius:6px;padding:10px;">
-                    <div style="font-size:12px;font-weight:700;color:var(--accent-success);margin-bottom:6px;" id="shareResultStatusText">
-                        ✔ Freigabe erstellt!
-                    </div>
-                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-                        <input type="text" id="shareResultUrlInput" class="form-control" readonly style="font-family:var(--font-mono);font-size:11.5px;">
-                        <button type="button" class="tool-btn" id="btnCopyShareUrl">📋 Link kopieren</button>
-                    </div>
-                    <a id="shareMailtoLink" href="#" class="tool-btn" style="display:inline-flex;text-decoration:none;font-size:12px;">
-                        📧 Zusätzlich im E-Mail-Programm (Outlook / Thunderbird / Standard-Mail) öffnen
-                    </a>
-                </div>
-            </div>
-
-            <!-- Active Shares List -->
-            <div>
-                <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--text-secondary);">
-                    Ihre aktiven E-Mail-Freigaben:
-                </div>
-                <div id="activeSharesList" style="display:flex;flex-direction:column;gap:8px;"></div>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button type="button" class="tool-btn" data-close-modal="modalShare">Schließen</button>
-        </div>
-    </div>
-</div>
-
-<!-- 12. PDF COMPRESSION & METADATA MODAL -->
+<!-- 9. PDF COMPRESSION & METADATA MODAL -->
 <div class="modal-backdrop" id="modalCompress">
     <div class="modal-window" style="max-width:600px;">
         <div class="modal-header">
@@ -2097,15 +1511,14 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
             <button type="button" class="assistant-chip" data-assist-topic="compress">📉 Komprimieren</button>
             <button type="button" class="assistant-chip" data-assist-topic="ocr">🔎 Scan-OCR</button>
             <button type="button" class="assistant-chip" data-assist-topic="a11y">♿ Barrierefrei</button>
-            <button type="button" class="assistant-chip" data-assist-topic="vault">☁️ Tresor &amp; Auto-Save</button>
-            <button type="button" class="assistant-chip" data-assist-topic="account">🔑 Passwort/Konto</button>
+            <button type="button" class="assistant-chip" data-assist-topic="autosave">⏱️ Auto-Save</button>
             <button type="button" class="assistant-chip" data-assist-topic="shortcuts">⌨️ Tastenkürzel</button>
         </div>
 
         <div class="assistant-messages" id="assistantMessages">
             <div class="assistant-msg bot">
                 👋 <strong>Wie kann ich Ihnen helfen?</strong><br>
-                Klicken Sie oben auf ein Schnellthema oder tippen Sie unten ein Stichwort ein (z. B. <em>„Text ändern“</em>, <em>„Unterschrift“</em>, <em>„Seiten drehen“</em>, <em>„Komprimieren“</em>, <em>„Passwort“</em>) — ich erkläre Ihnen sofort den Weg und kann das passende Werkzeug direkt für Sie starten!
+                Klicken Sie oben auf ein Schnellthema oder tippen Sie unten ein Stichwort ein (z. B. <em>„Text ändern“</em>, <em>„Unterschrift“</em>, <em>„Seiten drehen“</em>, <em>„Komprimieren“</em>, <em>„Barrierefrei“</em>) — ich erkläre Ihnen sofort den Weg und kann das passende Werkzeug direkt für Sie starten!
             </div>
         </div>
 
