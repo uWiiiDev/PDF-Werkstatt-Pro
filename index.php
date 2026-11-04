@@ -1333,21 +1333,27 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
 
 <!-- 5. BARRIEREFREIHEIT (PDF/UA & BITV 2.0 / WCAG 2.1) AUDIT & REMEDIATION MODAL -->
 <div class="modal-backdrop" id="modalAccessibility">
-    <div class="modal-window" style="max-width:740px;">
+    <div class="modal-window" style="max-width:780px;">
         <div class="modal-header">
-            <span>♿ Barrierefreiheits-Prüfung &amp; Reparatur (PDF/UA • BITV 2.0 • WCAG 2.1)</span>
+            <span>♿ PAC 2026 Barrierefreiheits-Prüfung &amp; Reparatur (PDF/UA-1 • WCAG 2.1/2.2 • BITV 2.0)</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalAccessibility">✕</button>
         </div>
         <div class="modal-body">
             <!-- Summary Banner -->
             <div id="a11ySummaryBanner" style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 16px;margin-bottom:10px;gap:12px;flex-wrap:wrap;transition:border-color 0.25s ease, box-shadow 0.25s ease;">
-                <div>
+                <div style="flex:1;min-width:260px;">
                     <div id="a11ySummaryTitle" style="font-size:15px;font-weight:700;">Prüfe Dokument…</div>
                     <div id="a11ySummarySub" style="font-size:12px;color:var(--text-secondary);margin-top:2px;">
-                        Automatische Prüfung nach PDF/UA-1 (ISO 14289-1), BITV 2.0 &amp; EN 301 549
+                        Tiefenprüfung analog PAC 2026 nach PDF/UA-1 (Matterhorn-Protokoll) &amp; WCAG 2.1 / 2.2
                     </div>
                 </div>
-                <div style="text-align:right;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+                    <span id="a11yPdfUaBadge" style="display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:var(--bg-input);border:1px solid var(--border-subtle);color:var(--text-secondary);">
+                        PDF/UA: —
+                    </span>
+                    <span id="a11yWcagBadge" style="display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:var(--bg-input);border:1px solid var(--border-subtle);color:var(--text-secondary);">
+                        WCAG: —
+                    </span>
                     <span id="a11yScorePill" style="display:inline-block;font-size:18px;font-weight:800;padding:4px 12px;border-radius:999px;background:var(--accent-soft);color:var(--accent-primary);">
                         — %
                     </span>
@@ -1365,15 +1371,15 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                 </div>
             </div>
 
-            <!-- 10-Point Detailed Checklist -->
-            <div id="a11yChecklistContainer" style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px;max-height:290px;overflow-y:auto;padding-right:4px;">
+            <!-- 12-Point PAC 2026 Detailed Checklist (PDF/UA + WCAG) -->
+            <div id="a11yChecklistContainer" style="display:flex;flex-direction:column;gap:7px;margin-bottom:14px;max-height:300px;overflow-y:auto;padding-right:4px;">
                 <!-- Populated dynamically by auditAccessibility() -->
             </div>
 
             <!-- Auto-Remediation Form -->
             <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 14px;">
                 <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--text-primary);">
-                    🛠️ Barrierefreiheit direkt im PDF nachrüsten (Auto-Remediation):
+                    🛠️ Barrierefreiheit nach PAC 2026 (PDF/UA-1 + WCAG 2.1/2.2) direkt im PDF nachrüsten:
                 </div>
                 <div class="form-grid-2">
                     <div class="form-row">
@@ -1392,18 +1398,18 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
                         </select>
                     </div>
                 </div>
-                <p style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;">
-                    Setzt automatisch (PAC 2026 / ISO 14289-1 konform): <code>/Title</code>, <code>/DisplayDocTitle true</code>, <code>/Lang</code>, <code>/MarkInfo &lt;&lt; /Marked true &gt;&gt;</code>, Content-Stream-Tagging (<code>BDC/MCID</code> für Text &amp; <code>/Artifact</code> für Grafiken/Hintergrund), <code>/StructTreeRoot</code> inkl. <code>/ParentTree</code> &amp; <code>/RoleMap</code>, TrueType-Schrifteinbettung (<code>/FontFile2</code> &amp; <code>/ToUnicode</code>), 1:1 synchronisierte XMP-Metadaten (<code>pdfuaid:part=1</code>) sowie Lesezeichen (<code>/Outlines</code>).
+                <p style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;margin-bottom:0;">
+                    Behebt automatisch beide PAC-2026-Prüfbereiche: <strong>PDF/UA-1</strong> (1:1 XMP-Sync <code>pdfuaid:part=1</code>, <code>/DisplayDocTitle</code>, <code>/Marked true</code>, <code>/Suspects false</code>, vollständiges Content-Stream- &amp; Form-XObject-Tagging, TrueType-Schrifteinbettung <code>/FontFile2</code> für alle Schriften inkl. <code>/Differences</code>-Unicode-CMap, <code>/Tabs /S</code>) sowie <strong>WCAG 2.1/2.2</strong> (semantische Überschriftenhierarchie <code>&lt;H1&gt;</code>/<code>&lt;H2&gt;</code>, AA-Textkontrast &ge; 4,5:1, <code>&lt;Link&gt;</code>/<code>&lt;Form&gt;</code> <code>/OBJR</code>-Annotation-Tagging &amp; <code>/Outlines</code>).
                 </p>
             </div>
         </div>
-        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
-            <div style="display:flex;gap:8px;">
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button type="button" class="tool-btn" id="btnReRunA11yAudit">↻ Erneut prüfen</button>
                 <button type="button" class="tool-btn" id="btnExportA11yReportPdf">📄 Prüfbericht als PDF öffnen</button>
             </div>
-            <div style="display:flex;gap:8px;">
-                <button type="button" class="tool-btn" data-close-modal="modalAccessibility">Schließen</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn" id="btnDownloadA11yPdf" title="Aktuelles (repariertes) PDF direkt herunterladen, um es z. B. in PAC 2026 zu prüfen">💾 PDF herunterladen</button>
                 <button type="button" class="tool-btn btn-success" id="btnAutoFixA11y">🛠️ Barrierefreiheit jetzt nachrüsten</button>
             </div>
         </div>

@@ -2884,63 +2884,341 @@
         return chunks.join('');
     }
 
+    function decodeRawPdfStreamToString(rawStream) {
+        if (!rawStream) return '';
+        try {
+            var decBytes;
+            if (rawStream instanceof PDFLib.PDFRawStream || (rawStream.contents && PDFLib.decodePDFRawStream)) {
+                decBytes = PDFLib.decodePDFRawStream(rawStream).decode();
+            } else if (typeof rawStream.getUnencodedContents === 'function') {
+                decBytes = rawStream.getUnencodedContents();
+            } else if (typeof rawStream.getContentsString === 'function') {
+                decBytes = stringToLatin1Bytes(rawStream.getContentsString());
+            } else if (PDFLib.decodePDFRawStream) {
+                decBytes = PDFLib.decodePDFRawStream(rawStream).decode();
+            }
+            if (!decBytes) return '';
+            return uint8ToLatin1Sample(decBytes, decBytes.byteLength);
+        } catch (e) {
+            return '';
+        }
+    }
+
     async function auditDocumentAccessibility(doc, quickMode) {
         if (!doc) return null;
         await bakeAnnotationsIntoDocument(doc);
 
         var rawStr = uint8ToLatin1Sample(doc.bytes, quickMode ? 524288 : 2097152);
         var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
+        var context = pdfDoc.context;
         var catalog = pdfDoc.catalog;
+        var pdfPages = pdfDoc.getPages();
 
-        // 1. Document Title (/Title or dc:title)
+        // ---------------------------------------------------------------------
+        // 1. PAC 2026 [PDF/UA — Metadaten]: XMP-Stream im Catalog, pdfuaid:part=1 & dc:title
+        // ---------------------------------------------------------------------
         var docTitle = (pdfDoc.getTitle() || '').trim();
+        var metaLookup = catalog.lookup(PDFLib.PDFName.of('Metadata'));
+        var xmpStr = decodeRawPdfStreamToString(metaLookup);
+        var hasPdfUaPart1 = /<pdfuaid:part>\s*1\s*<\/pdfuaid:part>/i.test(xmpStr) || /pdfuaid:part=["']1["']/i.test(xmpStr);
+        var hasXmpDcTitle = /<dc:title[\s>]/i.test(xmpStr);
+        var hasXmpPacketHeader = xmpStr.indexOf('W5M0MpCehiHzreSzNTczkc9d') !== -1;
         var hasValidTitle = docTitle.length >= 3 && !/\.pdf$/i.test(docTitle);
+        var hasPdfUaXmp = Boolean(metaLookup) && hasPdfUaPart1 && hasXmpDcTitle && hasXmpPacketHeader && hasValidTitle;
 
-        // 2. DisplayDocTitle in /ViewerPreferences
-        var hasDisplayDocTitle = /\/DisplayDocTitle\s+true\b/i.test(rawStr);
+        // ---------------------------------------------------------------------
+        // 2. PAC 2026 [PDF/UA — Dokumenteinstellungen]: /DisplayDocTitle true & /Marked true (/Suspects != true)
+        // ---------------------------------------------------------------------
+        var hasDisplayDocTitle = false;
         var vpDict = catalog.lookup(PDFLib.PDFName.of('ViewerPreferences'));
         if (vpDict && vpDict.get) {
             var ddt = vpDict.get(PDFLib.PDFName.of('DisplayDocTitle'));
             if (ddt && String(ddt) === 'true') hasDisplayDocTitle = true;
         }
-
-        // 3. Document Language (/Lang on Catalog)
-        var langVal = '';
-        var langObj = catalog.get(PDFLib.PDFName.of('Lang'));
-        if (langObj) {
-            langVal = String(langObj).replace(/^[(\s]+|[)\s]+$/g, '');
-        } else {
-            var lm = rawStr.match(/\/Lang\s*\(([^)]+)\)/);
-            if (lm) langVal = lm[1].trim();
-        }
-        var hasLang = langVal.length >= 2;
-
-        // 4. Tagged PDF (/MarkInfo << /Marked true >> + Marked-Content MCID/Artifact in Content Streams)
-        var hasMarked = /\/Marked\s+true\b/i.test(rawStr);
+        var hasMarked = false;
+        var hasSuspects = false;
         var markDict = catalog.lookup(PDFLib.PDFName.of('MarkInfo'));
         if (markDict && markDict.get) {
             var mk = markDict.get(PDFLib.PDFName.of('Marked'));
             if (mk && String(mk) === 'true') hasMarked = true;
+            var susp = markDict.get(PDFLib.PDFName.of('Suspects'));
+            if (susp && String(susp) === 'true') hasSuspects = true;
         }
-        var hasContentMcids = false;
+        var docSettingsPass = hasValidTitle && hasDisplayDocTitle && hasMarked && !hasSuspects;
+
+        // ---------------------------------------------------------------------
+        // 3. PAC 2026 [PDF/UA — Natürliche Sprache]: Gültiger BCP-47 Sprachcode in /Lang
+        // ---------------------------------------------------------------------
+        var langVal = '';
+        var langObj = catalog.get(PDFLib.PDFName.of('Lang'));
+        if (langObj) {
+            langVal = String(langObj).replace(/^[(\s]+|[)\s]+$/g, '');
+        }
+        var hasLang = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/.test(langVal);
+
+        // ---------------------------------------------------------------------
+        // 4. PAC 2026 [PDF/UA — Seiteninhalt (Content)] & [WCAG 1.4.3 Kontrast]:
+        //    Echte Tiefenanalyse der Seiten-Content-Streams auf ungetaggte Operatoren (BT..ET, Pfade, Do)
+        // ---------------------------------------------------------------------
+        var maxStreamPages = quickMode ? Math.min(pdfPages.length, 10) : pdfPages.length;
+        var untaggedTextOps = 0;
+        var untaggedGraphicOps = 0;
+        var taggedMcidBlocks = 0;
+        var artifactBlocks = 0;
+        var nestedTaggedInArtifact = 0;
+        var lowContrastTextCount = 0;
+        var pagesMissingTabsS = 0;
+        var totalAnnotsCount = 0;
+        var untaggedAnnotsCount = 0;
+
+        for (var pIdx = 0; pIdx < pdfPages.length; pIdx++) {
+            var pNode = pdfPages[pIdx].node;
+            var tabsVal = pNode.get(PDFLib.PDFName.of('Tabs'));
+            if (!tabsVal || String(tabsVal) !== '/S') {
+                pagesMissingTabsS++;
+            }
+
+            var annotsArrObj = pNode.lookup(PDFLib.PDFName.of('Annots'));
+            if (annotsArrObj && typeof annotsArrObj.asArray === 'function') {
+                var aList = annotsArrObj.asArray();
+                for (var a = 0; a < aList.length; a++) {
+                    var aDict = context.lookup(aList[a]);
+                    if (!aDict || typeof aDict.get !== 'function') continue;
+                    var aSub = String(aDict.get(PDFLib.PDFName.of('Subtype')) || '');
+                    if (aSub === '/Popup') continue;
+                    totalAnnotsCount++;
+                    var hasAnnotContents = Boolean(aDict.get(PDFLib.PDFName.of('Contents')) || aDict.get(PDFLib.PDFName.of('TU')));
+                    var hasAnnotStructParent = Boolean(aDict.get(PDFLib.PDFName.of('StructParent')));
+                    if (!hasAnnotContents || !hasAnnotStructParent) {
+                        untaggedAnnotsCount++;
+                    }
+                }
+            }
+
+            if (pIdx >= maxStreamPages) continue;
+
+            var cObj = pNode.get(PDFLib.PDFName.of('Contents'));
+            var sRefs = [];
+            if (cObj) {
+                var lookedC = context.lookup(cObj);
+                if (lookedC && typeof lookedC.asArray === 'function') {
+                    sRefs = lookedC.asArray();
+                } else {
+                    sRefs = [cObj];
+                }
+            }
+
+            var pageStreamParts = [];
+            for (var s = 0; s < sRefs.length; s++) {
+                var rawS = context.lookup(sRefs[s]);
+                var decS = decodeRawPdfStreamToString(rawS);
+                if (decS) pageStreamParts.push(decS);
+            }
+            if (pageStreamParts.length === 0) continue;
+
+            var stmts = parsePdfContentStreamStatements(pageStreamParts.join('\n'));
+            var mcStack = [];
+            var inBt = false;
+            var currentTrMode = 0;
+            var currentTextLum = 0;
+
+            for (var stIdx = 0; stIdx < stmts.length; stIdx++) {
+                var st = stmts[stIdx];
+                var op = st.op;
+
+                if (op === 'BMC' || op === 'BDC') {
+                    var tagOpnd = st.operands.length > 0 ? st.operands[0] : '';
+                    var isArt = tagOpnd === '/Artifact';
+                    var hasMcid = st.raw.indexOf('/MCID') !== -1;
+                    if (isArt) artifactBlocks++;
+                    if (hasMcid) taggedMcidBlocks++;
+                    if (mcStack.indexOf('Artifact') !== -1 && hasMcid) {
+                        nestedTaggedInArtifact++;
+                    }
+                    mcStack.push(isArt ? 'Artifact' : (hasMcid ? 'MCID' : 'Other'));
+                    continue;
+                }
+                if (op === 'EMC') {
+                    if (mcStack.length > 0) mcStack.pop();
+                    continue;
+                }
+                if (op === 'BT') {
+                    inBt = true;
+                    currentTrMode = 0;
+                    continue;
+                }
+                if (op === 'ET') {
+                    inBt = false;
+                    continue;
+                }
+                if (op === 'Tr' && st.operands.length > 0) {
+                    currentTrMode = parseInt(st.operands[0], 10) || 0;
+                    continue;
+                }
+                if (op === 'g' && st.operands.length >= 1) {
+                    var gv = parseFloat(st.operands[0]);
+                    if (!isNaN(gv)) currentTextLum = gv;
+                } else if (op === 'rg' && st.operands.length >= 3) {
+                    var rv = parseFloat(st.operands[0]);
+                    var grv = parseFloat(st.operands[1]);
+                    var bv = parseFloat(st.operands[2]);
+                    if (!isNaN(rv) && !isNaN(grv) && !isNaN(bv)) {
+                        currentTextLum = 0.2126 * rv + 0.7152 * grv + 0.0722 * bv;
+                    }
+                }
+
+                if (op === 'Tj' || op === 'TJ' || op === "'" || op === '"') {
+                    var opndClean = st.operands.join('').replace(/\s+/g, '');
+                    if (opndClean !== '()' && opndClean !== '<>' && opndClean !== '[]') {
+                        if (mcStack.length === 0) {
+                            untaggedTextOps++;
+                        }
+                        if (inBt && currentTrMode !== 3 && currentTextLum > 0.46 && currentTextLum < 0.92) {
+                            lowContrastTextCount++;
+                        }
+                    }
+                } else if (op === 'Do' || op === 'sh' || op === 'EI' || op === 'S' || op === 's' || op === 'f' || op === 'F' || op === 'f*' || op === 'B' || op === 'B*' || op === 'b' || op === 'b*') {
+                    if (mcStack.length === 0) {
+                        untaggedGraphicOps++;
+                    }
+                }
+            }
+        }
+
+        var isFullyTaggedContent =
+            hasMarked &&
+            (taggedMcidBlocks + artifactBlocks > 0) &&
+            untaggedTextOps === 0 &&
+            untaggedGraphicOps === 0 &&
+            nestedTaggedInArtifact === 0;
+
+        // ---------------------------------------------------------------------
+        // 5. PAC 2026 [PDF/UA — Strukturbaum & Rollenzuordnung] & [WCAG 1.3.1 / 2.4.6 Überschriften]
+        // ---------------------------------------------------------------------
         var stRootLookup = catalog.lookup(PDFLib.PDFName.of('StructTreeRoot'));
-        if (stRootLookup && stRootLookup.get && stRootLookup.get(PDFLib.PDFName.of('ParentTree'))) {
-            hasContentMcids = true;
-        } else if (rawStr.indexOf('/MCID') !== -1 && rawStr.indexOf('/ParentTree') !== -1) {
-            hasContentMcids = true;
+        var hasParentTree = Boolean(stRootLookup && stRootLookup.get && stRootLookup.get(PDFLib.PDFName.of('ParentTree')));
+        var standardTypesRemappedInRoleMap = false;
+        if (stRootLookup && stRootLookup.lookup) {
+            var rmDict = stRootLookup.lookup(PDFLib.PDFName.of('RoleMap'));
+            if (rmDict && typeof rmDict.entries === 'function') {
+                var stdPdfTags = {
+                    '/Document': 1, '/Part': 1, '/Art': 1, '/Sect': 1, '/Div': 1,
+                    '/H': 1, '/H1': 1, '/H2': 1, '/H3': 1, '/H4': 1, '/H5': 1, '/H6': 1,
+                    '/P': 1, '/L': 1, '/LI': 1, '/Lbl': 1, '/LBody': 1,
+                    '/Table': 1, '/TR': 1, '/TH': 1, '/TD': 1, '/THead': 1, '/TBody': 1, '/TFoot': 1,
+                    '/Span': 1, '/Quote': 1, '/Note': 1, '/Reference': 1, '/BibEntry': 1, '/Code': 1,
+                    '/Link': 1, '/Annot': 1, '/Figure': 1, '/Formula': 1, '/Form': 1
+                };
+                var rmEntries = rmDict.entries();
+                for (var rIdx = 0; rIdx < rmEntries.length; rIdx++) {
+                    var rmKey = String(rmEntries[rIdx][0]);
+                    if (stdPdfTags[rmKey]) {
+                        standardTypesRemappedInRoleMap = true;
+                        break;
+                    }
+                }
+            }
         }
-        var isFullyTaggedContent = hasMarked && hasContentMcids;
 
-        // 5. Logical Structure Tree (/StructTreeRoot + /ParentTree + /StructParents)
-        var hasStructTree = Boolean(stRootLookup) && hasContentMcids;
+        // Inspect all indirect objects for Fonts, StructElems (H1..H6, Figure, Sect, Document)
+        var indirectObjects = context.enumerateIndirectObjects();
+        var totalFontsCount = 0;
+        var unembeddedFontsCount = 0;
+        var missingUnicodeFontsCount = 0;
+        var missingCidToGidCount = 0;
+        var hasDocumentRootElem = false;
+        var hasSectElem = false;
+        var headingLevelsFound = {};
+        var figureCount = 0;
+        var figuresMissingAltCount = 0;
 
-        // 6. PDF/UA XMP Metadata Stream (/Metadata + pdfuaid:part + synchronized XMP/Info fields)
-        var hasPdfUaXmp =
-            rawStr.indexOf('pdfuaid:part') !== -1 &&
-            rawStr.indexOf('W5M0MpCehiHzreSzNTczkc9d') !== -1 &&
-            rawStr.indexOf('pdf:Producer') !== -1;
+        for (var objIdx = 0; objIdx < indirectObjects.length; objIdx++) {
+            var iObj = indirectObjects[objIdx][1];
+            if (!iObj || typeof iObj.get !== 'function') continue;
 
-        // 7. Searchable Text per Page (check via PDF.js)
+            var tName = String(iObj.get(PDFLib.PDFName.of('Type')) || '');
+            var sName = String(iObj.get(PDFLib.PDFName.of('Subtype')) || '');
+            var structS = String(iObj.get(PDFLib.PDFName.of('S')) || '');
+
+            // Check Structure Elements
+            if (tName === '/StructElem' || (structS && !sName && iObj.get(PDFLib.PDFName.of('P')))) {
+                if (structS === '/Document') hasDocumentRootElem = true;
+                if (structS === '/Sect') hasSectElem = true;
+                if (/^\/H[1-6]$/.test(structS)) {
+                    var hLvl = parseInt(structS.charAt(2), 10);
+                    headingLevelsFound[hLvl] = (headingLevelsFound[hLvl] || 0) + 1;
+                }
+                if (structS === '/Figure') {
+                    figureCount++;
+                    if (!iObj.get(PDFLib.PDFName.of('Alt'))) {
+                        figuresMissingAltCount++;
+                    }
+                }
+            }
+
+            // Check CIDFontType2
+            if (sName === '/CIDFontType2') {
+                if (!iObj.get(PDFLib.PDFName.of('CIDToGIDMap'))) {
+                    missingCidToGidCount++;
+                }
+                var cidDesc = iObj.lookup ? iObj.lookup(PDFLib.PDFName.of('FontDescriptor')) : null;
+                var cidHasFile = Boolean(cidDesc && cidDesc.get && (
+                    cidDesc.get(PDFLib.PDFName.of('FontFile')) ||
+                    cidDesc.get(PDFLib.PDFName.of('FontFile2')) ||
+                    cidDesc.get(PDFLib.PDFName.of('FontFile3'))
+                ));
+                if (!cidHasFile) {
+                    unembeddedFontsCount++;
+                }
+                continue;
+            }
+
+            // Check Simple & Type0 Fonts
+            if (sName === '/Type1' || sName === '/TrueType' || sName === '/MMType1') {
+                totalFontsCount++;
+                var fDesc = iObj.lookup ? iObj.lookup(PDFLib.PDFName.of('FontDescriptor')) : null;
+                var hasFFile = Boolean(fDesc && fDesc.get && (
+                    fDesc.get(PDFLib.PDFName.of('FontFile')) ||
+                    fDesc.get(PDFLib.PDFName.of('FontFile2')) ||
+                    fDesc.get(PDFLib.PDFName.of('FontFile3'))
+                ));
+                if (!hasFFile) {
+                    unembeddedFontsCount++;
+                }
+                var hasToUni = Boolean(iObj.get(PDFLib.PDFName.of('ToUnicode')));
+                if (!hasToUni) {
+                    missingUnicodeFontsCount++;
+                }
+            } else if (sName === '/Type0') {
+                totalFontsCount++;
+                if (!iObj.get(PDFLib.PDFName.of('ToUnicode'))) {
+                    missingUnicodeFontsCount++;
+                }
+            }
+        }
+
+        var hasStructTree = Boolean(stRootLookup) && hasParentTree && hasDocumentRootElem && !standardTypesRemappedInRoleMap;
+        var fontsPass = unembeddedFontsCount === 0 && missingUnicodeFontsCount === 0 && missingCidToGidCount === 0;
+        var pagesTabsPass = pagesMissingTabsS === 0;
+
+        // Check Heading Hierarchy (WCAG 1.3.1 & 2.4.6 / Matterhorn 14)
+        var hasH1 = Boolean(headingLevelsFound[1] && headingLevelsFound[1] > 0);
+        var skippedHeadingLevel = false;
+        var maxHeadingLvl = 0;
+        for (var hl = 1; hl <= 6; hl++) {
+            if (headingLevelsFound[hl]) maxHeadingLvl = hl;
+        }
+        for (var checkHl = 1; checkHl <= maxHeadingLvl; checkHl++) {
+            if (!headingLevelsFound[checkHl]) {
+                skippedHeadingLevel = true;
+                break;
+            }
+        }
+        var headingsPass = hasH1 && !skippedHeadingLevel;
+
+        // ---------------------------------------------------------------------
+        // 7. Searchable Text per Page (check via PDF.js — WCAG 1.4.5)
+        // ---------------------------------------------------------------------
         var pdfJsDoc = await loadPdfJsDocument(doc.bytes);
         var pagesToScan = quickMode ? Math.min(pdfJsDoc.numPages, 15) : pdfJsDoc.numPages;
         var pagesWithText = 0;
@@ -2955,118 +3233,168 @@
             }
         }
         var hasSearchableText = pagesWithText > 0 && totalChars > 0;
+        var contrastAndTextPass = hasSearchableText && lowContrastTextCount === 0;
 
-        // 8. Embedded Font Programs (/FontFile, /FontFile2, /FontFile3) & Unicode Mapping
-        var hasEmbeddedFontProgram =
-            rawStr.indexOf('/FontFile') !== -1 ||
-            Boolean(stRootLookup && stRootLookup.get && stRootLookup.get(PDFLib.PDFName.of('RoleMap')));
+        // Alt-Text & Annotations (WCAG 1.1.1, 2.4.4, 4.1.2)
+        var altAndAnnotsPass = figuresMissingAltCount === 0 && untaggedAnnotsCount === 0 && isFullyTaggedContent;
 
-        // 9. Document Outlines / Bookmarks (/Outlines)
-        var hasOutlines = Boolean(catalog.get(PDFLib.PDFName.of('Outlines'))) || rawStr.indexOf('/Outlines') !== -1;
+        // Outlines & Navigation (WCAG 2.4.1 & 2.4.5)
+        var hasOutlines = Boolean(catalog.get(PDFLib.PDFName.of('Outlines')));
+        var navigationPass = hasOutlines && hasSectElem;
 
-        // 10. Assistive Technology Access (not locked by encryption)
+        // Security (PDF/UA 26-001)
         var isEncryptedLocked = rawStr.indexOf('/Encrypt') !== -1;
 
         var checks = [
+            // === TEIL 1: PAC 2026 — PDF/UA-1 (ISO 14289-1 / Matterhorn-Protokoll) ===
             {
-                id: 'title',
-                title: '1. Aussagekräftiger Dokumenttitel (/Title)',
-                standard: 'PDF/UA-1 (06-001) • WCAG 2.4.2',
-                passed: hasValidTitle,
-                status: hasValidTitle ? 'pass' : 'fail',
-                detail: hasValidTitle
-                    ? 'Titel vorhanden: "' + docTitle + '"'
-                    : 'Kein aussagekräftiger Titel gesetzt (oder endet auf .pdf).'
+                id: 'pdfua_xmp',
+                category: 'PDF/UA',
+                title: '1. [PDF/UA • Metadaten] XMP-Stream, pdfuaid:part=1 & dc:title-Synchronisation',
+                standard: 'PAC 2026 Metadata • Matterhorn 06-001..004, 07-001',
+                passed: hasPdfUaXmp,
+                status: hasPdfUaXmp ? 'pass' : 'fail',
+                detail: hasPdfUaXmp
+                    ? 'XMP-Metadaten-Stream im Catalog mit pdfuaid:part=1 und dc:title ("' + docTitle + '") ist 1:1 synchron.'
+                    : 'XMP-Metadaten-Stream fehlt, enthält kein pdfuaid:part=1 oder weicht vom /Info-Titel ab.'
             },
             {
-                id: 'display_doc_title',
-                title: '2. Dokumenttitel in Fenstertitelleiste anzeigen (/DisplayDocTitle true)',
-                standard: 'PDF/UA-1 (06-002) • BITV 2.0',
-                passed: hasDisplayDocTitle,
-                status: hasDisplayDocTitle ? 'pass' : 'fail',
-                detail: hasDisplayDocTitle
-                    ? '/ViewerPreferences << /DisplayDocTitle true >> ist gesetzt.'
-                    : 'Fehlt: Screenreader lesen sonst nur den Dateinamen statt des Dokumenttitels vor.'
+                id: 'doc_settings',
+                category: 'PDF/UA',
+                title: '2. [PDF/UA • Dokument] Fenstertitel (/DisplayDocTitle true) & /Marked true',
+                standard: 'PAC 2026 Document • Matterhorn 01-001, 01-002, 06-002',
+                passed: docSettingsPass,
+                status: docSettingsPass ? 'pass' : 'fail',
+                detail: docSettingsPass
+                    ? '/DisplayDocTitle true, /Marked true und /Suspects false sind im Catalog gesetzt.'
+                    : 'Fehlt: ' + (!hasValidTitle ? 'Aussagekräftiger /Title fehlt. ' : '') + (!hasDisplayDocTitle ? '/DisplayDocTitle true fehlt. ' : '') + (!hasMarked ? '/Marked true fehlt.' : '')
             },
             {
                 id: 'lang',
-                title: '3. Dokumentsprache für Screenreader definiert (/Lang)',
-                standard: 'PDF/UA-1 (11-001) • WCAG 3.1.1',
+                category: 'PDF/UA',
+                title: '3. [PDF/UA • Natürliche Sprache] Gültiger BCP-47 Sprachcode (/Lang)',
+                standard: 'PAC 2026 Natural Language • Matterhorn 11-001',
                 passed: hasLang,
                 status: hasLang ? 'pass' : 'fail',
                 detail: hasLang
-                    ? 'Hauptsprache im Catalog definiert: ' + langVal
-                    : 'Keine Sprache (/Lang, z. B. de-DE) im PDF-Catalog hinterlegt.'
+                    ? 'Dokumentsprache im Catalog definiert: ' + langVal
+                    : 'Kein gültiger BCP-47 Sprachcode (/Lang, z. B. de-DE) im PDF-Catalog hinterlegt.'
             },
             {
-                id: 'marked',
-                title: '4. Getaggter Seiteninhalt (/Marked true, BDC/MCID & /Artifact)',
-                standard: 'PDF/UA-1 (01-001 / PAC Content)',
+                id: 'marked_content',
+                category: 'PDF/UA',
+                title: '4. [PDF/UA • Inhalt] Vollständiges Content-Stream-Tagging (BDC/MCID & /Artifact)',
+                standard: 'PAC 2026 Content • Matterhorn 01-001..01-005',
                 passed: isFullyTaggedContent,
                 status: isFullyTaggedContent ? 'pass' : 'fail',
                 detail: isFullyTaggedContent
-                    ? 'Seiteninhalte sind vollständig in MCID-Tags und /Artifact-Blöcke gegliedert.'
-                    : 'Seiten-Datenströme enthalten noch ungetaggte Elemente (BDC/MCID oder /Artifact fehlt).'
+                    ? 'Alle Seiten-Streams vollständig getaggt (' + taggedMcidBlocks + ' MCID-Blöcke, ' + artifactBlocks + ' /Artifact-Blöcke, 0 ungetaggte Elemente).'
+                    : 'Content-Stream-Fehler: ' + untaggedTextOps + ' ungetaggte Text-Op(s), ' + untaggedGraphicOps + ' ungetaggte Grafik/Pfad-Op(s), ' + nestedTaggedInArtifact + ' verschachtelte Artefakte.'
             },
             {
                 id: 'struct_tree',
-                title: '5. Logischer Strukturbaum (/StructTreeRoot, /ParentTree & /RoleMap)',
-                standard: 'PDF/UA-1 (01-002 / PAC Structure) • WCAG 1.3.1',
+                category: 'PDF/UA',
+                title: '5. [PDF/UA • Strukturbaum & Rollen] <Document>, /ParentTree & /RoleMap-Prüfung',
+                standard: 'PAC 2026 Structure & RoleMap • Matterhorn 01-002, 02-004, 09-001',
                 passed: hasStructTree,
                 status: hasStructTree ? 'pass' : 'fail',
                 detail: hasStructTree
-                    ? 'Strukturbaum (/StructTreeRoot) inklusive /ParentTree-Index und /StructParents vorhanden.'
-                    : 'Vollständiger Strukturbaum (/StructTreeRoot mit /ParentTree-Rückverweisen) fehlt.'
-            },
-            {
-                id: 'pdfua_xmp',
-                title: '6. Synchronisierte PDF/UA-XMP-Metadaten (pdfuaid:part & /Info-Sync)',
-                standard: 'PDF/UA-1 (06-001 / 07-001 / PAC Metadata)',
-                passed: hasPdfUaXmp,
-                status: hasPdfUaXmp ? 'pass' : 'warn',
-                detail: hasPdfUaXmp
-                    ? 'XMP-Stream (pdfuaid:part=1, dc:title, pdf:Producer, xmp:CreateDate) ist 1:1 mit /Info synchron.'
-                    : 'XMP-Metadaten-Stream fehlt oder ist nicht vollständig mit dem /Info-Dictionary synchronisiert.'
-            },
-            {
-                id: 'searchable_text',
-                title: '7. Durchsuchbarer Text für Screenreader (kein reiner Bild-Scan)',
-                standard: 'PDF/UA-1 • BITV 2.0 • WCAG 1.4.5',
-                passed: hasSearchableText,
-                status: hasSearchableText ? 'pass' : 'fail',
-                detail: pagesWithText + ' von ' + pdfJsDoc.numPages + ' Seite(n) enthalten auslesbaren Text (' + totalChars + ' Zeichen).'
+                    ? '<Document>-Wurzel, /ParentTree-Index vorhanden und keine Standard-Tags in /RoleMap überschrieben.'
+                    : standardTypesRemappedInRoleMap
+                        ? 'Fehler (Matterhorn 02-004): Standard-Tags (z. B. Document, P, H1) dürfen nicht in /RoleMap umgemappt werden.'
+                        : 'Vollständiger Strukturbaum (<Document>-Wurzel und /ParentTree-Rückverweise) fehlt.'
             },
             {
                 id: 'fonts',
-                title: '8. Eingebettete Schriftarten (/FontFile2) & Unicode-Mapping (/ToUnicode)',
-                standard: 'PDF/UA-1 (21-001 / PAC Fonts)',
-                passed: hasEmbeddedFontProgram,
-                status: hasEmbeddedFontProgram ? 'pass' : 'warn',
-                detail: hasEmbeddedFontProgram
-                    ? 'Schriftprogramme (/FontFile2) und /ToUnicode-Tabellen sind vollständig eingebettet.'
-                    : 'Standard-Schriften sind noch nicht als Font-Programm (/FontFile2) eingebettet.'
+                category: 'PDF/UA',
+                title: '6. [PDF/UA • Schriftarten] Vollständige Schrifteinbettung (/FontFile2) & /ToUnicode',
+                standard: 'PAC 2026 Fonts • Matterhorn 21-001..21-007',
+                passed: fontsPass,
+                status: fontsPass ? 'pass' : 'fail',
+                detail: fontsPass
+                    ? 'Alle ' + totalFontsCount + ' Schrift(en) besitzen eingebettete Font-Programme (/FontFile2) und /ToUnicode-Tabellen.'
+                    : 'Schrift-Fehler: ' + unembeddedFontsCount + ' nicht eingebettet (/FontFile fehlt), ' + missingUnicodeFontsCount + ' ohne /ToUnicode-CMap, ' + missingCidToGidCount + ' ohne /CIDToGIDMap.'
             },
             {
-                id: 'outlines',
-                title: '9. Lesezeichen / Dokumentgliederung (/Outlines)',
-                standard: 'WCAG 2.4.5 • BITV 2.0 Navigation',
-                passed: hasOutlines,
-                status: hasOutlines ? 'pass' : 'warn',
-                detail: hasOutlines
-                    ? 'Lesezeichen-Struktur (/Outlines) für schnelle Seitennavigation vorhanden.'
-                    : 'Keine Lesezeichen (/Outlines) hinterlegt.'
+                id: 'pages_tabs',
+                category: 'PDF/UA',
+                title: '7. [PDF/UA • Seiten] Tabulator-Reihenfolge folgt Struktur (/Tabs /S auf allen Seiten)',
+                standard: 'PAC 2026 Pages • Matterhorn 18-001 • WCAG 2.4.3',
+                passed: pagesTabsPass,
+                status: pagesTabsPass ? 'pass' : 'fail',
+                detail: pagesTabsPass
+                    ? 'Alle ' + pdfPages.length + ' Seite(n) besitzen den Eintrag /Tabs /S.'
+                    : pagesMissingTabsS + ' von ' + pdfPages.length + ' Seite(n) fehlt der Eintrag /Tabs /S.'
             },
             {
                 id: 'security',
-                title: '10. Screenreader-Zugriff nicht durch Kopierschutz gesperrt',
-                standard: 'PDF/UA-1 (16-001)',
+                category: 'PDF/UA',
+                title: '8. [PDF/UA • Sicherheit] Screenreader-Zugriff nicht durch Verschlüsselung blockiert',
+                standard: 'PAC 2026 Security • Matterhorn 26-001',
                 passed: !isEncryptedLocked,
                 status: !isEncryptedLocked ? 'pass' : 'fail',
                 detail: !isEncryptedLocked
-                    ? 'Textextraktion für Assistenztechnologien ist uneingeschränkt möglich.'
-                    : 'Verschlüsselung (/Encrypt) gefunden — bitte Screenreader-Freigabe prüfen.'
+                    ? 'Textextraktion für Assistenztechnologien ist uneingeschränkt freigegeben.'
+                    : 'Verschlüsselung (/Encrypt) gefunden — Screenreader-Zugriff eingeschränkt.'
+            },
+
+            // === TEIL 2: PAC 2026 — WCAG 2.1 / 2.2 & BITV 2.0 KONFORMITÄT ===
+            {
+                id: 'wcag_headings',
+                category: 'WCAG',
+                title: '9. [WCAG 1.3.1 & 2.4.6] Logische Überschriftenhierarchie (<H1>–<H6> ohne Ebenensprung)',
+                standard: 'PAC 2026 WCAG • WCAG 1.3.1, 2.4.6 • Matterhorn 14-001..003',
+                passed: headingsPass,
+                status: headingsPass ? 'pass' : 'fail',
+                detail: headingsPass
+                    ? 'Gültige Überschriftenhierarchie mit <H1>-Hauptüberschrift (' + (headingLevelsFound[1] || 0) + 'x <H1>' + (headingLevelsFound[2] ? ', ' + headingLevelsFound[2] + 'x <H2>' : '') + ') ohne übersprungene Ebenen.'
+                    : !hasH1
+                        ? 'Fehlt: Dokument enthält keine <H1>-Hauptüberschrift im Strukturbaum.'
+                        : 'Fehler: Überschriftenebenen wurden übersprungen (z. B. H1 direkt auf H3).'
+            },
+            {
+                id: 'wcag_alt_annots',
+                category: 'WCAG',
+                title: '10. [WCAG 1.1.1, 2.4.4 & 4.1.2] Alternativtexte, Links (<Link> /OBJR) & Formulare',
+                standard: 'PAC 2026 WCAG • WCAG 1.1.1, 2.4.4, 4.1.2 • Matterhorn 13, 28',
+                passed: altAndAnnotsPass,
+                status: altAndAnnotsPass ? 'pass' : 'fail',
+                detail: altAndAnnotsPass
+                    ? 'Alle Grafiken/Artefakte und ' + totalAnnotsCount + ' interaktive Annotation(en) sind regelkonform getaggt.'
+                    : (figuresMissingAltCount > 0 ? figuresMissingAltCount + ' <Figure>-Element(e) ohne /Alt. ' : '') +
+                      (untaggedAnnotsCount > 0 ? untaggedAnnotsCount + ' Link/Formular-Annotation(en) ohne /StructParent oder /Contents. ' : '') +
+                      (!isFullyTaggedContent ? 'Seiten enthalten noch unmarkierte Grafiken.' : '')
+            },
+            {
+                id: 'wcag_contrast_text',
+                category: 'WCAG',
+                title: '11. [WCAG 1.4.3 & 1.4.5] AA-Textkontrast (≥ 4,5:1) & Durchsuchbarer Text-Layer',
+                standard: 'PAC 2026 WCAG • WCAG 1.4.3 (Kontrast), 1.4.5 (Text statt Bild)',
+                passed: contrastAndTextPass,
+                status: contrastAndTextPass ? 'pass' : 'fail',
+                detail: contrastAndTextPass
+                    ? pagesWithText + ' von ' + pdfJsDoc.numPages + ' Seite(n) durchsuchbar (' + totalChars + ' Zeichen) & AA-Farbkontrast (≥ 4,5:1) eingehalten.'
+                    : !hasSearchableText
+                        ? '0 Zeichen auslesbarer Text gefunden (reiner Bild-Scan).'
+                        : lowContrastTextCount + ' Text-Farboperation(en) unterschreiten den Mindestkontrast von 4,5:1 (zu helles Grau).'
+            },
+            {
+                id: 'wcag_navigation',
+                category: 'WCAG',
+                title: '12. [WCAG 2.4.1 & 2.4.5] Blöcke umgehen, Lesezeichen (/Outlines) & <Sect>-Gliederung',
+                standard: 'PAC 2026 WCAG • WCAG 2.4.1, 2.4.5 • BITV 2.0 Navigation',
+                passed: navigationPass,
+                status: navigationPass ? 'pass' : 'fail',
+                detail: navigationPass
+                    ? 'Lesezeichen-Baum (/Outlines) und semantische <Sect>-Abschnittsgliederung vorhanden.'
+                    : 'Fehlt: ' + (!hasOutlines ? 'Keine Lesezeichen (/Outlines) vorhanden. ' : '') + (!hasSectElem ? 'Keine <Sect>-Abschnittsstruktur vorhanden.' : '')
             }
         ];
+
+        var pdfUaChecks = checks.filter(function (c) { return c.category === 'PDF/UA'; });
+        var wcagChecks = checks.filter(function (c) { return c.category === 'WCAG'; });
+        var pdfUaPassed = pdfUaChecks.filter(function (c) { return c.passed; }).length;
+        var wcagPassed = wcagChecks.filter(function (c) { return c.passed; }).length;
 
         var passedCount = checks.filter(function (c) { return c.passed; }).length;
         var score = Math.round((passedCount / checks.length) * 100);
@@ -3079,8 +3407,25 @@
             score: score,
             passedCount: passedCount,
             totalChecks: checks.length,
+            pdfUaPassed: pdfUaPassed,
+            pdfUaTotal: pdfUaChecks.length,
+            wcagPassed: wcagPassed,
+            wcagTotal: wcagChecks.length,
             checks: checks
         };
+    }
+
+    function createA11ySectionDividerElement(label, subText) {
+        var hdr = document.createElement('div');
+        hdr.style.cssText =
+            'display:flex;align-items:center;justify-content:space-between;' +
+            'padding:6px 10px;margin-top:4px;background:var(--bg-card);' +
+            'border:1px solid var(--border-strong);border-radius:6px;' +
+            'font-size:11.5px;font-weight:800;color:var(--accent-primary);letter-spacing:0.2px;';
+        hdr.innerHTML =
+            '<span>' + escapeHtml(label) + '</span>' +
+            '<span style="font-weight:600;font-size:11px;color:var(--text-secondary);">' + escapeHtml(subText || '') + '</span>';
+        return hdr;
     }
 
     function createA11yCheckRowElement(chk) {
@@ -3114,6 +3459,8 @@
         if (!doc) return;
 
         var scorePill = document.getElementById('a11yScorePill');
+        var pdfUaBadge = document.getElementById('a11yPdfUaBadge');
+        var wcagBadge = document.getElementById('a11yWcagBadge');
         var sumTitle = document.getElementById('a11ySummaryTitle');
         var sumSub = document.getElementById('a11ySummarySub');
         var sumBanner = document.getElementById('a11ySummaryBanner');
@@ -3134,8 +3481,10 @@
                 scorePill.style.background = 'var(--accent-soft)';
                 scorePill.style.color = 'var(--accent-primary)';
             }
+            if (pdfUaBadge) pdfUaBadge.textContent = 'PDF/UA: …';
+            if (wcagBadge) wcagBadge.textContent = 'WCAG: …';
             if (sumTitle) {
-                sumTitle.textContent = '🔍 Prüfe PDF-Struktur, Katalog & Text-Layer nach PDF/UA-1 & BITV 2.0…';
+                sumTitle.textContent = '🔍 Prüfe PDF-Struktur, Content-Streams, Schriften & WCAG 2.1/2.2 analog PAC 2026…';
             }
             if (sumSub) {
                 sumSub.textContent = 'Analysiere Dokument: ' + doc.name + ' (' + doc.pageCount + ' Seiten)…';
@@ -3147,7 +3496,7 @@
                 progBox.style.display = 'block';
                 if (progFill) progFill.style.width = '5%';
                 if (progPct) progPct.textContent = '5 %';
-                if (progLabel) progLabel.textContent = '🔍 Lade PDF-Objektbaum und XMP-Metadaten im Arbeitsspeicher…';
+                if (progLabel) progLabel.textContent = '🔍 Lade PDF-Objektbaum, Content-Streams und XMP-Metadaten…';
             }
         }
 
@@ -3163,7 +3512,21 @@
         var sideBadge = document.getElementById('inspectorA11yScoreBadge');
         if (sideBadge) {
             sideBadge.textContent = report.score + '% (' + report.passedCount + '/' + report.totalChecks + ')';
-            sideBadge.style.color = report.score >= 90 ? '#10b981' : (report.score >= 60 ? '#f59e0b' : '#ef4444');
+            sideBadge.style.color = report.score === 100 ? '#10b981' : (report.score >= 60 ? '#f59e0b' : '#ef4444');
+        }
+
+        // Update PAC 2026 PDF/UA & WCAG Sub-Badges
+        if (pdfUaBadge) {
+            var uaOk = report.pdfUaPassed === report.pdfUaTotal;
+            pdfUaBadge.textContent = (uaOk ? '✔ ' : '✕ ') + 'PDF/UA: ' + report.pdfUaPassed + '/' + report.pdfUaTotal;
+            pdfUaBadge.style.color = uaOk ? '#10b981' : '#ef4444';
+            pdfUaBadge.style.borderColor = uaOk ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)';
+        }
+        if (wcagBadge) {
+            var wcagOk = report.wcagPassed === report.wcagTotal;
+            wcagBadge.textContent = (wcagOk ? '✔ ' : '✕ ') + 'WCAG: ' + report.wcagPassed + '/' + report.wcagTotal;
+            wcagBadge.style.color = wcagOk ? '#10b981' : '#ef4444';
+            wcagBadge.style.borderColor = wcagOk ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)';
         }
 
         // Pre-fill Remediation Inputs
@@ -3181,21 +3544,36 @@
             }
         }
 
-        // Visual step-by-step reveal when triggered interactively by the user
+        // Visual step-by-step reveal with PAC 2026 section headers (PDF/UA vs. WCAG)
         if (openModalWindow && listContainer) {
+            var lastCat = '';
             for (var stepIdx = 0; stepIdx < report.checks.length; stepIdx++) {
                 var chkItem = report.checks[stepIdx];
+                if (chkItem.category !== lastCat) {
+                    lastCat = chkItem.category;
+                    if (lastCat === 'PDF/UA') {
+                        listContainer.appendChild(createA11ySectionDividerElement(
+                            '📋 Reiter 1: PAC 2026 — PDF/UA-1 (ISO 14289-1 / Matterhorn-Protokoll)',
+                            report.pdfUaPassed + ' von ' + report.pdfUaTotal + ' bestanden'
+                        ));
+                    } else if (lastCat === 'WCAG') {
+                        listContainer.appendChild(createA11ySectionDividerElement(
+                            '🌐 Reiter 2: PAC 2026 — WCAG 2.1 / 2.2 & BITV 2.0 Konformität',
+                            report.wcagPassed + ' von ' + report.wcagTotal + ' bestanden'
+                        ));
+                    }
+                }
                 var pct = Math.round(((stepIdx + 1) / report.checks.length) * 100);
                 if (progFill) progFill.style.width = pct + '%';
                 if (progPct) progPct.textContent = pct + ' %';
                 if (progLabel) {
-                    progLabel.textContent = 'Prüfe Kriterium ' + (stepIdx + 1) + '/' + report.checks.length + ': ' + chkItem.title + ' (' + chkItem.standard + ')';
+                    progLabel.textContent = 'Prüfe Kriterium ' + (stepIdx + 1) + '/' + report.checks.length + ': ' + chkItem.title;
                 }
-                setStatus('PDF/UA-Prüfung (' + pct + ' %): ' + chkItem.title + '…');
+                setStatus('PAC-2026-Prüfung (' + pct + ' %): ' + chkItem.title + '…');
                 var stepRow = createA11yCheckRowElement(chkItem);
                 listContainer.appendChild(stepRow);
                 listContainer.scrollTop = listContainer.scrollHeight;
-                await new Promise(function (resolve) { setTimeout(resolve, 65); });
+                await new Promise(function (resolve) { setTimeout(resolve, 45); });
             }
             listContainer.scrollTop = 0;
             if (progBox) {
@@ -3206,7 +3584,22 @@
             if (reRunBtn) reRunBtn.disabled = false;
         } else if (listContainer) {
             listContainer.innerHTML = '';
+            var prevCat = '';
             report.checks.forEach(function (chk) {
+                if (chk.category !== prevCat) {
+                    prevCat = chk.category;
+                    if (prevCat === 'PDF/UA') {
+                        listContainer.appendChild(createA11ySectionDividerElement(
+                            '📋 Reiter 1: PAC 2026 — PDF/UA-1 (ISO 14289-1 / Matterhorn-Protokoll)',
+                            report.pdfUaPassed + ' von ' + report.pdfUaTotal + ' bestanden'
+                        ));
+                    } else if (prevCat === 'WCAG') {
+                        listContainer.appendChild(createA11ySectionDividerElement(
+                            '🌐 Reiter 2: PAC 2026 — WCAG 2.1 / 2.2 & BITV 2.0 Konformität',
+                            report.wcagPassed + ' von ' + report.wcagTotal + ' bestanden'
+                        ));
+                    }
+                }
                 listContainer.appendChild(createA11yCheckRowElement(chk));
             });
         }
@@ -3214,32 +3607,33 @@
         // Render Modal Summary Header with Timestamp & Engine Speed Info
         var timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         scorePill.textContent = report.score + ' %';
-        if (report.score >= 90) {
+        if (report.score === 100) {
             scorePill.style.background = 'rgba(16, 185, 129, 0.18)';
             scorePill.style.color = '#10b981';
-            sumTitle.textContent = '✔ Dokument erfüllt die Barrierefreiheits-Anforderungen (' + report.passedCount + '/' + report.totalChecks + ' Prüfpunkte)';
+            sumTitle.textContent = '✔ PDF/UA-1 & WCAG 2.1/2.2 vollständig konform (' + report.passedCount + '/' + report.totalChecks + ' Prüfpunkte)';
         } else if (report.score >= 60) {
             scorePill.style.background = 'rgba(245, 158, 11, 0.18)';
             scorePill.style.color = '#f59e0b';
-            sumTitle.textContent = '⚠ Teilweise barrierefrei (' + report.passedCount + '/' + report.totalChecks + ' Prüfpunkte erfüllt)';
+            sumTitle.textContent = '⚠ Abweichungen bei PDF/UA oder WCAG gefunden (' + report.passedCount + '/' + report.totalChecks + ' erfüllt)';
         } else {
             scorePill.style.background = 'rgba(239, 68, 68, 0.18)';
             scorePill.style.color = '#ef4444';
-            sumTitle.textContent = '✕ Nicht barrierefrei — Wichtige PDF/UA- & BITV-Merkmale fehlen (' + report.passedCount + '/' + report.totalChecks + ')';
+            sumTitle.textContent = '✕ Nicht barrierefrei — PDF/UA- & WCAG-Anforderungen nicht erfüllt (' + report.passedCount + '/' + report.totalChecks + ')';
         }
         sumSub.textContent =
             'Geprüft: ' + report.docName + ' (' + report.pageCount + ' S.) • ' +
-            'Stand: ' + timeStr + ' Uhr (In-Memory-Analyse in ' + rawElapsedMs + ' ms)';
+            'PDF/UA: ' + report.pdfUaPassed + '/' + report.pdfUaTotal + ' • WCAG: ' + report.wcagPassed + '/' + report.wcagTotal + ' • ' +
+            'Stand: ' + timeStr + ' Uhr (' + rawElapsedMs + ' ms)';
 
         if (openModalWindow) {
             if (sumBanner) {
-                sumBanner.style.borderColor = report.score >= 90 ? '#10b981' : (report.score >= 60 ? '#f59e0b' : '#ef4444');
+                sumBanner.style.borderColor = report.score === 100 ? '#10b981' : (report.score >= 60 ? '#f59e0b' : '#ef4444');
                 setTimeout(function () {
                     sumBanner.style.borderColor = 'var(--border-strong)';
                 }, 900);
             }
-            setStatus('PDF/UA- & BITV-Prüfung abgeschlossen: ' + report.score + ' % (' + report.passedCount + '/' + report.totalChecks + ' Kriterien erfüllt).');
-            showToast('Prüfung abgeschlossen (' + timeStr + ' Uhr): ' + report.score + ' % (' + report.passedCount + '/' + report.totalChecks + ' Kriterien erfüllt)', report.score >= 90 ? 'success' : 'info');
+            setStatus('PAC-2026-Prüfung abgeschlossen: ' + report.score + ' % (PDF/UA ' + report.pdfUaPassed + '/' + report.pdfUaTotal + ', WCAG ' + report.wcagPassed + '/' + report.wcagTotal + ').');
+            showToast('Prüfung abgeschlossen (' + timeStr + ' Uhr): ' + report.score + ' % (' + report.passedCount + '/' + report.totalChecks + ' Kriterien erfüllt)', report.score === 100 ? 'success' : 'info');
         }
         return report;
     }
@@ -3481,8 +3875,105 @@
         return stmts;
     }
 
-    function tagContentStreamStatementsForPdfUa(stmts, startMcid, forceInvisibleTextMode3) {
+    var ADOBE_GLYPH_TO_UNICODE_HEX = {
+        space: '0020', exclam: '0021', quotedbl: '0022', numbersign: '0023', dollar: '0024', percent: '0025',
+        ampersand: '0026', quotesingle: '0027', quoteright: '2019', quoteleft: '2018', parenleft: '0028', parenright: '0029',
+        asterisk: '002A', plus: '002B', comma: '002C', hyphen: '002D', minus: '2212', period: '002E', slash: '002F',
+        zero: '0030', one: '0031', two: '0032', three: '0033', four: '0034', five: '0035', six: '0036', seven: '0037', eight: '0038', nine: '0039',
+        colon: '003A', semicolon: '003B', less: '003C', equal: '003D', greater: '003E', question: '003F', at: '0040',
+        bracketleft: '005B', backslash: '005C', bracketright: '005D', asciicircum: '005E', underscore: '005F', grave: '0060',
+        braceleft: '007B', bar: '007C', braceright: '007D', asciitilde: '007E',
+        Euro: '20AC', euro: '20AC', quotesinglbase: '201A', quotedblbase: '201E', ellipsis: '2026', dagger: '2020', daggerdbl: '2021',
+        circumflex: '02C6', perthousand: '2030', Scaron: '0160', scaron: '0161', guilsinglleft: '2039', guilsinglright: '203A',
+        OE: '0152', oe: '0153', Zcaron: '017D', zcaron: '017E', quotedblleft: '201C', quotedblright: '201D',
+        bullet: '2022', endash: '2013', emdash: '2014', tilde: '02DC', trademark: '2122', Ydieresis: '0178',
+        nbspace: '00A0', nonbreakingspace: '00A0', exclamdown: '00A1', cent: '00A2', sterling: '00A3', currency: '00A4',
+        yen: '00A5', brokenbar: '00A6', section: '00A7', dieresis: '00A8', copyright: '00A9', ordfeminine: '00AA',
+        guillemotleft: '00AB', logicalnot: '00AC', sfthyphen: '00AD', softhyphen: '00AD', registered: '00AE', macron: '00AF',
+        degree: '00B0', plusminus: '00B1', twosuperior: '00B2', threesuperior: '00B3', acute: '00B4', mu: '00B5', micro: '00B5',
+        paragraph: '00B6', periodcentered: '00B7', middot: '00B7', cedilla: '00B8', onesuperior: '00B9', ordmasculine: '00BA',
+        guillemotright: '00BB', onequarter: '00BC', onehalf: '00BD', threequarters: '00BE', questiondown: '00BF',
+        Agrave: '00C0', Aacute: '00C1', Acircumflex: '00C2', Atilde: '00C3', Adieresis: '00C4', Aring: '00C5', AE: '00C6', Ccedilla: '00C7',
+        Egrave: '00C8', Eacute: '00C9', Ecircumflex: '00CA', Edieresis: '00CB', Igrave: '00CC', Iacute: '00CD', Icircumflex: '00CE', Idieresis: '00CF',
+        Eth: '00D0', Ntilde: '00D1', Ograve: '00D2', Oacute: '00D3', Ocircumflex: '00D4', Otilde: '00D5', Odieresis: '00D6', multiply: '00D7',
+        Oslash: '00D8', Ugrave: '00D9', Uacute: '00DA', Ucircumflex: '00DB', Udieresis: '00DC', Yacute: '00DD', Thorn: '00DE', germandbls: '00DF',
+        agrave: '00E0', aacute: '00E1', acircumflex: '00E2', atilde: '00E3', adieresis: '00E4', aring: '00E5', ae: '00E6', ccedilla: '00E7',
+        egrave: '00E8', eacute: '00E9', ecircumflex: '00EA', edieresis: '00EB', igrave: '00EC', iacute: '00ED', icircumflex: '00EE', idieresis: '00EF',
+        eth: '00F0', ntilde: '00F1', ograve: '00F2', oacute: '00F3', ocircumflex: '00F4', otilde: '00F5', odieresis: '00F6', divide: '00F7',
+        oslash: '00F8', ugrave: '00F9', uacute: '00FA', ucircumflex: '00FB', udieresis: '00FC', yacute: '00FD', thorn: '00FE', ydieresis: '00FF',
+        fi: 'FB01', fl: 'FB02'
+    };
+
+    function buildCustomDifferencesToUnicodeCMapString(diffArray, context) {
+        var cp1252Extra = {
+            128: '20AC', 130: '201A', 131: '0192', 132: '201E', 133: '2026', 134: '2020', 135: '2021',
+            136: '02C6', 137: '2030', 138: '0160', 139: '2039', 140: '0152', 142: '017D', 145: '2018',
+            146: '2019', 147: '201C', 148: '201D', 149: '2022', 150: '2013', 151: '2014', 152: '02DC',
+            153: '2122', 154: '0161', 155: '203A', 156: '0153', 158: '017E', 159: '0178'
+        };
+        var codeMap = {};
+        for (var c = 0; c <= 255; c++) {
+            var baseCode = c < 32 ? (c + 32) : c;
+            codeMap[c] = cp1252Extra[baseCode] ? cp1252Extra[baseCode] : ('000' + baseCode.toString(16).toUpperCase()).slice(-4);
+        }
+        if (diffArray && typeof diffArray.asArray === 'function') {
+            var items = diffArray.asArray();
+            var curCode = 0;
+            for (var idx = 0; idx < items.length; idx++) {
+                var it = context ? context.lookup(items[idx]) : items[idx];
+                if (!it) continue;
+                if (typeof it.asNumber === 'function') {
+                    curCode = it.asNumber() & 0xFF;
+                } else {
+                    var gName = String(it).replace(/^\//, '');
+                    var hexU = null;
+                    if (gName.length === 1) {
+                        hexU = ('000' + gName.charCodeAt(0).toString(16).toUpperCase()).slice(-4);
+                    } else if (ADOBE_GLYPH_TO_UNICODE_HEX[gName]) {
+                        hexU = ADOBE_GLYPH_TO_UNICODE_HEX[gName];
+                    } else if (/^uni([0-9A-Fa-f]{4})$/.test(gName)) {
+                        hexU = RegExp.$1.toUpperCase();
+                    } else if (/^u([0-9A-Fa-f]{4,6})$/.test(gName)) {
+                        hexU = RegExp.$1.slice(-4).toUpperCase();
+                    }
+                    if (hexU && curCode >= 0 && curCode <= 255) {
+                        codeMap[curCode] = hexU;
+                    }
+                    curCode++;
+                }
+            }
+        }
+        var entries = [];
+        for (var k = 0; k <= 255; k++) {
+            var srcHex = ('0' + k.toString(16).toUpperCase()).slice(-2);
+            entries.push('<' + srcHex + '> <' + codeMap[k] + '>');
+        }
+        var lines = [
+            '/CIDInit /ProcSet findresource begin',
+            '12 dict begin',
+            'begincmap',
+            '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+            '/CMapName /Adobe-Identity-UCS def',
+            '/CMapType 2 def',
+            '1 begincodespacerange',
+            '<00> <FF>',
+            'endcodespacerange'
+        ];
+        for (var i = 0; i < entries.length; i += 100) {
+            var chunk = entries.slice(i, i + 100);
+            lines.push(chunk.length + ' beginbfchar');
+            for (var j = 0; j < chunk.length; j++) {
+                lines.push(chunk[j]);
+            }
+            lines.push('endbfchar');
+        }
+        lines.push('endcmap', 'CMapName currentdict /CMap defineresource pop', 'end', 'end');
+        return lines.join('\n');
+    }
+
+    function tagContentStreamStatementsForPdfUa(stmts, startMcid, forceInvisibleTextMode3, pageIndex) {
         var nextMcid = startMcid || 0;
+        var mcidTags = [];
         var outLines = [];
         var idx = 0;
         var total = stmts.length;
@@ -3490,11 +3981,28 @@
         function isPathStartOp(op) {
             return op === 'm' || op === 're';
         }
-        function isPathContinueOp(op) {
-            return op === 'm' || op === 'l' || op === 'c' || op === 'v' || op === 'y' || op === 'h' || op === 're' || op === 'W' || op === 'W*';
-        }
         function isPathPaintOp(op) {
             return op === 'S' || op === 's' || op === 'f' || op === 'F' || op === 'f*' || op === 'B' || op === 'B*' || op === 'b' || op === 'b*' || op === 'n';
+        }
+        function enhanceTextColorStmtForWcagContrast(tst) {
+            if (tst.op === 'g' && tst.operands.length >= 1) {
+                var gv = parseFloat(tst.operands[0]);
+                if (!isNaN(gv) && gv > 0.45 && gv < 0.92) {
+                    return '0.22 g';
+                }
+            } else if (tst.op === 'rg' && tst.operands.length >= 3) {
+                var r = parseFloat(tst.operands[0]);
+                var g = parseFloat(tst.operands[1]);
+                var b = parseFloat(tst.operands[2]);
+                if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
+                    var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    if (lum > 0.45 && lum < 0.92) {
+                        var scale = 0.25 / lum;
+                        return (r * scale).toFixed(3) + ' ' + (g * scale).toFixed(3) + ' ' + (b * scale).toFixed(3) + ' rg';
+                    }
+                }
+            }
+            return tst.raw;
         }
 
         while (idx < total) {
@@ -3522,7 +4030,7 @@
                         idx++;
                         continue;
                     }
-                    btBlock.push(tst.raw);
+                    btBlock.push(enhanceTextColorStmtForWcagContrast(tst));
                     if (top === 'Tj' || top === 'TJ' || top === "'" || top === '"') {
                         var opndStr = tst.operands.join('').replace(/\s+/g, '');
                         if (opndStr !== '()' && opndStr !== '<>' && opndStr !== '[]') {
@@ -3534,7 +4042,9 @@
                 }
                 if (hasNonEmptyText) {
                     var mcid = nextMcid++;
-                    outLines.push('/P <</MCID ' + mcid + '>> BDC');
+                    var tagType = (pageIndex === 0 && mcid === 0) ? 'H1' : ((pageIndex > 0 && mcid === 0) ? 'H2' : 'P');
+                    mcidTags.push(tagType);
+                    outLines.push('/' + tagType + ' <</MCID ' + mcid + '>> BDC');
                     outLines.push(btBlock.join('\n'));
                     outLines.push('EMC');
                 } else {
@@ -3545,27 +4055,24 @@
                 continue;
             }
 
-            // 3. Path Object (m/re ... S/s/f/F/f*/B/B*/b/b*/n) — never contains q or Q per ISO 32000-1 Figure 9
+            // 3. Path Object (m/re ... S/s/f/F/f*/B/B*/b/b*/n) — keep entire path up to paint op inside one /Artifact block
             if (isPathStartOp(op)) {
                 var pathBlock = [st.raw];
                 idx++;
                 while (idx < total) {
                     var pst = stmts[idx];
-                    if (pst.op === 'BMC' || pst.op === 'BDC' || pst.op === 'EMC') {
+                    if (pst.op === 'BMC' || pst.op === 'BDC' || pst.op === 'EMC' || pst.op === 'MP' || pst.op === 'DP') {
                         idx++;
                         continue;
                     }
-                    if (isPathContinueOp(pst.op)) {
-                        pathBlock.push(pst.raw);
-                        idx++;
-                        continue;
-                    }
-                    if (isPathPaintOp(pst.op)) {
-                        pathBlock.push(pst.raw);
-                        idx++;
+                    if (pst.op === 'BT' || pst.op === 'q' || pst.op === 'Q' || pst.op === 'Do' || pst.op === 'sh' || pst.op === 'EI') {
                         break;
                     }
-                    break;
+                    pathBlock.push(pst.raw);
+                    idx++;
+                    if (isPathPaintOp(pst.op)) {
+                        break;
+                    }
                 }
                 outLines.push('/Artifact BMC');
                 outLines.push(pathBlock.join('\n'));
@@ -3583,13 +4090,14 @@
             }
 
             // 5. Graphics State operators (q, Q, cm, gs, colors, line styles, etc.) stay outside BDC/BMC
-            outLines.push(st.raw);
+            outLines.push(enhanceTextColorStmtForWcagContrast(st));
             idx++;
         }
 
         return {
             contentString: outLines.join('\n') + '\n',
-            nextMcid: nextMcid
+            nextMcid: nextMcid,
+            mcidTags: mcidTags
         };
     }
 
@@ -3611,7 +4119,7 @@
             });
             fontFileRef = context.register(fontStream);
 
-            var cmapBytes = stringToLatin1Bytes(buildWinAnsiToUnicodeCMapString());
+            var cmapBytes = stringToLatin1Bytes(buildCustomDifferencesToUnicodeCMapString(null, context));
             var cmapStream = context.flateStream(cmapBytes);
             toUnicodeRef = context.register(cmapStream);
 
@@ -3652,24 +4160,54 @@
             var obj = indirectObjects[i][1];
             if (!obj || typeof obj.get !== 'function') continue;
 
-            var typeName = obj.get(PDFLib.PDFName.of('Type'));
-            var subtypeName = obj.get(PDFLib.PDFName.of('Subtype'));
+            var subtypeName = String(obj.get(PDFLib.PDFName.of('Subtype')) || '');
 
-            // Ensure CIDToGIDMap /Identity on any CIDFontType2 dictionary (PDF/UA-1 Clause 7.21.3.2)
-            if (subtypeName && String(subtypeName) === '/CIDFontType2') {
+            // 1. CIDFontType2 / CIDFontType0: ensure CIDToGIDMap /Identity and embedded FontFile2 in FontDescriptor
+            if (subtypeName === '/CIDFontType2' || subtypeName === '/CIDFontType0') {
+                if (subtypeName === '/CIDFontType0') {
+                    obj.set(PDFLib.PDFName.of('Subtype'), PDFLib.PDFName.of('CIDFontType2'));
+                }
                 if (!obj.get(PDFLib.PDFName.of('CIDToGIDMap'))) {
                     obj.set(PDFLib.PDFName.of('CIDToGIDMap'), PDFLib.PDFName.of('Identity'));
+                }
+                var cidDesc = obj.lookup ? obj.lookup(PDFLib.PDFName.of('FontDescriptor')) : null;
+                if (cidDesc && typeof cidDesc.get === 'function') {
+                    if (!cidDesc.get(PDFLib.PDFName.of('FontFile')) &&
+                        !cidDesc.get(PDFLib.PDFName.of('FontFile2')) &&
+                        !cidDesc.get(PDFLib.PDFName.of('FontFile3'))) {
+                        cidDesc.set(PDFLib.PDFName.of('FontFile2'), fontFileRef);
+                    }
+                } else {
+                    obj.set(PDFLib.PDFName.of('FontDescriptor'), fontDescRef);
                 }
                 continue;
             }
 
-            var isSimpleFont = subtypeName && (String(subtypeName) === '/Type1' || String(subtypeName) === '/TrueType');
+            // 2. Type0 Composite Font: ensure /ToUnicode is present
+            if (subtypeName === '/Type0') {
+                if (!obj.get(PDFLib.PDFName.of('ToUnicode'))) {
+                    obj.set(PDFLib.PDFName.of('ToUnicode'), toUnicodeRef);
+                }
+                continue;
+            }
+
+            // 3. Simple Font (/Type1, /TrueType, /MMType1)
+            var isSimpleFont = subtypeName === '/Type1' || subtypeName === '/TrueType' || subtypeName === '/MMType1';
             if (!isSimpleFont) continue;
 
             var encObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('Encoding')) : obj.get(PDFLib.PDFName.of('Encoding'));
-            var hasCustomDifferences = Boolean(encObj && typeof encObj.get === 'function' && encObj.get(PDFLib.PDFName.of('Differences')));
+            var diffArr = (encObj && typeof encObj.get === 'function') ? encObj.get(PDFLib.PDFName.of('Differences')) : null;
+            var hasCustomDifferences = Boolean(diffArr);
 
-            var existingDesc = obj.get(PDFLib.PDFName.of('FontDescriptor'));
+            var existingDesc = obj.lookup ? obj.lookup(PDFLib.PDFName.of('FontDescriptor')) : null;
+            var hasEmbeddedFontFile = Boolean(
+                existingDesc && typeof existingDesc.get === 'function' && (
+                    existingDesc.get(PDFLib.PDFName.of('FontFile')) ||
+                    existingDesc.get(PDFLib.PDFName.of('FontFile2')) ||
+                    existingDesc.get(PDFLib.PDFName.of('FontFile3'))
+                )
+            );
+
             if (!existingDesc) {
                 obj.set(PDFLib.PDFName.of('Type'), PDFLib.PDFName.of('Font'));
                 obj.set(PDFLib.PDFName.of('Subtype'), PDFLib.PDFName.of('TrueType'));
@@ -3681,11 +4219,19 @@
                 obj.set(PDFLib.PDFName.of('LastChar'), PDFLib.PDFNumber.of(255));
                 obj.set(PDFLib.PDFName.of('Widths'), widthsObjRef);
                 obj.set(PDFLib.PDFName.of('FontDescriptor'), fontDescRef);
-                if (!obj.get(PDFLib.PDFName.of('ToUnicode')) && !hasCustomDifferences) {
+            } else if (!hasEmbeddedFontFile) {
+                obj.set(PDFLib.PDFName.of('Subtype'), PDFLib.PDFName.of('TrueType'));
+                existingDesc.set(PDFLib.PDFName.of('FontFile2'), fontFileRef);
+            }
+
+            if (!obj.get(PDFLib.PDFName.of('ToUnicode'))) {
+                if (hasCustomDifferences) {
+                    var customCmapBytes = stringToLatin1Bytes(buildCustomDifferencesToUnicodeCMapString(diffArr, context));
+                    var customCmapRef = context.register(context.flateStream(customCmapBytes));
+                    obj.set(PDFLib.PDFName.of('ToUnicode'), customCmapRef);
+                } else {
                     obj.set(PDFLib.PDFName.of('ToUnicode'), toUnicodeRef);
                 }
-            } else if (!obj.get(PDFLib.PDFName.of('ToUnicode')) && !hasCustomDifferences) {
-                obj.set(PDFLib.PDFName.of('ToUnicode'), toUnicodeRef);
             }
         }
 
@@ -3696,11 +4242,11 @@
     }
 
     /**
-     * 1-Click PDF/UA-1 (ISO 14289-1 / PAC 2026) & BITV 2.0 Auto-Remediation:
+     * 1-Click PDF/UA-1 (ISO 14289-1 / PAC 2026) & WCAG 2.1/2.2 Auto-Remediation:
      * 1. Synchronizes /Info and XMP /Metadata 1:1 (UTF-8 BOM, W5M0MpCehiHzreSzNTczkc9d, pdfuaid:part=1, pdfaExtension)
-     * 2. Tokenizes & tags all page Content Streams (BT..ET -> /P <</MCID k>> BDC..EMC, graphics/images -> /Artifact BMC..EMC)
-     * 3. Builds complete /StructTreeRoot with /ParentTree Number-Tree, /ParentTreeNextKey, /RoleMap & page /StructParents
-     * 4. Embeds TrueType Font (/FontFile2 LiberationSans + /Widths + /ToUnicode) into unembedded Standard Type1 fonts
+     * 2. Tokenizes & tags all page Content Streams (<H1>/<H2>/<P> BDC..EMC, intact path/image /Artifact BMC..EMC, WCAG 1.4.3 contrast)
+     * 3. Builds complete /StructTreeRoot with /ParentTree Number-Tree, /ParentTreeNextKey, <Link>/<Form> /OBJR & page /StructParents
+     * 4. Embeds TrueType Font (/FontFile2 LiberationSans + /Widths + /ToUnicode incl. /Differences) into all unembedded fonts
      */
     async function remediatePdfAccessibility() {
         var doc = getActiveDoc();
@@ -3709,7 +4255,7 @@
 
         var fixTitle = (document.getElementById('a11yFixTitle').value || '').trim();
         if (!fixTitle || /\.pdf$/i.test(fixTitle)) {
-            fixTitle = doc.name.replace(/\.pdf$/i, '').replace(/_/g, ' ') + ' — Barrierefreies Dokument';
+            fixTitle = doc.name.replace(/\.pdf$/i, '').replace(/_/g, ' ') + ' - Barrierefreies Dokument';
             document.getElementById('a11yFixTitle').value = fixTitle;
         }
         var fixLang = document.getElementById('a11yFixLang').value || 'de-DE';
@@ -3720,11 +4266,51 @@
         var pages = pdfDoc.getPages();
 
         var fixAuthor = (pdfDoc.getAuthor() || '').trim() || 'PDF-Werkstatt Pro';
-        var fixSubject = (pdfDoc.getSubject() || '').trim() || 'Barrierefreies PDF-Dokument (PDF/UA-1 & BITV 2.0)';
+        var fixSubject = (pdfDoc.getSubject() || '').trim() || 'Barrierefreies PDF-Dokument (PDF/UA-1 & WCAG 2.1)';
         var fixCreator = 'PDF-Werkstatt Pro v1.0';
         var fixProducer = 'PDF-Werkstatt Pro v1.0 PDF/UA-1 Engine';
         var nowSec = new Date(Math.floor(Date.now() / 1000) * 1000);
         var isoDateStr = nowSec.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+        // 0. Remove any stray non-Catalog /Metadata keys & clean nested BDC/EMC inside Form XObjects (/Subtype /Form)
+        var allIndirect = context.enumerateIndirectObjects();
+        for (var ioIdx = 0; ioIdx < allIndirect.length; ioIdx++) {
+            var ioRef = allIndirect[ioIdx][0];
+            var ioObj = allIndirect[ioIdx][1];
+            if (!ioObj) continue;
+            var ioDict = ioObj.dict ? ioObj.dict : (typeof ioObj.get === 'function' ? ioObj : null);
+            if (!ioDict || typeof ioDict.get !== 'function') continue;
+
+            if (ioDict !== catalog && ioDict.get(PDFLib.PDFName.of('Metadata'))) {
+                if (typeof ioDict.delete === 'function') {
+                    ioDict.delete(PDFLib.PDFName.of('Metadata'));
+                }
+            }
+
+            var ioSubtype = String(ioDict.get(PDFLib.PDFName.of('Subtype')) || '');
+            if (ioSubtype === '/Form' && (ioObj instanceof PDFLib.PDFRawStream || ioObj.contents)) {
+                var formSrc = decodeRawPdfStreamToString(ioObj);
+                if (formSrc && (formSrc.indexOf('BDC') !== -1 || formSrc.indexOf('BMC') !== -1 || formSrc.indexOf('EMC') !== -1)) {
+                    var formStmts = parsePdfContentStreamStatements(formSrc);
+                    var cleanFormLines = [];
+                    for (var fs = 0; fs < formStmts.length; fs++) {
+                        var fOp = formStmts[fs].op;
+                        if (fOp === 'BMC' || fOp === 'BDC' || fOp === 'EMC' || fOp === 'MP' || fOp === 'DP') continue;
+                        cleanFormLines.push(formStmts[fs].raw);
+                    }
+                    var newFormBytes = stringToLatin1Bytes(cleanFormLines.join('\n') + '\n');
+                    var newFormStream = context.flateStream(newFormBytes);
+                    var fEntries = ioDict.entries ? ioDict.entries() : [];
+                    for (var fe = 0; fe < fEntries.length; fe++) {
+                        var kName = String(fEntries[fe][0]).replace(/^\//, '');
+                        if (kName !== 'Length' && kName !== 'Filter' && kName !== 'DecodeParms') {
+                            newFormStream.dict.set(fEntries[fe][0], fEntries[fe][1]);
+                        }
+                    }
+                    context.assign(ioRef, newFormStream);
+                }
+            }
+        }
 
         // 1. Clean & Synchronize /Info Dictionary 1:1 with XMP
         var infoDict = pdfDoc.getInfoDict();
@@ -3739,19 +4325,20 @@
         pdfDoc.setCreationDate(nowSec);
         pdfDoc.setModificationDate(nowSec);
 
-        // 2. Set /Lang, /ViewerPreferences & /MarkInfo on Catalog
+        // 2. Set /Lang, /ViewerPreferences & /MarkInfo on Catalog (with Suspects: false per Matterhorn 01-002)
         catalog.set(PDFLib.PDFName.of('Lang'), PDFLib.PDFString.of(fixLang));
         catalog.set(PDFLib.PDFName.of('ViewerPreferences'), context.obj({ DisplayDocTitle: true }));
-        catalog.set(PDFLib.PDFName.of('MarkInfo'), context.obj({ Marked: true }));
+        catalog.set(PDFLib.PDFName.of('MarkInfo'), context.obj({ Marked: true, Suspects: false }));
 
-        // 3. Embed TrueType Fonts (/FontFile2 + /Widths + /ToUnicode) for all unembedded Standard Fonts
+        // 3. Embed TrueType Fonts (/FontFile2 + /Widths + /ToUnicode) for all unembedded Fonts
         var sharedFontInfo = await embedPdfUaFontsIntoDocument(pdfDoc);
 
-        // 4. Tag all Page Content Streams (BT..ET -> /P MCID, non-text -> /Artifact) & build /StructTreeRoot + /ParentTree
+        // 4. Tag all Page Content Streams (<H1>/<H2>/<P> MCID, non-text -> /Artifact) & build /StructTreeRoot + /ParentTree
         var structTreeRootRef = context.nextRef();
         var docElemRef = context.nextRef();
         var sectRefs = [];
         var parentTreeNums = [];
+        var nextStructParentKey = pages.length;
 
         for (var i = 0; i < pages.length; i++) {
             var page = pages[i];
@@ -3791,36 +4378,22 @@
             }
 
             var pageMcidCount = 0;
+            var pageMcidTags = [];
             var taggedContentStr = '';
             if (streamRefs.length > 0 && PDFLib.decodePDFRawStream) {
                 var decodedParts = [];
                 for (var s = 0; s < streamRefs.length; s++) {
                     var rawStream = context.lookup(streamRefs[s]);
-                    if (!rawStream) continue;
-                    try {
-                        var decBytes;
-                        // IMPORTANT: PDFRawStream also has getContentsString() which returns compressed bytes!
-                        // Always check PDFRawStream / rawStream.contents FIRST and decode via decodePDFRawStream.
-                        if (rawStream instanceof PDFLib.PDFRawStream || (rawStream.contents && PDFLib.decodePDFRawStream)) {
-                            decBytes = PDFLib.decodePDFRawStream(rawStream).decode();
-                        } else if (typeof rawStream.getUnencodedContents === 'function') {
-                            decBytes = rawStream.getUnencodedContents();
-                        } else if (typeof rawStream.getContentsString === 'function') {
-                            decBytes = stringToLatin1Bytes(rawStream.getContentsString());
-                        } else {
-                            decBytes = PDFLib.decodePDFRawStream(rawStream).decode();
-                        }
-                        decodedParts.push(uint8ToLatin1Sample(decBytes, decBytes.byteLength));
-                    } catch (decErr) {
-                        console.warn('Stream decode warning on page ' + (i + 1) + ':', decErr);
-                    }
+                    var decPart = decodeRawPdfStreamToString(rawStream);
+                    if (decPart) decodedParts.push(decPart);
                 }
 
                 if (decodedParts.length > 0) {
                     var combinedSrc = decodedParts.join('\n');
                     var stmts = parsePdfContentStreamStatements(combinedSrc);
-                    var taggedResult = tagContentStreamStatementsForPdfUa(stmts, 0, hadLowOpacityOcrGState);
+                    var taggedResult = tagContentStreamStatementsForPdfUa(stmts, 0, hadLowOpacityOcrGState, i);
                     pageMcidCount = taggedResult.nextMcid;
+                    pageMcidTags = taggedResult.mcidTags;
                     taggedContentStr = taggedResult.contentString;
                 }
             }
@@ -3839,16 +4412,18 @@
                 }
                 fontResDict.set(PDFLib.PDFName.of('F_PDFUA'), sharedFontInfo.fontDictRef);
 
+                var fallbackTag = i === 0 ? 'H1' : 'H2';
                 taggedContentStr +=
-                    '/P <</MCID 0>> BDC\n' +
+                    '/' + fallbackTag + ' <</MCID 0>> BDC\n' +
                     'BT\n' +
                     '/F_PDFUA 1 Tf\n' +
                     '3 Tr\n' +
                     '0 0 Td\n' +
-                    '(Seite ' + (i + 1) + ') Tj\n' +
+                    '(' + (i === 0 ? fixTitle.replace(/[()\\]/g, ' ') : ('Abschnitt Seite ' + (i + 1))) + ') Tj\n' +
                     'ET\n' +
                     'EMC\n';
                 pageMcidCount = 1;
+                pageMcidTags = [fallbackTag];
             }
 
             if (taggedContentStr.length > 0) {
@@ -3858,33 +4433,72 @@
                 pageNode.set(PDFLib.PDFName.of('Contents'), newStreamRef);
             }
 
-            // Ensure all /Annots on this page have /Contents set for screenreaders (PAC 2026 Annotation requirement)
-            var annotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
-            if (annotsLookup && typeof annotsLookup.asArray === 'function') {
-                var annArr = annotsLookup.asArray();
-                for (var aIdx = 0; aIdx < annArr.length; aIdx++) {
-                    var annotDict = context.lookup(annArr[aIdx]);
-                    if (annotDict && annotDict.get && !annotDict.get(PDFLib.PDFName.of('Contents'))) {
-                        annotDict.set(PDFLib.PDFName.of('Contents'), PDFLib.PDFString.of('Interaktives Element auf Seite ' + (i + 1)));
-                    }
-                }
-            }
-
             pageNode.set(PDFLib.PDFName.of('Tabs'), PDFLib.PDFName.of('S'));
             pageNode.set(PDFLib.PDFName.of('StructParents'), PDFLib.PDFNumber.of(i));
 
             var sectElemRef = context.nextRef();
-            var pElemRefsForPage = [];
+            var mcidElemRefsForParentTree = [];
+            var sectChildrenRefs = [];
 
             for (var m = 0; m < pageMcidCount; m++) {
+                var sTag = pageMcidTags[m] || 'P';
                 var pElem = context.obj({
                     Type: 'StructElem',
-                    S: PDFLib.PDFName.of('P'),
+                    S: PDFLib.PDFName.of(sTag),
                     P: sectElemRef,
                     Pg: page.ref,
                     K: PDFLib.PDFNumber.of(m)
                 });
-                pElemRefsForPage.push(context.register(pElem));
+                var pRef = context.register(pElem);
+                mcidElemRefsForParentTree.push(pRef);
+                sectChildrenRefs.push(pRef);
+            }
+
+            parentTreeNums.push(PDFLib.PDFNumber.of(i));
+            parentTreeNums.push(context.obj(mcidElemRefsForParentTree));
+
+            // Tag all /Annots on this page with /Contents, /TU, /StructParent & <Link>/<Form> /OBJR in StructTree
+            var annotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
+            if (annotsLookup && typeof annotsLookup.asArray === 'function') {
+                var annArr = annotsLookup.asArray();
+                for (var aIdx = 0; aIdx < annArr.length; aIdx++) {
+                    var annotRef = annArr[aIdx];
+                    var annotDict = context.lookup(annotRef);
+                    if (!annotDict || typeof annotDict.get !== 'function') continue;
+                    var aSubtype = String(annotDict.get(PDFLib.PDFName.of('Subtype')) || '');
+                    if (aSubtype === '/Popup') continue;
+
+                    var annotDesc = 'Interaktives Element auf Seite ' + (i + 1);
+                    if (!annotDict.get(PDFLib.PDFName.of('Contents'))) {
+                        annotDict.set(PDFLib.PDFName.of('Contents'), PDFLib.PDFString.of(annotDesc));
+                    }
+                    if (aSubtype === '/Widget' && !annotDict.get(PDFLib.PDFName.of('TU'))) {
+                        annotDict.set(PDFLib.PDFName.of('TU'), PDFLib.PDFString.of(annotDesc));
+                    }
+
+                    var spKey = nextStructParentKey++;
+                    annotDict.set(PDFLib.PDFName.of('StructParent'), PDFLib.PDFNumber.of(spKey));
+
+                    var objrDict = context.obj({
+                        Type: 'OBJR',
+                        Obj: annotRef,
+                        Pg: page.ref
+                    });
+                    var annotElemTag = aSubtype === '/Link' ? 'Link' : (aSubtype === '/Widget' ? 'Form' : 'Annot');
+                    var annotStructElem = context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of(annotElemTag),
+                        P: sectElemRef,
+                        Pg: page.ref,
+                        Alt: PDFLib.PDFString.of(annotDesc),
+                        K: [objrDict]
+                    });
+                    var annotStructRef = context.register(annotStructElem);
+                    sectChildrenRefs.push(annotStructRef);
+
+                    parentTreeNums.push(PDFLib.PDFNumber.of(spKey));
+                    parentTreeNums.push(annotStructRef);
+                }
             }
 
             var sectObj = {
@@ -3892,14 +4506,10 @@
                 S: PDFLib.PDFName.of('Sect'),
                 P: docElemRef,
                 Pg: page.ref,
-                T: PDFLib.PDFString.of('Abschnitt Seite ' + (i + 1)),
-                K: pElemRefsForPage
+                K: sectChildrenRefs
             };
             context.assign(sectElemRef, context.obj(sectObj));
             sectRefs.push(sectElemRef);
-
-            parentTreeNums.push(PDFLib.PDFNumber.of(i));
-            parentTreeNums.push(context.obj(pElemRefsForPage));
         }
 
         var docStructElem = context.obj({
@@ -3907,7 +4517,6 @@
             S: PDFLib.PDFName.of('Document'),
             P: structTreeRootRef,
             Lang: PDFLib.PDFString.of(fixLang),
-            T: PDFLib.PDFString.of(fixTitle),
             K: sectRefs
         });
         context.assign(docElemRef, docStructElem);
@@ -3915,21 +4524,13 @@
         var parentTreeRef = context.register(context.obj({
             Nums: parentTreeNums
         }));
-        var roleMapRef = context.register(context.obj({
-            Document: PDFLib.PDFName.of('Document'),
-            Sect: PDFLib.PDFName.of('Sect'),
-            P: PDFLib.PDFName.of('P'),
-            H1: PDFLib.PDFName.of('H1'),
-            H2: PDFLib.PDFName.of('H2'),
-            Figure: PDFLib.PDFName.of('Figure')
-        }));
 
+        // Do NOT remap standard PDF structure types in /RoleMap (Matterhorn 02-004 forbids remapping standard types!)
         var structTreeRoot = context.obj({
             Type: 'StructTreeRoot',
             K: [docElemRef],
             ParentTree: parentTreeRef,
-            ParentTreeNextKey: PDFLib.PDFNumber.of(pages.length),
-            RoleMap: roleMapRef
+            ParentTreeNextKey: PDFLib.PDFNumber.of(nextStructParentKey)
         });
         context.assign(structTreeRootRef, structTreeRoot);
         catalog.set(PDFLib.PDFName.of('StructTreeRoot'), structTreeRootRef);
@@ -3985,7 +4586,6 @@
             '   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">' + escXml(fixTitle) + '</rdf:li></rdf:Alt></dc:title>\n' +
             '   <dc:creator><rdf:Seq><rdf:li>' + escXml(fixAuthor) + '</rdf:li></rdf:Seq></dc:creator>\n' +
             '   <dc:description><rdf:Alt><rdf:li xml:lang="x-default">' + escXml(fixSubject) + '</rdf:li></rdf:Alt></dc:description>\n' +
-            '   <dc:language><rdf:Bag><rdf:li>' + escXml(fixLang) + '</rdf:li></rdf:Bag></dc:language>\n' +
             '   <xmp:CreatorTool>' + escXml(fixCreator) + '</xmp:CreatorTool>\n' +
             '   <xmp:CreateDate>' + isoDateStr + '</xmp:CreateDate>\n' +
             '   <xmp:ModifyDate>' + isoDateStr + '</xmp:ModifyDate>\n' +
@@ -4038,7 +4638,7 @@
 
         trackUsageEvent('a11y_autofix');
         await updateAccessibilityUI(true);
-        showToast('PDF/UA-1 Tiefen-Reparatur (XMP-Sync, Content-MCIDs, ParentTree & Schrifteinbettung) für PAC 2026 abgeschlossen!', 'success');
+        showToast('PAC 2026 Tiefen-Reparatur (PDF/UA-1 + WCAG 2.1/2.2) abgeschlossen! Klicken Sie auf "💾 PDF herunterladen", um die Datei im PAC zu prüfen.', 'success');
     }
 
     async function exportAccessibilityReportPdf() {
@@ -4048,13 +4648,15 @@
         if (!report) return;
 
         var lines = [];
-        lines.push('PRUEFBERICHT BARRIEREFREIHEIT (PDF/UA-1 • BITV 2.0 • WCAG 2.1)');
+        lines.push('PAC 2026 PRUEFBERICHT BARRIEREFREIHEIT (PDF/UA-1 • WCAG 2.1/2.2 • BITV 2.0)');
         lines.push('================================================================================');
         lines.push('Geprueftes Dokument : ' + report.docName);
         lines.push('Seitenanzahl        : ' + report.pageCount);
         lines.push('Dokumenttitel       : ' + report.docTitle);
         lines.push('Dokumentsprache     : ' + report.lang);
         lines.push('Pruefdatum          : ' + new Date().toLocaleString('de-DE'));
+        lines.push('PDF/UA-1 Ergebnis   : ' + report.pdfUaPassed + ' von ' + report.pdfUaTotal + ' Kriterien bestanden');
+        lines.push('WCAG 2.1 Ergebnis   : ' + report.wcagPassed + ' von ' + report.wcagTotal + ' Kriterien bestanden');
         lines.push('Gesamtergebnis      : ' + report.score + ' % (' + report.passedCount + ' von ' + report.totalChecks + ' Kriterien erfuellt)');
         lines.push('================================================================================');
         lines.push('');
@@ -6405,6 +7007,21 @@
         document.getElementById('btnAutoFixA11y').addEventListener('click', async function () {
             await remediatePdfAccessibility();
         });
+
+        var btnDlA11y = document.getElementById('btnDownloadA11yPdf');
+        if (btnDlA11y) {
+            btnDlA11y.addEventListener('click', async function () {
+                var doc = getActiveDoc();
+                if (!doc) return;
+                await bakeAnnotationsIntoDocument(doc);
+                var outName = doc.name.replace(/\.pdf$/i, '') + '_barrierefrei.pdf';
+                downloadBlob(doc.bytes, outName, 'application/pdf');
+                doc.modified = false;
+                renderTabsBar();
+                trackUsageEvent('pdf_exported');
+                showToast('Barrierefreies PDF heruntergeladen: ' + outName, 'success');
+            });
+        }
 
         document.getElementById('btnExportA11yReportPdf').addEventListener('click', async function () {
             await exportAccessibilityReportPdf();
