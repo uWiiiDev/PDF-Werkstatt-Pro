@@ -2205,9 +2205,9 @@ function pdfstudio_github_check_update($settings = null)
     $commitDateRaw  = isset($commitData['commit']['committer']['date']) ? (string)$commitData['commit']['committer']['date'] : '';
     $commitDateFmt  = $commitDateRaw !== '' ? date('d.m.Y H:i:s', strtotime($commitDateRaw)) : '—';
 
-    // Fetch remote includes/bootstrap.php to read remote PDFSTUDIO_VERSION
+    // Fetch remote includes/bootstrap.php by exact commit SHA (bypasses GitHub branch CDN cache)
     $remoteVersion = PDFSTUDIO_VERSION;
-    $rawUrl = 'https://raw.githubusercontent.com/' . $repo . '/' . rawurlencode($branch) . '/includes/bootstrap.php?t=' . time();
+    $rawUrl = 'https://raw.githubusercontent.com/' . $repo . '/' . rawurlencode($remoteFullSha) . '/includes/bootstrap.php';
     $rawRes = pdfstudio_github_http_get($rawUrl, $token, 12);
     if (!empty($rawRes['ok']) && !empty($rawRes['body'])) {
         if (preg_match("/define\s*\(\s*['\"]PDFSTUDIO_VERSION['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)/", $rawRes['body'], $m)) {
