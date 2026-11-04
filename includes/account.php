@@ -8,13 +8,159 @@ if (!defined('PDFSTUDIO_INIT')) {
     exit('Direct access not permitted.');
 }
 
-define('PDFSTUDIO_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'users.json');
-define('PDFSTUDIO_SHARES_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'shares.json');
-define('PDFSTUDIO_RATELIMIT_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'ratelimit.json');
+define('PDFSTUDIO_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'users.json.php');
+define('PDFSTUDIO_SHARES_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'shares.json.php');
+define('PDFSTUDIO_RATELIMIT_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'ratelimit.json.php');
 define('PDFSTUDIO_USERS_DIR', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'users');
 define('PDFSTUDIO_PUBLIC_DIR', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'public');
-define('PDFSTUDIO_STATS_JSON', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'nutzungsstatistik.json');
-define('PDFSTUDIO_STATS_TXT', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'nutzungsstatistik.txt');
+define('PDFSTUDIO_STATS_JSON', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'nutzungsstatistik.json.php');
+define('PDFSTUDIO_STATS_TXT', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'nutzungsstatistik.txt.php');
+define('PDFSTUDIO_MAIL_LOG_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'mail_outbox.log.php');
+define('PDFSTUDIO_SECRET_KEY_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . '.secret_key.php');
+
+/**
+ * PHP-exit guard header prepended to all files in storage/ so direct HTTP requests on Nginx/Apache/IIS return 403 Forbidden
+ */
+function pdfstudio_storage_guard_header()
+{
+    return "<?php if (function_exists('http_response_code')) { http_response_code(403); } exit('403 Forbidden'); ?>\n";
+}
+
+/**
+ * Check if a PHP-guarded storage file (or its legacy unguarded counterpart) exists
+ */
+function pdfstudio_storage_exists($path)
+{
+    if (is_file($path)) {
+        return true;
+    }
+    $legacy = preg_replace('/\.php$/', '', (string)$path);
+    if ($legacy !== $path && is_file($legacy)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Read a PHP-guarded storage file (automatically migrates and deletes any legacy .json/.txt/.log file)
+ */
+function pdfstudio_storage_read($path)
+{
+    $legacy = preg_replace('/\.php$/', '', (string)$path);
+    if (!is_file($path) && $legacy !== $path && is_file($legacy)) {
+        $legacyRaw = @file_get_contents($legacy);
+        if ($legacyRaw !== false) {
+            pdfstudio_storage_write($path, $legacyRaw, false);
+            @unlink($legacy);
+            return $legacyRaw;
+        }
+    }
+    if (!is_file($path)) {
+        return false;
+    }
+    if ($legacy !== $path && is_file($legacy)) {
+        @unlink($legacy);
+    }
+    $raw = @file_get_contents($path);
+    if ($raw === false) {
+        return false;
+    }
+    if (strncmp($raw, '<?php', 5) === 0) {
+        $nlPos = strpos($raw, "\n");
+        if ($nlPos !== false) {
+            return substr($raw, $nlPos + 1);
+        }
+        return '';
+    }
+    return $raw;
+}
+
+/**
+ * Write a PHP-guarded storage file (and remove any legacy unguarded file)
+ */
+function pdfstudio_storage_write($path, $content, $append = false)
+{
+    $legacy = preg_replace('/\.php$/', '', (string)$path);
+    if ($legacy !== $path && is_file($legacy)) {
+        @unlink($legacy);
+    }
+    $guard = pdfstudio_storage_guard_header();
+    if ($append) {
+        if (!is_file($path)) {
+            $res = @file_put_contents($path, $guard . (string)$content, LOCK_EX);
+        } else {
+            $res = @file_put_contents($path, (string)$content, FILE_APPEND | LOCK_EX);
+        }
+    } else {
+        $res = @file_put_contents($path, $guard . (string)$content, LOCK_EX);
+    }
+    @chmod($path, 0600);
+    return $res !== false;
+}
+
+/**
+ * Get or create the installation-specific 256-bit encryption key for secrets at rest
+ */
+function pdfstudio_get_encryption_key()
+{
+    $raw = pdfstudio_storage_read(PDFSTUDIO_SECRET_KEY_FILE);
+    $keyHex = $raw !== false ? trim((string)$raw) : '';
+    if (strlen($keyHex) < 64) {
+        $keyHex = pdfstudio_generate_token(32);
+        pdfstudio_storage_write(PDFSTUDIO_SECRET_KEY_FILE, $keyHex);
+    }
+    return hash('sha256', $keyHex . '|pdf-werkstatt-pro-key', true);
+}
+
+/**
+ * Encrypt a sensitive string (SMTP password, LDAP bind password, GitHub token) at rest using AES-256-CBC + HMAC-SHA256
+ */
+function pdfstudio_encrypt_secret($plain)
+{
+    $plain = (string)$plain;
+    if ($plain === '' || strpos($plain, 'ENCv1:') === 0) {
+        return $plain;
+    }
+    if (!function_exists('openssl_encrypt')) {
+        return $plain;
+    }
+    $key = pdfstudio_get_encryption_key();
+    $iv  = substr(hash('sha256', pdfstudio_generate_token(16) . microtime(true), true), 0, 16);
+    $ct  = @openssl_encrypt($plain, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+    if ($ct === false) {
+        return $plain;
+    }
+    $mac = hash_hmac('sha256', $iv . $ct, $key, true);
+    return 'ENCv1:' . base64_encode($iv . $mac . $ct);
+}
+
+/**
+ * Decrypt a sensitive string stored with pdfstudio_encrypt_secret()
+ */
+function pdfstudio_decrypt_secret($stored)
+{
+    $stored = (string)$stored;
+    if ($stored === '' || strpos($stored, 'ENCv1:') !== 0) {
+        return $stored;
+    }
+    if (!function_exists('openssl_decrypt')) {
+        return '';
+    }
+    $raw = @base64_decode(substr($stored, 6), true);
+    if ($raw === false || strlen($raw) <= 48) {
+        return '';
+    }
+    $iv  = substr($raw, 0, 16);
+    $mac = substr($raw, 16, 32);
+    $ct  = substr($raw, 48);
+    $key = pdfstudio_get_encryption_key();
+    $calcMac = hash_hmac('sha256', $iv . $ct, $key, true);
+    if (!pdfstudio_safe_equals($calcMac, $mac)) {
+        return '';
+    }
+    $pt = @openssl_decrypt($ct, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+    return $pt !== false ? $pt : '';
+}
 
 /**
  * Constant-time string comparison (PHP 5.4+ compatible) to prevent timing attacks
@@ -82,11 +228,11 @@ function pdfstudio_check_rate_limit($bucket)
     $key = pdfstudio_get_client_ip_key($bucket);
     $now = time();
 
-    if (!is_file(PDFSTUDIO_RATELIMIT_FILE)) {
+    if (!pdfstudio_storage_exists(PDFSTUDIO_RATELIMIT_FILE)) {
         return array('allowed' => true, 'remaining' => $maxAttempts, 'retry_after' => 0);
     }
 
-    $raw = @file_get_contents(PDFSTUDIO_RATELIMIT_FILE);
+    $raw = pdfstudio_storage_read(PDFSTUDIO_RATELIMIT_FILE);
     $data = $raw ? @json_decode($raw, true) : array();
     if (!is_array($data) || !isset($data[$key])) {
         return array('allowed' => true, 'remaining' => $maxAttempts, 'retry_after' => 0);
@@ -114,7 +260,7 @@ function pdfstudio_record_rate_limit_failure($bucket)
     $key = pdfstudio_get_client_ip_key($bucket);
     $now = time();
 
-    $raw = is_file(PDFSTUDIO_RATELIMIT_FILE) ? @file_get_contents(PDFSTUDIO_RATELIMIT_FILE) : '';
+    $raw = pdfstudio_storage_exists(PDFSTUDIO_RATELIMIT_FILE) ? pdfstudio_storage_read(PDFSTUDIO_RATELIMIT_FILE) : '';
     $data = $raw ? @json_decode($raw, true) : array();
     if (!is_array($data)) {
         $data = array();
@@ -133,20 +279,20 @@ function pdfstudio_record_rate_limit_failure($bucket)
         $data[$key]['count'] = (int)$data[$key]['count'] + 1;
     }
 
-    @file_put_contents(PDFSTUDIO_RATELIMIT_FILE, json_encode($data), LOCK_EX);
+    pdfstudio_storage_write(PDFSTUDIO_RATELIMIT_FILE, json_encode($data));
 }
 
 function pdfstudio_clear_rate_limit($bucket)
 {
-    if (!is_file(PDFSTUDIO_RATELIMIT_FILE)) {
+    if (!pdfstudio_storage_exists(PDFSTUDIO_RATELIMIT_FILE)) {
         return;
     }
     $key = pdfstudio_get_client_ip_key($bucket);
-    $raw = @file_get_contents(PDFSTUDIO_RATELIMIT_FILE);
+    $raw = pdfstudio_storage_read(PDFSTUDIO_RATELIMIT_FILE);
     $data = $raw ? @json_decode($raw, true) : array();
     if (is_array($data) && isset($data[$key])) {
         unset($data[$key]);
-        @file_put_contents(PDFSTUDIO_RATELIMIT_FILE, json_encode($data), LOCK_EX);
+        pdfstudio_storage_write(PDFSTUDIO_RATELIMIT_FILE, json_encode($data));
     }
 }
 
@@ -156,16 +302,30 @@ function pdfstudio_clear_rate_limit($bucket)
 function pdfstudio_init_account_storage()
 {
     if (!is_dir(PDFSTUDIO_USERS_DIR)) {
-        @mkdir(PDFSTUDIO_USERS_DIR, 0755, true);
+        @mkdir(PDFSTUDIO_USERS_DIR, 0700, true);
     }
     if (!is_dir(PDFSTUDIO_PUBLIC_DIR)) {
-        @mkdir(PDFSTUDIO_PUBLIC_DIR, 0755, true);
+        @mkdir(PDFSTUDIO_PUBLIC_DIR, 0700, true);
     }
-    if (!file_exists(PDFSTUDIO_USERS_FILE)) {
-        @file_put_contents(PDFSTUDIO_USERS_FILE, json_encode(array('users' => array())));
+    // Automatically migrate any legacy unguarded .json/.txt/.log files in storage/ to .php-guarded files
+    $guardedFiles = array(
+        PDFSTUDIO_USERS_FILE,
+        PDFSTUDIO_SHARES_FILE,
+        PDFSTUDIO_RATELIMIT_FILE,
+        PDFSTUDIO_STATS_JSON,
+        PDFSTUDIO_STATS_TXT,
+        PDFSTUDIO_MAIL_LOG_FILE,
+        PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'admin_settings.json.php',
+        PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json.php'
+    );
+    foreach ($guardedFiles as $gf) {
+        pdfstudio_storage_read($gf);
     }
-    if (!file_exists(PDFSTUDIO_SHARES_FILE)) {
-        @file_put_contents(PDFSTUDIO_SHARES_FILE, json_encode(array('shares' => array())));
+    if (!pdfstudio_storage_exists(PDFSTUDIO_USERS_FILE)) {
+        pdfstudio_storage_write(PDFSTUDIO_USERS_FILE, json_encode(array('users' => array())));
+    }
+    if (!pdfstudio_storage_exists(PDFSTUDIO_SHARES_FILE)) {
+        pdfstudio_storage_write(PDFSTUDIO_SHARES_FILE, json_encode(array('shares' => array())));
     }
 }
 
@@ -242,7 +402,7 @@ function pdfstudio_generate_token($length = 32)
 function pdfstudio_load_users_db()
 {
     pdfstudio_init_account_storage();
-    $raw = @file_get_contents(PDFSTUDIO_USERS_FILE);
+    $raw = pdfstudio_storage_read(PDFSTUDIO_USERS_FILE);
     if (!$raw) {
         return array('users' => array());
     }
@@ -254,13 +414,13 @@ function pdfstudio_load_users_db()
 }
 
 /**
- * Save users database to users.json
+ * Save users database to users.json.php
  */
 function pdfstudio_save_users_db($db)
 {
     pdfstudio_init_account_storage();
     $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
-    return @file_put_contents(PDFSTUDIO_USERS_FILE, json_encode($db, $flags), LOCK_EX) !== false;
+    return pdfstudio_storage_write(PDFSTUDIO_USERS_FILE, json_encode($db, $flags));
 }
 
 /**
@@ -380,7 +540,7 @@ function pdfstudio_delete_dir_recursive($dir)
 function pdfstudio_load_shares_db()
 {
     pdfstudio_init_account_storage();
-    $raw = @file_get_contents(PDFSTUDIO_SHARES_FILE);
+    $raw = pdfstudio_storage_read(PDFSTUDIO_SHARES_FILE);
     if (!$raw) {
         return array('shares' => array());
     }
@@ -398,7 +558,7 @@ function pdfstudio_save_shares_db($db)
 {
     pdfstudio_init_account_storage();
     $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
-    return @file_put_contents(PDFSTUDIO_SHARES_FILE, json_encode($db, $flags), LOCK_EX) !== false;
+    return pdfstudio_storage_write(PDFSTUDIO_SHARES_FILE, json_encode($db, $flags));
 }
 
 /**
@@ -743,7 +903,7 @@ function pdfstudio_send_email($toEmail, $subject, $bodyText, $replyToEmail = '')
               . " | TO: " . $toEmail
               . " | SUBJECT: " . $subject
               . " | STATUS: " . ($sent ? 'SENT' : 'FALLBACK (' . $errorMsg . ')') . "\n";
-    @file_put_contents(PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'mail_outbox.log', $logEntry, FILE_APPEND);
+    pdfstudio_storage_write(PDFSTUDIO_MAIL_LOG_FILE, $logEntry, true);
 
     return array(
         'sent' => $sent,
@@ -913,7 +1073,7 @@ function pdfstudio_send_email_with_pdf($toEmail, $subject, $bodyText, $pdfBinary
               . " | TO: " . $toEmail
               . " | FILE: " . $safeName . " (" . strlen((string)$pdfBinary) . " B)"
               . " | STATUS: " . ($sent ? 'SENT' : 'ERROR (' . $errorMsg . ')') . "\n";
-    @file_put_contents(PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'mail_outbox.log', $logEntry, FILE_APPEND);
+    pdfstudio_storage_write(PDFSTUDIO_MAIL_LOG_FILE, $logEntry, true);
 
     return array(
         'sent' => $sent,
@@ -979,11 +1139,11 @@ function pdfstudio_load_stats()
         $defaults['events'][$k] = 0;
     }
 
-    if (!is_file(PDFSTUDIO_STATS_JSON)) {
+    if (!pdfstudio_storage_exists(PDFSTUDIO_STATS_JSON)) {
         return $defaults;
     }
 
-    $raw = @file_get_contents(PDFSTUDIO_STATS_JSON);
+    $raw = pdfstudio_storage_read(PDFSTUDIO_STATS_JSON);
     $decoded = $raw ? @json_decode($raw, true) : null;
     if (!is_array($decoded)) {
         return $defaults;
@@ -1160,7 +1320,7 @@ function pdfstudio_save_stats_and_report($stats)
     $stats['total_vault_size_formatted'] = pdfstudio_format_bytes($totalVaultBytes);
 
     $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
-    @file_put_contents(PDFSTUDIO_STATS_JSON, json_encode($stats, $flags), LOCK_EX);
+    pdfstudio_storage_write(PDFSTUDIO_STATS_JSON, json_encode($stats, $flags));
 
     // Build human-readable German text report for the administrator
     $lines = array();
@@ -1260,15 +1420,15 @@ function pdfstudio_save_stats_and_report($stats)
     $lines[] = '================================================================================';
     $lines[] = '';
 
-    @file_put_contents(PDFSTUDIO_STATS_TXT, implode("\r\n", $lines), LOCK_EX);
+    pdfstudio_storage_write(PDFSTUDIO_STATS_TXT, implode("\r\n", $lines));
 }
 
 // ============================================================================
 // ADMIN SETTINGS, LOCAL USERS (NO-DB) & LDAP / GATEKEEPER AUTHENTICATION
 // ============================================================================
 
-define('PDFSTUDIO_ADMIN_SETTINGS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'admin_settings.json');
-define('PDFSTUDIO_GATEKEEPER_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json');
+define('PDFSTUDIO_ADMIN_SETTINGS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'admin_settings.json.php');
+define('PDFSTUDIO_GATEKEEPER_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json.php');
 
 /**
  * Default settings structure combining config.php defaults + LDAP & Gatekeeper options
@@ -1329,7 +1489,7 @@ function pdfstudio_get_default_admin_settings()
 }
 
 /**
- * Load merged settings from config.php and storage/admin_settings.json into $GLOBALS['PDFSTUDIO_CONFIG']
+ * Load merged settings from config.php and storage/admin_settings.json.php into $GLOBALS['PDFSTUDIO_CONFIG']
  */
 function pdfstudio_load_admin_settings()
 {
@@ -1340,22 +1500,47 @@ function pdfstudio_load_admin_settings()
 
     $merged = array_merge($defaults, $baseCfg);
 
-    if (is_file(PDFSTUDIO_ADMIN_SETTINGS_FILE)) {
-        $raw = @file_get_contents(PDFSTUDIO_ADMIN_SETTINGS_FILE);
+    $needsEncryptMigration = false;
+    if (pdfstudio_storage_exists(PDFSTUDIO_ADMIN_SETTINGS_FILE)) {
+        $raw = pdfstudio_storage_read(PDFSTUDIO_ADMIN_SETTINGS_FILE);
         $saved = $raw ? @json_decode($raw, true) : null;
         if (is_array($saved)) {
             foreach ($saved as $k => $v) {
                 $merged[$k] = $v;
             }
+            foreach (array('ldap_bind_password', 'smtp_password', 'github_token') as $secKey) {
+                if (!empty($saved[$secKey]) && strpos((string)$saved[$secKey], 'ENCv1:') !== 0) {
+                    $needsEncryptMigration = true;
+                }
+            }
+        }
+    }
+
+    // Decrypt secrets at rest for runtime usage
+    foreach (array('ldap_bind_password', 'smtp_password', 'github_token') as $secKey) {
+        if (!empty($merged[$secKey])) {
+            $merged[$secKey] = pdfstudio_decrypt_secret($merged[$secKey]);
         }
     }
 
     $GLOBALS['PDFSTUDIO_CONFIG'] = $merged;
+
+    if ($needsEncryptMigration) {
+        $toStore = $merged;
+        foreach (array('ldap_bind_password', 'smtp_password', 'github_token') as $secKey) {
+            if (!empty($toStore[$secKey])) {
+                $toStore[$secKey] = pdfstudio_encrypt_secret($toStore[$secKey]);
+            }
+        }
+        $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
+        pdfstudio_storage_write(PDFSTUDIO_ADMIN_SETTINGS_FILE, json_encode($toStore, $flags));
+    }
+
     return $merged;
 }
 
 /**
- * Save admin settings to storage/admin_settings.json and update $GLOBALS['PDFSTUDIO_CONFIG']
+ * Save admin settings to storage/admin_settings.json.php (encrypting secrets at rest) and update $GLOBALS['PDFSTUDIO_CONFIG']
  */
 function pdfstudio_save_admin_settings($newSettings)
 {
@@ -1368,19 +1553,26 @@ function pdfstudio_save_admin_settings($newSettings)
     $current['admin_updated_at'] = date('d.m.Y H:i:s');
     $GLOBALS['PDFSTUDIO_CONFIG'] = $current;
 
+    $toStore = $current;
+    foreach (array('ldap_bind_password', 'smtp_password', 'github_token') as $secKey) {
+        if (!empty($toStore[$secKey])) {
+            $toStore[$secKey] = pdfstudio_encrypt_secret($toStore[$secKey]);
+        }
+    }
+
     $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
-    return @file_put_contents(PDFSTUDIO_ADMIN_SETTINGS_FILE, json_encode($current, $flags), LOCK_EX) !== false;
+    return pdfstudio_storage_write(PDFSTUDIO_ADMIN_SETTINGS_FILE, json_encode($toStore, $flags));
 }
 
 /**
- * Load database-free local Gatekeeper users from storage/gatekeeper_users.json
+ * Load database-free local Gatekeeper users from storage/gatekeeper_users.json.php
  */
 function pdfstudio_load_local_users()
 {
-    if (!is_file(PDFSTUDIO_GATEKEEPER_USERS_FILE)) {
+    if (!pdfstudio_storage_exists(PDFSTUDIO_GATEKEEPER_USERS_FILE)) {
         return array();
     }
-    $raw = @file_get_contents(PDFSTUDIO_GATEKEEPER_USERS_FILE);
+    $raw = pdfstudio_storage_read(PDFSTUDIO_GATEKEEPER_USERS_FILE);
     $decoded = $raw ? @json_decode($raw, true) : null;
     if (!is_array($decoded) || !isset($decoded['users']) || !is_array($decoded['users'])) {
         return array();
@@ -1389,7 +1581,7 @@ function pdfstudio_load_local_users()
 }
 
 /**
- * Save local Gatekeeper users to storage/gatekeeper_users.json
+ * Save local Gatekeeper users to storage/gatekeeper_users.json.php
  */
 function pdfstudio_save_local_users($users)
 {
@@ -1398,7 +1590,7 @@ function pdfstudio_save_local_users($users)
         'users'      => array_values($users)
     );
     $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
-    return @file_put_contents(PDFSTUDIO_GATEKEEPER_USERS_FILE, json_encode($payload, $flags), LOCK_EX) !== false;
+    return pdfstudio_storage_write(PDFSTUDIO_GATEKEEPER_USERS_FILE, json_encode($payload, $flags));
 }
 
 /**

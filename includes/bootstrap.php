@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.3.2');
+define('PDFSTUDIO_VERSION', '1.3.3');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }
@@ -55,13 +55,15 @@ if (!function_exists('json_encode')) {
 // Harden session configuration before starting session (PHP 5.4/5.5+ compatible)
 @ini_set('session.use_only_cookies', '1');
 @ini_set('session.cookie_httponly', '1');
+@ini_set('session.use_strict_mode', '1');
+@ini_set('session.cookie_samesite', 'Lax');
 
 // Ensure session save path is writable; fallback to storage/sessions if system /var/lib/php5 is locked
 $sysSessPath = @session_save_path();
 if ($sysSessPath !== '' && strpos($sysSessPath, ';') === false && !@is_writable($sysSessPath)) {
     $localSessDir = PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'sessions';
     if (!is_dir($localSessDir)) {
-        @mkdir($localSessDir, 0755, true);
+        @mkdir($localSessDir, 0700, true);
     }
     if (is_dir($localSessDir) && is_writable($localSessDir)) {
         @session_save_path($localSessDir);
@@ -69,7 +71,8 @@ if ($sysSessPath !== '' && strpos($sysSessPath, ';') === false && !@is_writable(
 }
 
 $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-    || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
+    || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
+    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower((string)$_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
 
 if (function_exists('session_status')) {
     if (session_status() === PHP_SESSION_NONE) {
@@ -87,6 +90,8 @@ if (function_exists('session_status')) {
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
 }
 
 $GLOBALS['PDFSTUDIO_CONFIG'] = array();
@@ -323,6 +328,6 @@ pdfstudio_init_storage();
 require_once __DIR__ . '/account.php';
 pdfstudio_init_account_storage();
 pdfstudio_load_admin_settings();
-if (!is_file(PDFSTUDIO_STATS_TXT)) {
+if (!pdfstudio_storage_exists(PDFSTUDIO_STATS_TXT)) {
     pdfstudio_save_stats_and_report(pdfstudio_load_stats());
 }

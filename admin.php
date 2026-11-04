@@ -289,12 +289,12 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
 }
 
 if ($isAdminLoggedIn && isset($_GET['download_stats_txt'])) {
-    if (!is_file(PDFSTUDIO_STATS_TXT)) {
+    if (!pdfstudio_storage_exists(PDFSTUDIO_STATS_TXT)) {
         pdfstudio_save_stats_and_report(pdfstudio_load_stats());
     }
     header('Content-Type: text/plain; charset=UTF-8');
     header('Content-Disposition: attachment; filename="PDF-Werkstatt-Nutzungsstatistik.txt"');
-    @readfile(PDFSTUDIO_STATS_TXT);
+    echo (string)pdfstudio_storage_read(PDFSTUDIO_STATS_TXT);
     exit;
 }
 
