@@ -84,9 +84,37 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
     } else {
         $act = (string)$_POST['action'];
 
-        if ($act === 'save_gatekeeper_and_ldap' || $act === 'test_ldap_live') {
+        if ($act === 'save_gatekeeper') {
             $allowedModes = array('none', 'local', 'ldap', 'both');
             $authMode = isset($_POST['auth_mode']) && in_array($_POST['auth_mode'], $allowedModes, true) ? $_POST['auth_mode'] : 'none';
+
+            // Prevent locking out if 'local' mode is chosen without any active local user
+            if ($authMode === 'local') {
+                $existingLocal = pdfstudio_load_local_users();
+                $hasActiveLocal = false;
+                foreach ($existingLocal as $lu) {
+                    if (!empty($lu['active'])) {
+                        $hasActiveLocal = true;
+                        break;
+                    }
+                }
+                if (!$hasActiveLocal) {
+                    $flashError = 'Hinweis: Bitte legen Sie zuerst unten unter „3. Lokale Benutzerverwaltung“ mindestens einen aktiven lokalen Benutzer an, bevor Sie den Zugriffsmodus „Nur lokale Benutzer“ aktivieren.';
+                    $authMode = $settings['auth_mode'];
+                }
+            }
+
+            $gkUpdate = array(
+                'auth_mode'         => $authMode,
+                'auth_banner_title' => trim((string)(isset($_POST['auth_banner_title']) ? $_POST['auth_banner_title'] : 'Anmeldung an der PDF-Werkstatt Pro')),
+                'auth_banner_hint'  => trim((string)(isset($_POST['auth_banner_hint']) ? $_POST['auth_banner_hint'] : 'Bitte melden Sie sich mit Ihrer Benutzerkennung an.'))
+            );
+            pdfstudio_save_admin_settings($gkUpdate);
+            $settings = pdfstudio_load_admin_settings();
+            if ($flashError === '') {
+                $flashSuccess = 'Zugriffsschutz (Login-Schranke) wurde erfolgreich gespeichert.';
+            }
+        } elseif ($act === 'save_gatekeeper_and_ldap' || $act === 'test_ldap_live') {
             $bindModes = array('direct_upn', 'search_bind', 'direct_dn');
             $bindMode = isset($_POST['ldap_bind_mode']) && in_array($_POST['ldap_bind_mode'], $bindModes, true) ? $_POST['ldap_bind_mode'] : 'direct_upn';
 
@@ -96,9 +124,6 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
             }
 
             $updated = array(
-                'auth_mode'           => $authMode,
-                'auth_banner_title'   => trim((string)(isset($_POST['auth_banner_title']) ? $_POST['auth_banner_title'] : 'Anmeldung an der PDF-Werkstatt Pro')),
-                'auth_banner_hint'    => trim((string)(isset($_POST['auth_banner_hint']) ? $_POST['auth_banner_hint'] : 'Bitte melden Sie sich mit Ihrer Benutzerkennung an.')),
                 'ldap_host'           => trim((string)(isset($_POST['ldap_host']) ? $_POST['ldap_host'] : '')),
                 'ldap_port'           => max(1, min(65535, (int)(isset($_POST['ldap_port']) ? $_POST['ldap_port'] : 389))),
                 'ldap_use_starttls'   => !empty($_POST['ldap_use_starttls']),
@@ -116,22 +141,6 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
                 'ldap_required_group' => trim((string)(isset($_POST['ldap_required_group']) ? $_POST['ldap_required_group'] : ''))
             );
 
-            // Prevent locking out if 'local' mode is chosen without any active local user
-            if ($authMode === 'local') {
-                $existingLocal = pdfstudio_load_local_users();
-                $hasActiveLocal = false;
-                foreach ($existingLocal as $lu) {
-                    if (!empty($lu['active'])) {
-                        $hasActiveLocal = true;
-                        break;
-                    }
-                }
-                if (!$hasActiveLocal) {
-                    $flashError = 'Hinweis: Bitte legen Sie zuerst mindestens einen aktiven lokalen Benutzer an, bevor Sie den Zugriffsmodus "Nur lokale Benutzer" aktivieren.';
-                    $updated['auth_mode'] = $settings['auth_mode'];
-                }
-            }
-
             pdfstudio_save_admin_settings($updated);
             $settings = pdfstudio_load_admin_settings();
 
@@ -145,7 +154,7 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
                     $flashError = 'LDAP-Diagnosetest meldet ein Problem: ' . $ldapTestResult['error'];
                 }
             } elseif ($flashError === '') {
-                $flashSuccess = 'Zugriffsschutz- und LDAP-Einstellungen wurden erfolgreich gespeichert.';
+                $flashSuccess = 'LDAP-Einstellungen wurden erfolgreich gespeichert.';
             }
         } elseif ($act === 'upsert_local_user') {
             $uName = isset($_POST['local_username']) ? trim((string)$_POST['local_username']) : '';
@@ -495,12 +504,20 @@ $ldapExtLoaded = function_exists('ldap_connect');
     <?php else: ?>
         <!-- AUTHENTICATED ADMIN DASHBOARD -->
 
-        <!-- 1. GATEKEEPER & LDAP CONFIGURATION -->
+        <!-- 1. GATEKEEPER CONFIGURATION -->
         <form method="post" action="admin.php">
             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+            <input type="hidden" name="action" value="save_gatekeeper">
 
             <div class="adm-card">
-                <h2>🛡️ 1. Zugriffsschutz vor der Anwendung (Login-Schranke / Gatekeeper)</h2>
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+                    <h2 style="margin:0;">🛡️ 1. Zugriffsschutz vor der Anwendung (Login-Schranke / Gatekeeper)</h2>
+                    <?php if ($settings['auth_mode'] === 'none'): ?>
+                        <span class="adm-pill adm-pill-off">Aktuell: Offen (Kein Login)</span>
+                    <?php else: ?>
+                        <span class="adm-pill adm-pill-ok">✔ Login-Schranke aktiv (<?php echo htmlspecialchars(strtoupper((string)$settings['auth_mode']), ENT_QUOTES, 'UTF-8'); ?>)</span>
+                    <?php endif; ?>
+                </div>
                 <p class="adm-desc">
                     Legen Sie fest, ob vor dem Start der PDF-Werkstatt Pro eine Anmeldung erforderlich ist und ob diese gegen lokale Benutzer, gegen Ihren LDAP-/Active-Directory-Server oder kombiniert geprüft werden soll.
                 </p>
@@ -525,9 +542,19 @@ $ldapExtLoaded = function_exists('ldap_connect');
                         <input type="text" id="authBannerHint" name="auth_banner_hint" class="adm-input" value="<?php echo htmlspecialchars((string)$settings['auth_banner_hint'], ENT_QUOTES, 'UTF-8'); ?>">
                     </div>
                 </div>
-            </div>
 
-            <!-- 2. LDAP / ACTIVE DIRECTORY SETTINGS & LIVE TESTER -->
+                <div style="margin-top:8px;display:flex;justify-content:flex-end;">
+                    <button type="submit" class="adm-btn adm-btn-primary">
+                        💾 Zugriffsschutz speichern
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <!-- 2. LDAP / ACTIVE DIRECTORY SETTINGS & LIVE TESTER -->
+        <form method="post" action="admin.php">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+
             <div class="adm-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
                     <h2 style="margin:0;">🏢 2. LDAP / Active Directory Konfiguration &amp; Live-Test</h2>
