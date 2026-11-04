@@ -3083,14 +3083,18 @@
                 if (op === 'g' && st.operands.length >= 1) {
                     var gv = parseFloat(st.operands[0]);
                     if (!isNaN(gv)) {
-                        currentTextLum = calcRelativeLuminance(gv, gv, gv);
+                        var gCalc = calcRelativeLuminance(gv, gv, gv);
+                        if (inBt) currentTextLum = gCalc;
+                        else currentBgLum = gCalc;
                     }
                 } else if (op === 'rg' && st.operands.length >= 3) {
                     var rv = parseFloat(st.operands[0]);
                     var grv = parseFloat(st.operands[1]);
                     var bv = parseFloat(st.operands[2]);
                     if (!isNaN(rv) && !isNaN(grv) && !isNaN(bv)) {
-                        currentTextLum = calcRelativeLuminance(rv, grv, bv);
+                        var rgCalc = calcRelativeLuminance(rv, grv, bv);
+                        if (inBt) currentTextLum = rgCalc;
+                        else currentBgLum = rgCalc;
                     }
                 } else if (op === 'k' && st.operands.length >= 4) {
                     var cv = parseFloat(st.operands[0]);
@@ -3101,7 +3105,9 @@
                         var cr = (1 - Math.min(1, cv)) * (1 - Math.min(1, kv));
                         var cg = (1 - Math.min(1, mv)) * (1 - Math.min(1, kv));
                         var cb = (1 - Math.min(1, yv)) * (1 - Math.min(1, kv));
-                        currentTextLum = calcRelativeLuminance(cr, cg, cb);
+                        var kCalc = calcRelativeLuminance(cr, cg, cb);
+                        if (inBt) currentTextLum = kCalc;
+                        else currentBgLum = kCalc;
                     }
                 }
 
@@ -3115,8 +3121,8 @@
                             var lMax = Math.max(currentTextLum, currentBgLum);
                             var lMin = Math.min(currentTextLum, currentBgLum);
                             var contrastRatio = (lMax + 0.05) / (lMin + 0.05);
-                            // Flag low contrast text against background (ratio < 4.5:1, excluding intentional white-on-dark >= 0.90)
-                            if (contrastRatio < 4.5 && currentTextLum < 0.88) {
+                            // Flag low contrast text against background (ratio < 4.5:1, excluding intentional white-on-dark >= 0.75)
+                            if (contrastRatio < 4.5 && currentTextLum < 0.75) {
                                 lowContrastTextCount++;
                             }
                         }
@@ -3141,6 +3147,26 @@
         // ---------------------------------------------------------------------
         var stRootLookup = catalog.lookup(PDFLib.PDFName.of('StructTreeRoot'));
         var hasParentTree = Boolean(stRootLookup && stRootLookup.get && stRootLookup.get(PDFLib.PDFName.of('ParentTree')));
+        if (hasParentTree && stRootLookup.lookup) {
+            var ptDict = stRootLookup.lookup(PDFLib.PDFName.of('ParentTree'));
+            if (ptDict && ptDict.lookup) {
+                var numsArrObj = ptDict.lookup(PDFLib.PDFName.of('Nums'));
+                if (numsArrObj && typeof numsArrObj.asArray === 'function') {
+                    var numsItems = numsArrObj.asArray();
+                    var prevPtKey = -Infinity;
+                    for (var nIdx = 0; nIdx < numsItems.length; nIdx += 2) {
+                        var curPtKey = parseInt(String(numsItems[nIdx]), 10);
+                        if (!isNaN(curPtKey)) {
+                            if (curPtKey <= prevPtKey) {
+                                hasParentTree = false;
+                                break;
+                            }
+                            prevPtKey = curPtKey;
+                        }
+                    }
+                }
+            }
+        }
         var standardTypesRemappedInRoleMap = false;
         if (stRootLookup && stRootLookup.lookup) {
             var rmDict = stRootLookup.lookup(PDFLib.PDFName.of('RoleMap'));
@@ -4055,7 +4081,7 @@
                 if (!isNaN(gv)) {
                     var gLum = calcRelLum(gv, gv, gv);
                     var gRatio = (1.0 + 0.05) / (gLum + 0.05);
-                    if (gRatio < 4.5 && gLum < 0.88) {
+                    if (gRatio < 4.5 && gLum < 0.75) {
                         return '0.22 g';
                     }
                 }
@@ -4066,7 +4092,7 @@
                 if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
                     var lum = calcRelLum(r, g, b);
                     var ratio = (1.0 + 0.05) / (lum + 0.05);
-                    if (ratio < 4.5 && lum < 0.88) {
+                    if (ratio < 4.5 && lum < 0.75) {
                         var scale = Math.min(0.42, 0.16 / Math.max(0.05, lum));
                         return (r * scale).toFixed(3) + ' ' + (g * scale).toFixed(3) + ' ' + (b * scale).toFixed(3) + ' rg';
                     }
@@ -4082,7 +4108,7 @@
                     var cb = (1 - Math.min(1, y)) * (1 - Math.min(1, k));
                     var kLum = calcRelLum(cr, cg, cb);
                     var kRatio = (1.0 + 0.05) / (kLum + 0.05);
-                    if (kRatio < 4.5 && kLum < 0.88) {
+                    if (kRatio < 4.5 && kLum < 0.75) {
                         var newK = Math.max(k, 0.78);
                         return c.toFixed(3) + ' ' + m.toFixed(3) + ' ' + y.toFixed(3) + ' ' + newK.toFixed(3) + ' k';
                     }
@@ -4176,7 +4202,12 @@
             }
 
             // 5. Graphics State operators (q, Q, cm, gs, colors, line styles, etc.) stay outside BDC/BMC
-            outLines.push(enhanceTextColorStmtForWcagContrast(st));
+            //    Never darken background rectangle colors outside BT...ET (and restore any previously darkened 0.171 0.173 0.173 rg footer box)
+            if (st.op === 'rg' && st.raw.trim() === '0.171 0.173 0.173 rg') {
+                outLines.push('0.937 0.945 0.949 rg');
+            } else {
+                outLines.push(st.raw);
+            }
             idx++;
         }
 
@@ -4484,6 +4515,15 @@
                 }
             }
 
+            if (ioType !== '/Page' && typeof ioDict.delete === 'function') {
+                if (ioDict.get(PDFLib.PDFName.of('StructParents'))) {
+                    ioDict.delete(PDFLib.PDFName.of('StructParents'));
+                }
+                if (ioSubtype !== '/Link' && ioSubtype !== '/Widget' && ioDict.get(PDFLib.PDFName.of('StructParent'))) {
+                    ioDict.delete(PDFLib.PDFName.of('StructParent'));
+                }
+            }
+
             if (ioSubtype === '/Form' && (ioObj instanceof PDFLib.PDFRawStream || ioObj.contents)) {
                 var formSrc = decodeRawPdfStreamToString(ioObj);
                 if (formSrc && (formSrc.indexOf('BDC') !== -1 || formSrc.indexOf('BMC') !== -1 || formSrc.indexOf('EMC') !== -1)) {
@@ -4533,7 +4573,7 @@
         var structTreeRootRef = context.nextRef();
         var docElemRef = context.nextRef();
         var sectRefs = [];
-        var parentTreeNums = [];
+        var parentTreeEntries = [];
         var nextStructParentKey = pages.length;
 
         for (var i = 0; i < pages.length; i++) {
@@ -4635,9 +4675,13 @@
             var sectElemRef = context.nextRef();
             var mcidElemRefsForParentTree = [];
             var sectChildrenRefs = [];
+            var lastParagraphRef = null;
+            var lastParagraphElem = null;
+            var lastParagraphKItems = null;
 
             for (var m = 0; m < pageMcidCount; m++) {
                 var sTag = pageMcidTags[m] || 'P';
+                var kItems = [PDFLib.PDFNumber.of(m)];
                 var pElem = context.obj({
                     Type: 'StructElem',
                     S: PDFLib.PDFName.of(sTag),
@@ -4648,6 +4692,11 @@
                 var pRef = context.register(pElem);
                 mcidElemRefsForParentTree.push(pRef);
                 sectChildrenRefs.push(pRef);
+                if (sTag === 'P') {
+                    lastParagraphRef = pRef;
+                    lastParagraphElem = pElem;
+                    lastParagraphKItems = kItems;
+                }
             }
 
             // Include any user-placed visual PDF/UA Tags (e.g. <Figure> with /Alt and /BBox) on this page
@@ -4672,10 +4721,12 @@
                 }
             }
 
-            parentTreeNums.push(PDFLib.PDFNumber.of(i));
-            parentTreeNums.push(context.obj(mcidElemRefsForParentTree));
+            parentTreeEntries.push({
+                key: i,
+                val: context.obj(mcidElemRefsForParentTree)
+            });
 
-            // Tag all /Annots on this page with /Contents, /TU, /StructParent & <Link>/<Form> /OBJR in StructTree
+            // Tag all /Annots on this page with /Contents, /TU, /StructParent & inline <Link>/<Form> /OBJR inside <P>
             var annotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
             if (annotsLookup && typeof annotsLookup.asArray === 'function') {
                 var annArr = annotsLookup.asArray();
@@ -4684,9 +4735,22 @@
                     var annotDict = context.lookup(annotRef);
                     if (!annotDict || typeof annotDict.get !== 'function') continue;
                     var aSubtype = String(annotDict.get(PDFLib.PDFName.of('Subtype')) || '');
-                    if (aSubtype === '/Popup') continue;
+                    if (aSubtype === '/Popup') {
+                        if (typeof annotDict.delete === 'function') {
+                            annotDict.delete(PDFLib.PDFName.of('StructParent'));
+                        }
+                        continue;
+                    }
 
                     var annotDesc = 'Interaktives Element auf Seite ' + (i + 1);
+                    var actionDict = annotDict.lookup ? annotDict.lookup(PDFLib.PDFName.of('A')) : null;
+                    if (actionDict && typeof actionDict.get === 'function') {
+                        var uriVal = actionDict.get(PDFLib.PDFName.of('URI'));
+                        if (uriVal) {
+                            var cleanUri = String(uriVal).replace(/^[(\s]+|[)\s]+$/g, '');
+                            if (cleanUri) annotDesc = 'Verknüpfung: ' + cleanUri;
+                        }
+                    }
                     if (!annotDict.get(PDFLib.PDFName.of('Contents'))) {
                         annotDict.set(PDFLib.PDFName.of('Contents'), PDFLib.PDFString.of(annotDesc));
                     }
@@ -4697,6 +4761,21 @@
                     var spKey = nextStructParentKey++;
                     annotDict.set(PDFLib.PDFName.of('StructParent'), PDFLib.PDFNumber.of(spKey));
 
+                    // Ensure <Link> / <Form> / <Annot> is nested inside a <P> block element (never directly under <Sect>)
+                    if (!lastParagraphRef) {
+                        lastParagraphRef = context.nextRef();
+                        lastParagraphKItems = [];
+                        lastParagraphElem = context.obj({
+                            Type: 'StructElem',
+                            S: PDFLib.PDFName.of('P'),
+                            P: sectElemRef,
+                            Pg: page.ref,
+                            K: []
+                        });
+                        context.assign(lastParagraphRef, lastParagraphElem);
+                        sectChildrenRefs.push(lastParagraphRef);
+                    }
+
                     var objrDict = context.obj({
                         Type: 'OBJR',
                         Obj: annotRef,
@@ -4706,16 +4785,19 @@
                     var annotStructElem = context.obj({
                         Type: 'StructElem',
                         S: PDFLib.PDFName.of(annotElemTag),
-                        P: sectElemRef,
+                        P: lastParagraphRef,
                         Pg: page.ref,
                         Alt: PDFLib.PDFString.of(annotDesc),
                         K: [objrDict]
                     });
                     var annotStructRef = context.register(annotStructElem);
-                    sectChildrenRefs.push(annotStructRef);
+                    lastParagraphKItems.push(annotStructRef);
+                    lastParagraphElem.set(PDFLib.PDFName.of('K'), context.obj(lastParagraphKItems));
 
-                    parentTreeNums.push(PDFLib.PDFNumber.of(spKey));
-                    parentTreeNums.push(annotStructRef);
+                    parentTreeEntries.push({
+                        key: spKey,
+                        val: annotStructRef
+                    });
                 }
             }
 
@@ -4728,6 +4810,14 @@
             };
             context.assign(sectElemRef, context.obj(sectObj));
             sectRefs.push(sectElemRef);
+        }
+
+        // ISO 32000-1 Section 7.9.7: Number Tree /Nums keys MUST be sorted in strictly ascending numerical order!
+        parentTreeEntries.sort(function (a, b) { return a.key - b.key; });
+        var parentTreeNums = [];
+        for (var ptIdx = 0; ptIdx < parentTreeEntries.length; ptIdx++) {
+            parentTreeNums.push(PDFLib.PDFNumber.of(parentTreeEntries[ptIdx].key));
+            parentTreeNums.push(parentTreeEntries[ptIdx].val);
         }
 
         var docStructElem = context.obj({
