@@ -6601,12 +6601,17 @@
     // =========================================================================
     function openModal(id) {
         var m = document.getElementById(id);
-        if (m) m.classList.add('open');
+        if (m) {
+            m.classList.remove('hidden');
+            m.classList.add('open');
+        }
     }
 
     function closeModal(id) {
         var m = document.getElementById(id);
-        if (m) m.classList.remove('open');
+        if (m) {
+            m.classList.remove('open');
+        }
     }
 
     function openContextMenu(x, y, pageIndex) {

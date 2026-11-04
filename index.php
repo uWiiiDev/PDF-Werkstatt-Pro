@@ -1514,10 +1514,10 @@ $serverInfo = pdfstudio_get_server_info();
 <!-- ======================================================================
      MODAL: DIRECT PDF EMAIL SENDER (SMTP)
      ====================================================================== -->
-<div class="modal-backdrop hidden" id="modalSendEmail">
-    <div class="modal-dialog" style="max-width:560px;">
+<div class="modal-backdrop" id="modalSendEmail">
+    <div class="modal-window" style="max-width:560px;">
         <div class="modal-header">
-            <h3>📧 PDF direkt per E-Mail versenden</h3>
+            <span>📧 PDF direkt per E-Mail versenden</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalSendEmail">✕</button>
         </div>
         <div class="modal-body">
@@ -1554,10 +1554,10 @@ $serverInfo = pdfstudio_get_server_info();
 <!-- ======================================================================
      MODAL: BATCH PROCESSING (STAPELVERARBEITUNG)
      ====================================================================== -->
-<div class="modal-backdrop hidden" id="modalBatchProcess">
-    <div class="modal-dialog" style="max-width:680px;">
+<div class="modal-backdrop" id="modalBatchProcess">
+    <div class="modal-window" style="max-width:680px;">
         <div class="modal-header">
-            <h3>🗂️ Stapelverarbeitung (Batch-Modus für mehrere PDFs)</h3>
+            <span>🗂️ Stapelverarbeitung (Batch-Modus für mehrere PDFs)</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalBatchProcess">✕</button>
         </div>
         <div class="modal-body">
@@ -1614,10 +1614,10 @@ $serverInfo = pdfstudio_get_server_info();
 <!-- ======================================================================
      MODAL: E-RECHNUNG / ZUGFeRD 2.x & XRECHNUNG (INSPECT & EMBED)
      ====================================================================== -->
-<div class="modal-backdrop hidden" id="modalZugferd">
-    <div class="modal-dialog" style="max-width:780px;">
+<div class="modal-backdrop" id="modalZugferd">
+    <div class="modal-window" style="max-width:780px;">
         <div class="modal-header">
-            <h3>🧾 E-Rechnung: ZUGFeRD 2.x / Factur-X &amp; XRechnung (EN 16931)</h3>
+            <span>🧾 E-Rechnung: ZUGFeRD 2.x / Factur-X &amp; XRechnung (EN 16931)</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalZugferd">✕</button>
         </div>
         <div class="modal-body" style="max-height:74vh;overflow-y:auto;">
@@ -1733,10 +1733,10 @@ $serverInfo = pdfstudio_get_server_info();
 <!-- ======================================================================
      MODAL: OFFLINE QR-CODE GENERATOR ON PDF
      ====================================================================== -->
-<div class="modal-backdrop hidden" id="modalQrCode">
-    <div class="modal-dialog" style="max-width:520px;">
+<div class="modal-backdrop" id="modalQrCode">
+    <div class="modal-window" style="max-width:520px;">
         <div class="modal-header">
-            <h3>📱 QR-Code direkt auf der PDF-Seite platzieren</h3>
+            <span>📱 QR-Code direkt auf der PDF-Seite platzieren</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalQrCode">✕</button>
         </div>
         <div class="modal-body">
@@ -1783,10 +1783,10 @@ $serverInfo = pdfstudio_get_server_info();
 </div>
 
 <!-- MODAL: CHANGE OWN USER PASSWORD -->
-<div class="modal-backdrop hidden" id="modalChangeUserPassword">
-    <div class="modal-dialog" style="max-width:440px;">
+<div class="modal-backdrop" id="modalChangeUserPassword">
+    <div class="modal-window" style="max-width:440px;">
         <div class="modal-header">
-            <h3>🔑 Eigenes Passwort ändern</h3>
+            <span>🔑 Eigenes Passwort ändern</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalChangeUserPassword">✕</button>
         </div>
         <div class="modal-body">
@@ -1805,15 +1805,15 @@ $serverInfo = pdfstudio_get_server_info();
                 <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">
                     Angemeldet als: <strong><?php echo htmlspecialchars((string)$gkCurrentUser['display_name'], ENT_QUOTES, 'UTF-8'); ?></strong> (<code><?php echo htmlspecialchars((string)$gkCurrentUser['username'], ENT_QUOTES, 'UTF-8'); ?></code>)
                 </div>
-                <div class="form-group">
+                <div class="form-row">
                     <label for="userCurPwInput">Aktuelles Passwort *</label>
                     <input type="password" id="userCurPwInput" class="form-control" placeholder="Ihr bisheriges Passwort" autocomplete="current-password">
                 </div>
-                <div class="form-group">
+                <div class="form-row">
                     <label for="userNewPw1Input">Neues Passwort (mind. 6 Zeichen) *</label>
                     <input type="password" id="userNewPw1Input" class="form-control" placeholder="Neues Passwort eingeben" autocomplete="new-password">
                 </div>
-                <div class="form-group">
+                <div class="form-row">
                     <label for="userNewPw2Input">Neues Passwort wiederholen *</label>
                     <input type="password" id="userNewPw2Input" class="form-control" placeholder="Neues Passwort bestätigen" autocomplete="new-password">
                 </div>
