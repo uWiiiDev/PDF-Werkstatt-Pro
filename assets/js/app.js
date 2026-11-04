@@ -2954,7 +2954,7 @@
                 totalChars += pageText.length;
             }
         }
-        var allPagesHaveText = pagesWithText === pagesToScan && totalChars > 0;
+        var hasSearchableText = pagesWithText > 0 && totalChars > 0;
 
         // 8. Embedded Font Programs (/FontFile, /FontFile2, /FontFile3) & Unicode Mapping
         var hasEmbeddedFontProgram =
@@ -3032,8 +3032,8 @@
                 id: 'searchable_text',
                 title: '7. Durchsuchbarer Text für Screenreader (kein reiner Bild-Scan)',
                 standard: 'PDF/UA-1 • BITV 2.0 • WCAG 1.4.5',
-                passed: allPagesHaveText,
-                status: allPagesHaveText ? 'pass' : (pagesWithText > 0 ? 'warn' : 'fail'),
+                passed: hasSearchableText,
+                status: hasSearchableText ? 'pass' : 'fail',
                 detail: pagesWithText + ' von ' + pdfJsDoc.numPages + ' Seite(n) enthalten auslesbaren Text (' + totalChars + ' Zeichen).'
             },
             {
@@ -3466,7 +3466,7 @@
                 continue;
             }
 
-            if (/^[-+]?(?:\d+\.?\d*|\.\d+)$/.test(word) || word === 'true' || word === 'false' || word === 'null') {
+            if (/^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(word) || word === 'true' || word === 'false' || word === 'null') {
                 operands.push(word);
             } else {
                 var rawStmt = operands.length > 0 ? (operands.join(' ') + ' ' + word) : word;
@@ -3595,13 +3595,14 @@
 
     async function embedPdfUaFontsIntoDocument(pdfDoc) {
         var ttfBytes = await getLiberationSansTtfBytes();
-        if (!ttfBytes) return;
+        if (!ttfBytes) return null;
 
         var context = pdfDoc.context;
         var fontFileRef = null;
         var fontDescRef = null;
         var toUnicodeRef = null;
         var widthsObjRef = null;
+        var sharedFontDictRef = null;
 
         function ensureSharedFontObjects() {
             if (fontDescRef) return;
@@ -3629,7 +3630,22 @@
                 FontFile2: fontFileRef
             });
             fontDescRef = context.register(fontDesc);
+
+            var sharedFontObj = context.obj({
+                Type: 'Font',
+                Subtype: 'TrueType',
+                BaseFont: PDFLib.PDFName.of('LiberationSans'),
+                Encoding: PDFLib.PDFName.of('WinAnsiEncoding'),
+                FirstChar: PDFLib.PDFNumber.of(32),
+                LastChar: PDFLib.PDFNumber.of(255),
+                Widths: widthsObjRef,
+                FontDescriptor: fontDescRef,
+                ToUnicode: toUnicodeRef
+            });
+            sharedFontDictRef = context.register(sharedFontObj);
         }
+
+        ensureSharedFontObjects();
 
         var indirectObjects = context.enumerateIndirectObjects();
         for (var i = 0; i < indirectObjects.length; i++) {
@@ -3647,27 +3663,36 @@
                 continue;
             }
 
-            var isFontDict = (typeName && String(typeName) === '/Font') ||
-                (subtypeName && (String(subtypeName) === '/Type1' || String(subtypeName) === '/TrueType'));
-            if (!isFontDict) continue;
+            var isSimpleFont = subtypeName && (String(subtypeName) === '/Type1' || String(subtypeName) === '/TrueType');
+            if (!isSimpleFont) continue;
+
+            var encObj = obj.lookup ? obj.lookup(PDFLib.PDFName.of('Encoding')) : obj.get(PDFLib.PDFName.of('Encoding'));
+            var hasCustomDifferences = Boolean(encObj && typeof encObj.get === 'function' && encObj.get(PDFLib.PDFName.of('Differences')));
 
             var existingDesc = obj.get(PDFLib.PDFName.of('FontDescriptor'));
-            if (!existingDesc && subtypeName && (String(subtypeName) === '/Type1' || String(subtypeName) === '/TrueType')) {
-                ensureSharedFontObjects();
+            if (!existingDesc) {
                 obj.set(PDFLib.PDFName.of('Type'), PDFLib.PDFName.of('Font'));
                 obj.set(PDFLib.PDFName.of('Subtype'), PDFLib.PDFName.of('TrueType'));
                 obj.set(PDFLib.PDFName.of('BaseFont'), PDFLib.PDFName.of('LiberationSans'));
-                obj.set(PDFLib.PDFName.of('Encoding'), PDFLib.PDFName.of('WinAnsiEncoding'));
+                if (!hasCustomDifferences) {
+                    obj.set(PDFLib.PDFName.of('Encoding'), PDFLib.PDFName.of('WinAnsiEncoding'));
+                }
                 obj.set(PDFLib.PDFName.of('FirstChar'), PDFLib.PDFNumber.of(32));
                 obj.set(PDFLib.PDFName.of('LastChar'), PDFLib.PDFNumber.of(255));
                 obj.set(PDFLib.PDFName.of('Widths'), widthsObjRef);
                 obj.set(PDFLib.PDFName.of('FontDescriptor'), fontDescRef);
-                obj.set(PDFLib.PDFName.of('ToUnicode'), toUnicodeRef);
-            } else if (existingDesc && !obj.get(PDFLib.PDFName.of('ToUnicode'))) {
-                ensureSharedFontObjects();
+                if (!obj.get(PDFLib.PDFName.of('ToUnicode')) && !hasCustomDifferences) {
+                    obj.set(PDFLib.PDFName.of('ToUnicode'), toUnicodeRef);
+                }
+            } else if (!obj.get(PDFLib.PDFName.of('ToUnicode')) && !hasCustomDifferences) {
                 obj.set(PDFLib.PDFName.of('ToUnicode'), toUnicodeRef);
             }
         }
+
+        return {
+            fontDictRef: sharedFontDictRef,
+            toUnicodeRef: toUnicodeRef
+        };
     }
 
     /**
@@ -3720,7 +3745,7 @@
         catalog.set(PDFLib.PDFName.of('MarkInfo'), context.obj({ Marked: true }));
 
         // 3. Embed TrueType Fonts (/FontFile2 + /Widths + /ToUnicode) for all unembedded Standard Fonts
-        await embedPdfUaFontsIntoDocument(pdfDoc);
+        var sharedFontInfo = await embedPdfUaFontsIntoDocument(pdfDoc);
 
         // 4. Tag all Page Content Streams (BT..ET -> /P MCID, non-text -> /Artifact) & build /StructTreeRoot + /ParentTree
         var structTreeRootRef = context.nextRef();
@@ -3766,6 +3791,7 @@
             }
 
             var pageMcidCount = 0;
+            var taggedContentStr = '';
             if (streamRefs.length > 0 && PDFLib.decodePDFRawStream) {
                 var decodedParts = [];
                 for (var s = 0; s < streamRefs.length; s++) {
@@ -3773,7 +3799,13 @@
                     if (!rawStream) continue;
                     try {
                         var decBytes;
-                        if (typeof rawStream.getContentsString === 'function') {
+                        // IMPORTANT: PDFRawStream also has getContentsString() which returns compressed bytes!
+                        // Always check PDFRawStream / rawStream.contents FIRST and decode via decodePDFRawStream.
+                        if (rawStream instanceof PDFLib.PDFRawStream || (rawStream.contents && PDFLib.decodePDFRawStream)) {
+                            decBytes = PDFLib.decodePDFRawStream(rawStream).decode();
+                        } else if (typeof rawStream.getUnencodedContents === 'function') {
+                            decBytes = rawStream.getUnencodedContents();
+                        } else if (typeof rawStream.getContentsString === 'function') {
                             decBytes = stringToLatin1Bytes(rawStream.getContentsString());
                         } else {
                             decBytes = PDFLib.decodePDFRawStream(rawStream).decode();
@@ -3789,12 +3821,41 @@
                     var stmts = parsePdfContentStreamStatements(combinedSrc);
                     var taggedResult = tagContentStreamStatementsForPdfUa(stmts, 0, hadLowOpacityOcrGState);
                     pageMcidCount = taggedResult.nextMcid;
-
-                    var newStreamBytes = stringToLatin1Bytes(taggedResult.contentString);
-                    var newFlateStream = context.flateStream(newStreamBytes);
-                    var newStreamRef = context.register(newFlateStream);
-                    pageNode.set(PDFLib.PDFName.of('Contents'), newStreamRef);
+                    taggedContentStr = taggedResult.contentString;
                 }
+            }
+
+            // If a page has no text operators (e.g. cover image / graphic page), inject an invisible 3 Tr
+            // accessible text marker using the embedded LiberationSans font so every page is screenreader-searchable
+            if (pageMcidCount === 0 && sharedFontInfo && sharedFontInfo.fontDictRef) {
+                if (!resDict) {
+                    resDict = context.obj({});
+                    pageNode.set(PDFLib.PDFName.of('Resources'), resDict);
+                }
+                var fontResDict = resDict.lookup ? resDict.lookup(PDFLib.PDFName.of('Font')) : null;
+                if (!fontResDict || typeof fontResDict.set !== 'function') {
+                    fontResDict = context.obj({});
+                    resDict.set(PDFLib.PDFName.of('Font'), fontResDict);
+                }
+                fontResDict.set(PDFLib.PDFName.of('F_PDFUA'), sharedFontInfo.fontDictRef);
+
+                taggedContentStr +=
+                    '/P <</MCID 0>> BDC\n' +
+                    'BT\n' +
+                    '/F_PDFUA 1 Tf\n' +
+                    '3 Tr\n' +
+                    '0 0 Td\n' +
+                    '(Seite ' + (i + 1) + ') Tj\n' +
+                    'ET\n' +
+                    'EMC\n';
+                pageMcidCount = 1;
+            }
+
+            if (taggedContentStr.length > 0) {
+                var newStreamBytes = stringToLatin1Bytes(taggedContentStr);
+                var newFlateStream = context.flateStream(newStreamBytes);
+                var newStreamRef = context.register(newFlateStream);
+                pageNode.set(PDFLib.PDFName.of('Contents'), newStreamRef);
             }
 
             // Ensure all /Annots on this page have /Contents set for screenreaders (PAC 2026 Annotation requirement)

@@ -2115,6 +2115,6 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
     </button>
 </div>
 
-<script src="assets/js/app.js?v=<?php echo urlencode(PDFSTUDIO_VERSION); ?>"></script>
+<script src="assets/js/app.js?v=<?php echo urlencode(PDFSTUDIO_VERSION) . '.' . (int)@filemtime(__DIR__ . '/assets/js/app.js'); ?>"></script>
 </body>
 </html>
