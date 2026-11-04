@@ -2327,14 +2327,15 @@ function pdfstudio_github_perform_update($settings = null)
 
     $repo   = $check['repo'];
     $branch = $check['branch'];
+    $shaRef = !empty($check['remote_full_sha']) ? $check['remote_full_sha'] : $branch;
     $token  = isset($settings['github_token']) ? trim((string)$settings['github_token']) : '';
 
-    // Download ZIP archive from GitHub API
-    $zipUrl = 'https://api.github.com/repos/' . $repo . '/zipball/' . rawurlencode($branch);
+    // Download ZIP archive from GitHub by exact commit SHA (bypasses branch CDN cache)
+    $zipUrl = 'https://api.github.com/repos/' . $repo . '/zipball/' . rawurlencode($shaRef);
     $dl = pdfstudio_github_http_get($zipUrl, $token, 60);
     if (empty($dl['ok']) || empty($dl['body']) || strlen($dl['body']) < 1000) {
         // Fallback to codeload URL for public repos
-        $fallbackUrl = 'https://codeload.github.com/' . $repo . '/zip/refs/heads/' . rawurlencode($branch);
+        $fallbackUrl = 'https://codeload.github.com/' . $repo . '/zip/' . rawurlencode($shaRef);
         $dl = pdfstudio_github_http_get($fallbackUrl, $token, 60);
         if (empty($dl['ok']) || empty($dl['body']) || strlen($dl['body']) < 1000) {
             return array(
