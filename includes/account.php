@@ -1316,7 +1316,15 @@ function pdfstudio_get_default_admin_settings()
         'smtp_auth'             => true,
         'smtp_username'         => '',
         'smtp_password'         => '',
-        'smtp_timeout'          => 10
+        'smtp_timeout'          => 10,
+
+        // GitHub Direct Update Settings
+        'github_repo'           => 'uWiiiDev/PDF-Werkstatt-Pro',
+        'github_branch'         => 'main',
+        'github_token'          => '',
+        'last_update_check'     => '',
+        'last_update_at'        => '',
+        'last_update_commit'    => ''
     );
 }
 
@@ -2056,3 +2064,384 @@ function pdfstudio_enforce_app_gatekeeper($isApi = false)
     echo '</div></body></html>';
     exit;
 }
+
+// ============================================================================
+// GITHUB DIRECT UPDATE MANAGER (CHECKS & ONE-CLICK INSTALLER)
+// ============================================================================
+
+/**
+ * Perform an HTTPS GET request to GitHub API / Raw / Codeload with cURL or stream fallback
+ */
+function pdfstudio_github_http_get($url, $token = '', $timeout = 20)
+{
+    $headers = array(
+        'User-Agent: PDF-Werkstatt-Pro-Updater/' . PDFSTUDIO_VERSION,
+        'Accept: application/vnd.github+json'
+    );
+    if (trim((string)$token) !== '') {
+        $headers[] = 'Authorization: Bearer ' . trim((string)$token);
+    }
+
+    if (function_exists('curl_init')) {
+        $ch = @curl_init($url);
+        if ($ch) {
+            @curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            @curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            @curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+            @curl_setopt($ch, CURLOPT_TIMEOUT, (int)$timeout);
+            @curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+            @curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+            @curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            $body = @curl_exec($ch);
+            $code = (int)@curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err  = @curl_error($ch);
+            @curl_close($ch);
+            if ($body !== false && $code >= 200 && $code < 300) {
+                return array('ok' => true, 'status' => $code, 'body' => $body);
+            }
+            return array(
+                'ok'     => false,
+                'status' => $code,
+                'error'  => $err ? $err : ('HTTP-Status ' . $code),
+                'body'   => (string)$body
+            );
+        }
+    }
+
+    // Fallback to file_get_contents stream
+    $ctx = stream_context_create(array(
+        'http' => array(
+            'method'          => 'GET',
+            'header'          => implode("\r\n", $headers) . "\r\n",
+            'timeout'         => (int)$timeout,
+            'follow_location' => 1
+        )
+    ));
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body !== false) {
+        return array('ok' => true, 'status' => 200, 'body' => $body);
+    }
+    return array('ok' => false, 'status' => 0, 'error' => 'HTTPS-Verbindung zu GitHub fehlgeschlagen.');
+}
+
+/**
+ * Determine the currently installed short commit hash (from .git or admin_settings.json)
+ */
+function pdfstudio_get_local_commit_hash($settings = null)
+{
+    if (!is_array($settings)) {
+        $settings = pdfstudio_load_admin_settings();
+    }
+    $gitHeadFile = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . '.git' . DIRECTORY_SEPARATOR . 'HEAD';
+    if (is_file($gitHeadFile)) {
+        $headRaw = trim((string)@file_get_contents($gitHeadFile));
+        if (strpos($headRaw, 'ref: ') === 0) {
+            $refRel = trim(substr($headRaw, 5));
+            $refFile = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . '.git' . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $refRel);
+            if (is_file($refFile)) {
+                $sha = trim((string)@file_get_contents($refFile));
+                if (preg_match('/^[0-9a-f]{7,40}$/i', $sha)) {
+                    return substr($sha, 0, 7);
+                }
+            }
+        } elseif (preg_match('/^[0-9a-f]{7,40}$/i', $headRaw)) {
+            return substr($headRaw, 0, 7);
+        }
+    }
+    if (!empty($settings['last_update_commit'])) {
+        return substr(trim((string)$settings['last_update_commit']), 0, 7);
+    }
+    return '';
+}
+
+/**
+ * Check GitHub repository for available updates (Version + Commit comparison)
+ */
+function pdfstudio_github_check_update($settings = null)
+{
+    if (!is_array($settings)) {
+        $settings = pdfstudio_load_admin_settings();
+    }
+    $repo = isset($settings['github_repo']) && trim((string)$settings['github_repo']) !== ''
+        ? trim((string)$settings['github_repo'])
+        : 'uWiiiDev/PDF-Werkstatt-Pro';
+    // Allow full URLs like https://github.com/uWiiiDev/PDF-Werkstatt-Pro.git
+    $repo = preg_replace('#^https?://github\.com/#i', '', $repo);
+    $repo = preg_replace('#\.git$#i', '', trim($repo, '/'));
+
+    $branch = isset($settings['github_branch']) && trim((string)$settings['github_branch']) !== ''
+        ? trim((string)$settings['github_branch'])
+        : 'main';
+    $token = isset($settings['github_token']) ? trim((string)$settings['github_token']) : '';
+
+    if (!preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $repo)) {
+        return array(
+            'ok'    => false,
+            'error' => 'Ungültiges GitHub-Repository-Format (erwartet: Besitzer/Repository, z. B. uWiiiDev/PDF-Werkstatt-Pro).'
+        );
+    }
+
+    $commitUrl = 'https://api.github.com/repos/' . $repo . '/commits/' . rawurlencode($branch);
+    $res = pdfstudio_github_http_get($commitUrl, $token, 15);
+    if (empty($res['ok'])) {
+        return array(
+            'ok'    => false,
+            'error' => 'GitHub API konnte nicht abgefragt werden (' . (isset($res['error']) ? $res['error'] : 'Unbekannter Fehler') . ').'
+        );
+    }
+
+    $commitData = @json_decode($res['body'], true);
+    if (!is_array($commitData) || empty($commitData['sha'])) {
+        return array(
+            'ok'    => false,
+            'error' => 'Unerwartete Antwort von GitHub API (Repository oder Branch "' . $branch . '" nicht gefunden).'
+        );
+    }
+
+    $remoteFullSha  = (string)$commitData['sha'];
+    $remoteShortSha = substr($remoteFullSha, 0, 7);
+    $commitMsg      = isset($commitData['commit']['message']) ? trim((string)$commitData['commit']['message']) : 'Keine Commit-Nachricht';
+    $commitAuthor   = isset($commitData['commit']['author']['name']) ? (string)$commitData['commit']['author']['name'] : 'GitHub';
+    $commitDateRaw  = isset($commitData['commit']['committer']['date']) ? (string)$commitData['commit']['committer']['date'] : '';
+    $commitDateFmt  = $commitDateRaw !== '' ? date('d.m.Y H:i:s', strtotime($commitDateRaw)) : '—';
+
+    // Fetch remote includes/bootstrap.php to read remote PDFSTUDIO_VERSION
+    $remoteVersion = PDFSTUDIO_VERSION;
+    $rawUrl = 'https://raw.githubusercontent.com/' . $repo . '/' . rawurlencode($branch) . '/includes/bootstrap.php?t=' . time();
+    $rawRes = pdfstudio_github_http_get($rawUrl, $token, 12);
+    if (!empty($rawRes['ok']) && !empty($rawRes['body'])) {
+        if (preg_match("/define\s*\(\s*['\"]PDFSTUDIO_VERSION['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)/", $rawRes['body'], $m)) {
+            $remoteVersion = trim($m[1]);
+        }
+    }
+
+    $localVersion = PDFSTUDIO_VERSION;
+    $localCommit  = pdfstudio_get_local_commit_hash($settings);
+
+    $isNewerVersion = version_compare($remoteVersion, $localVersion, '>');
+    $isDifferentSha = ($localCommit !== '' && strtolower($localCommit) !== strtolower($remoteShortSha));
+    $updateAvailable = ($isNewerVersion || $isDifferentSha);
+
+    pdfstudio_save_admin_settings(array(
+        'last_update_check' => date('d.m.Y H:i:s')
+    ));
+
+    return array(
+        'ok'               => true,
+        'repo'             => $repo,
+        'branch'           => $branch,
+        'local_version'    => $localVersion,
+        'remote_version'   => $remoteVersion,
+        'local_commit'     => $localCommit !== '' ? $localCommit : '—',
+        'remote_commit'    => $remoteShortSha,
+        'remote_full_sha'  => $remoteFullSha,
+        'commit_message'   => $commitMsg,
+        'commit_author'    => $commitAuthor,
+        'commit_date'      => $commitDateFmt,
+        'update_available' => $updateAvailable,
+        'checked_at'       => date('d.m.Y H:i:s')
+    );
+}
+
+/**
+ * Recursively remove a temporary directory inside storage/
+ */
+function pdfstudio_rrmdir_temp($dir)
+{
+    if (!is_dir($dir)) {
+        return;
+    }
+    $items = @scandir($dir);
+    if (is_array($items)) {
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $path = $dir . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($path) && !is_link($path)) {
+                pdfstudio_rrmdir_temp($path);
+            } else {
+                @unlink($path);
+            }
+        }
+    }
+    @rmdir($dir);
+}
+
+/**
+ * Recursively copy extracted GitHub release files into PDFSTUDIO_ROOT while strictly preserving storage/, .git/ and config.local.php
+ */
+function pdfstudio_copy_update_tree($srcDir, $dstDir, $relPrefix = '', &$copiedCount = 0)
+{
+    $items = @scandir($srcDir);
+    if (!is_array($items)) {
+        return false;
+    }
+    if (!is_dir($dstDir)) {
+        @mkdir($dstDir, 0755, true);
+    }
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+        $relPath = $relPrefix === '' ? $item : ($relPrefix . '/' . $item);
+        // Never overwrite local runtime storage, git metadata or local config overrides
+        if ($relPath === 'storage' || strpos($relPath, 'storage/') === 0 ||
+            $relPath === '.git' || strpos($relPath, '.git/') === 0 ||
+            $relPath === 'config.local.php') {
+            continue;
+        }
+        $srcPath = $srcDir . DIRECTORY_SEPARATOR . $item;
+        $dstPath = $dstDir . DIRECTORY_SEPARATOR . $item;
+        if (is_dir($srcPath)) {
+            pdfstudio_copy_update_tree($srcPath, $dstPath, $relPath, $copiedCount);
+        } else {
+            if (@copy($srcPath, $dstPath)) {
+                $copiedCount++;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Download and install the latest version from GitHub directly into the application root
+ * Preserves all files in storage/ (Admin settings, local users, statistics, vault)
+ */
+function pdfstudio_github_perform_update($settings = null)
+{
+    if (!is_array($settings)) {
+        $settings = pdfstudio_load_admin_settings();
+    }
+    $check = pdfstudio_github_check_update($settings);
+    if (empty($check['ok'])) {
+        return $check;
+    }
+
+    if (!class_exists('ZipArchive')) {
+        return array(
+            'ok'    => false,
+            'error' => 'Die PHP-Erweiterung "ZipArchive" (php-zip) ist auf diesem Webserver nicht aktiviert.'
+        );
+    }
+
+    $repo   = $check['repo'];
+    $branch = $check['branch'];
+    $token  = isset($settings['github_token']) ? trim((string)$settings['github_token']) : '';
+
+    // Download ZIP archive from GitHub API
+    $zipUrl = 'https://api.github.com/repos/' . $repo . '/zipball/' . rawurlencode($branch);
+    $dl = pdfstudio_github_http_get($zipUrl, $token, 60);
+    if (empty($dl['ok']) || empty($dl['body']) || strlen($dl['body']) < 1000) {
+        // Fallback to codeload URL for public repos
+        $fallbackUrl = 'https://codeload.github.com/' . $repo . '/zip/refs/heads/' . rawurlencode($branch);
+        $dl = pdfstudio_github_http_get($fallbackUrl, $token, 60);
+        if (empty($dl['ok']) || empty($dl['body']) || strlen($dl['body']) < 1000) {
+            return array(
+                'ok'    => false,
+                'error' => 'Download des Update-Pakets von GitHub fehlgeschlagen (' . (isset($dl['error']) ? $dl['error'] : 'Leeres Archiv') . ').'
+            );
+        }
+    }
+
+    $tmpZip = PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'github_update_' . time() . '.zip';
+    $tmpExtractDir = PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'github_update_extract_' . time();
+
+    if (@file_put_contents($tmpZip, $dl['body']) === false) {
+        return array(
+            'ok'    => false,
+            'error' => 'Update-Archiv konnte nicht im Verzeichnis storage/ zwischengespeichert werden (Schreibrechte prüfen).'
+        );
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($tmpZip) !== true) {
+        @unlink($tmpZip);
+        return array(
+            'ok'    => false,
+            'error' => 'Heruntergeladenes GitHub-ZIP-Archiv konnte nicht geöffnet werden.'
+        );
+    }
+
+    @mkdir($tmpExtractDir, 0700, true);
+    $extracted = @$zip->extractTo($tmpExtractDir);
+    $zip->close();
+    @unlink($tmpZip);
+
+    if (!$extracted) {
+        pdfstudio_rrmdir_temp($tmpExtractDir);
+        return array(
+            'ok'    => false,
+            'error' => 'Entpacken des GitHub-Archivs fehlgeschlagen.'
+        );
+    }
+
+    // Locate inner root folder created by GitHub zipball (e.g. uWiiiDev-PDF-Werkstatt-Pro-ffeec5b/)
+    $subItems = @scandir($tmpExtractDir);
+    $sourceRoot = $tmpExtractDir;
+    if (is_array($subItems)) {
+        foreach ($subItems as $si) {
+            if ($si === '.' || $si === '..') {
+                continue;
+            }
+            $candidate = $tmpExtractDir . DIRECTORY_SEPARATOR . $si;
+            if (is_dir($candidate) && is_file($candidate . DIRECTORY_SEPARATOR . 'index.php')) {
+                $sourceRoot = $candidate;
+                break;
+            }
+        }
+    }
+
+    if (!is_file($sourceRoot . DIRECTORY_SEPARATOR . 'index.php')) {
+        pdfstudio_rrmdir_temp($tmpExtractDir);
+        return array(
+            'ok'    => false,
+            'error' => 'Das heruntergeladene GitHub-Archiv enthält keine gültige PDF-Werkstatt Pro Installation (index.php fehlt).'
+        );
+    }
+
+    $copiedFiles = 0;
+    pdfstudio_copy_update_tree($sourceRoot, PDFSTUDIO_ROOT, '', $copiedFiles);
+    pdfstudio_rrmdir_temp($tmpExtractDir);
+
+    if ($copiedFiles === 0) {
+        return array(
+            'ok'    => false,
+            'error' => 'Es konnten keine Programmdateien überschrieben werden. Bitte Schreibrechte des Webserver-Benutzers (z. B. www-data) für das Anwendungsverzeichnis prüfen.'
+        );
+    }
+
+    // Update local .git commit ref if .git exists and is writable
+    $gitHeadFile = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . '.git' . DIRECTORY_SEPARATOR . 'HEAD';
+    if (is_file($gitHeadFile) && !empty($check['remote_full_sha'])) {
+        $headRaw = trim((string)@file_get_contents($gitHeadFile));
+        if (strpos($headRaw, 'ref: ') === 0) {
+            $refRel = trim(substr($headRaw, 5));
+            $refFile = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . '.git' . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $refRel);
+            if (is_file($refFile) && is_writable($refFile)) {
+                @file_put_contents($refFile, $check['remote_full_sha'] . "\n");
+            }
+        }
+    }
+
+    $nowStr = date('d.m.Y H:i:s');
+    pdfstudio_save_admin_settings(array(
+        'last_update_check'  => $nowStr,
+        'last_update_at'     => $nowStr,
+        'last_update_commit' => $check['remote_commit']
+    ));
+
+    if (function_exists('opcache_reset')) {
+        @opcache_reset();
+    }
+
+    return array(
+        'ok'             => true,
+        'copied_files'   => $copiedFiles,
+        'remote_version' => $check['remote_version'],
+        'remote_commit'  => $check['remote_commit'],
+        'commit_message' => $check['commit_message'],
+        'updated_at'     => $nowStr
+    );
+}
+

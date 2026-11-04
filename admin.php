@@ -15,6 +15,7 @@ $csrfToken = pdfstudio_get_csrf_token();
 $flashSuccess = '';
 $flashError = '';
 $ldapTestResult = null;
+$githubCheckResult = null;
 
 // Handle Admin Logout
 if (isset($_GET['admin_logout'])) {
@@ -236,6 +237,53 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
             @unlink(PDFSTUDIO_STATS_TXT);
             pdfstudio_save_stats_and_report(pdfstudio_load_stats());
             $flashSuccess = 'Die Nutzungsstatistik wurde auf 0 zurückgesetzt.';
+        } elseif ($act === 'save_github_settings' || $act === 'check_github_update' || $act === 'run_github_update') {
+            $ghRepo = isset($_POST['github_repo']) ? trim((string)$_POST['github_repo']) : 'uWiiiDev/PDF-Werkstatt-Pro';
+            $ghRepo = preg_replace('#^https?://github\.com/#i', '', $ghRepo);
+            $ghRepo = preg_replace('#\.git$#i', '', trim($ghRepo, '/'));
+            if ($ghRepo === '') {
+                $ghRepo = 'uWiiiDev/PDF-Werkstatt-Pro';
+            }
+            $ghBranch = isset($_POST['github_branch']) ? trim((string)$_POST['github_branch']) : 'main';
+            if ($ghBranch === '') {
+                $ghBranch = 'main';
+            }
+            $ghToken = isset($_POST['github_token']) ? trim((string)$_POST['github_token']) : '';
+            if ($ghToken === '' && !empty($settings['github_token']) && empty($_POST['clear_github_token'])) {
+                $ghToken = $settings['github_token'];
+            }
+
+            pdfstudio_save_admin_settings(array(
+                'github_repo'   => $ghRepo,
+                'github_branch' => $ghBranch,
+                'github_token'  => $ghToken
+            ));
+            $settings = pdfstudio_load_admin_settings();
+
+            if ($act === 'check_github_update') {
+                $githubCheckResult = pdfstudio_github_check_update($settings);
+                $settings = pdfstudio_load_admin_settings();
+                if (!empty($githubCheckResult['ok'])) {
+                    if (!empty($githubCheckResult['update_available'])) {
+                        $flashSuccess = 'Neues Update auf GitHub gefunden: Version v' . $githubCheckResult['remote_version'] . ' (Commit ' . $githubCheckResult['remote_commit'] . ') steht bereit!';
+                    } else {
+                        $flashSuccess = 'Ihre Installation (v' . $githubCheckResult['local_version'] . ', Commit ' . $githubCheckResult['remote_commit'] . ') ist bereits auf dem aktuellsten Stand von GitHub.';
+                    }
+                } else {
+                    $flashError = 'GitHub-Update-Prüfung fehlgeschlagen: ' . $githubCheckResult['error'];
+                }
+            } elseif ($act === 'run_github_update') {
+                $updRes = pdfstudio_github_perform_update($settings);
+                $settings = pdfstudio_load_admin_settings();
+                if (!empty($updRes['ok'])) {
+                    $githubCheckResult = pdfstudio_github_check_update($settings);
+                    $flashSuccess = 'Update von GitHub erfolgreich installiert! (' . (int)$updRes['copied_files'] . ' Dateien aktualisiert auf Version v' . $updRes['remote_version'] . ' / Commit ' . $updRes['remote_commit'] . ' — alle Einstellungen und Benutzer in storage/ blieben vollständig erhalten.)';
+                } else {
+                    $flashError = 'Update von GitHub konnte nicht installiert werden: ' . $updRes['error'];
+                }
+            } else {
+                $flashSuccess = 'GitHub-Update-Einstellungen wurden gespeichert.';
+            }
         }
     }
 }
@@ -1003,6 +1051,102 @@ $statLabels = pdfstudio_get_stat_event_labels();
                     <?php endforeach; ?>
                 </tbody>
             </table>
+        </div>
+
+        <!-- 7. SYSTEM UPDATE DIRECTLY FROM GITHUB -->
+        <?php $localShortCommit = pdfstudio_get_local_commit_hash($settings); ?>
+        <div class="adm-card" id="github-update">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+                <h2 style="margin:0;">🔄 7. System-Update direkt von GitHub</h2>
+                <span class="adm-pill adm-pill-ok">
+                    Installiert: v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?>
+                    <?php if ($localShortCommit !== ''): ?>
+                        (Commit <?php echo htmlspecialchars($localShortCommit, ENT_QUOTES, 'UTF-8'); ?>)
+                    <?php endif; ?>
+                </span>
+            </div>
+            <p class="adm-desc">
+                Prüfen und installieren Sie Programm-Updates mit einem Klick direkt aus dem GitHub-Repository.
+                Alle lokalen Einstellungen, Benutzerkonten, Passwörter, Tresor-Dokumente und Statistiken im Ordner <code>storage/</code> bleiben beim Update <strong>vollständig unberührt</strong>.
+            </p>
+
+            <div class="adm-grid-3" style="margin-bottom:14px;">
+                <div style="background:#121721;border:1px solid #263042;border-radius:8px;padding:12px 14px;">
+                    <div style="font-size:11.5px;color:#94a3b8;">Aktuell installierte Version</div>
+                    <div style="font-size:18px;font-weight:700;margin-top:4px;color:#60a5fa;">
+                        v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?>
+                        <span style="font-size:12px;font-weight:400;color:#94a3b8;">
+                            <?php echo $localShortCommit !== '' ? '(' . htmlspecialchars($localShortCommit, ENT_QUOTES, 'UTF-8') . ')' : ''; ?>
+                        </span>
+                    </div>
+                </div>
+                <div style="background:#121721;border:1px solid #263042;border-radius:8px;padding:12px 14px;">
+                    <div style="font-size:11.5px;color:#94a3b8;">Letzte Prüfung auf GitHub</div>
+                    <div style="font-size:15px;font-weight:600;margin-top:6px;color:#e2e8f0;">
+                        <?php echo !empty($settings['last_update_check']) ? htmlspecialchars((string)$settings['last_update_check'], ENT_QUOTES, 'UTF-8') : 'Noch nicht geprüft'; ?>
+                    </div>
+                </div>
+                <div style="background:#121721;border:1px solid #263042;border-radius:8px;padding:12px 14px;">
+                    <div style="font-size:11.5px;color:#94a3b8;">Letztes installiertes Update</div>
+                    <div style="font-size:15px;font-weight:600;margin-top:6px;color:#34d399;">
+                        <?php echo !empty($settings['last_update_at']) ? htmlspecialchars((string)$settings['last_update_at'], ENT_QUOTES, 'UTF-8') : 'Erstinstallation'; ?>
+                    </div>
+                </div>
+            </div>
+
+            <?php if (is_array($githubCheckResult) && !empty($githubCheckResult['ok'])): ?>
+                <div style="margin-bottom:16px;padding:14px 16px;border-radius:8px;background:<?php echo !empty($githubCheckResult['update_available']) ? 'rgba(59,130,246,0.12)' : 'rgba(16,185,129,0.12)'; ?>;border:1px solid <?php echo !empty($githubCheckResult['update_available']) ? 'rgba(59,130,246,0.4)' : 'rgba(16,185,129,0.4)'; ?>;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+                        <strong style="font-size:13.5px;color:<?php echo !empty($githubCheckResult['update_available']) ? '#93c5fd' : '#6ee7b7'; ?>;">
+                            <?php if (!empty($githubCheckResult['update_available'])): ?>
+                                🚀 Neues Update auf GitHub verfügbar: v<?php echo htmlspecialchars($githubCheckResult['remote_version'], ENT_QUOTES, 'UTF-8'); ?> (Commit <?php echo htmlspecialchars($githubCheckResult['remote_commit'], ENT_QUOTES, 'UTF-8'); ?>)
+                            <?php else: ?>
+                                ✅ Ihre Installation ist auf dem neuesten Stand (v<?php echo htmlspecialchars($githubCheckResult['remote_version'], ENT_QUOTES, 'UTF-8'); ?> / Commit <?php echo htmlspecialchars($githubCheckResult['remote_commit'], ENT_QUOTES, 'UTF-8'); ?>)
+                            <?php endif; ?>
+                        </strong>
+                        <span style="font-size:11.5px;color:#94a3b8;">
+                            Commit-Datum: <?php echo htmlspecialchars($githubCheckResult['commit_date'], ENT_QUOTES, 'UTF-8'); ?> (<?php echo htmlspecialchars($githubCheckResult['commit_author'], ENT_QUOTES, 'UTF-8'); ?>)
+                        </span>
+                    </div>
+                    <div style="font-size:12.5px;color:#e2e8f0;background:#0f131a;padding:8px 12px;border-radius:6px;border:1px solid #263042;font-family:monospace;white-space:pre-wrap;"><?php echo htmlspecialchars($githubCheckResult['commit_message'], ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+            <?php endif; ?>
+
+            <form method="post" action="admin.php#github-update">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+
+                <div class="adm-grid-3">
+                    <div class="adm-field">
+                        <label for="ghRepo">GitHub-Repository (Besitzer/Name)</label>
+                        <input type="text" id="ghRepo" name="github_repo" class="adm-input" placeholder="uWiiiDev/PDF-Werkstatt-Pro" value="<?php echo htmlspecialchars((string)(!empty($settings['github_repo']) ? $settings['github_repo'] : 'uWiiiDev/PDF-Werkstatt-Pro'), ENT_QUOTES, 'UTF-8'); ?>">
+                        <small>Standard: <code>uWiiiDev/PDF-Werkstatt-Pro</code></small>
+                    </div>
+                    <div class="adm-field">
+                        <label for="ghBranch">Git-Branch</label>
+                        <input type="text" id="ghBranch" name="github_branch" class="adm-input" placeholder="main" value="<?php echo htmlspecialchars((string)(!empty($settings['github_branch']) ? $settings['github_branch'] : 'main'), ENT_QUOTES, 'UTF-8'); ?>">
+                        <small>Standard-Zweig: <code>main</code></small>
+                    </div>
+                    <div class="adm-field">
+                        <label for="ghToken">GitHub Personal Access Token (optional)</label>
+                        <input type="password" id="ghToken" name="github_token" class="adm-input" placeholder="<?php echo !empty($settings['github_token']) ? '•••••••• (gespeichert — leer lassen zum Behalten)' : 'Nur bei privatem Repository erforderlich'; ?>" autocomplete="new-password">
+                        <small>Für öffentliche Repositories leer lassen</small>
+                    </div>
+                </div>
+
+                <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding-top:12px;border-top:1px solid #263042;">
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                        <button type="submit" name="action" value="check_github_update" class="adm-btn">
+                            🔍 Auf GitHub nach Updates suchen
+                        </button>
+                        <button type="submit" name="action" value="run_github_update" class="adm-btn adm-btn-primary" onclick="return confirm('Jetzt das neueste Update direkt von GitHub herunterladen und installieren?\n\nHinweis: Ihre Einstellungen, lokalen Benutzer und Statistiken im Ordner storage/ bleiben vollständig erhalten.');">
+                            ⬇️ Update jetzt von GitHub ziehen &amp; installieren
+                        </button>
+                    </div>
+                    <button type="submit" name="action" value="save_github_settings" class="adm-btn">
+                        💾 Repository-Einstellungen speichern
+                    </button>
+                </div>
+            </form>
         </div>
 
     <?php endif; ?>
