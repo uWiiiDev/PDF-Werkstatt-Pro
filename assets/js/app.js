@@ -2270,7 +2270,7 @@
         pdfDoc.setTitle(title);
         pdfDoc.setAuthor(author);
         pdfDoc.setSubject(subject);
-        pdfDoc.setProducer('PDF-Werkstatt Pro v1.0 Desktop Suite');
+        pdfDoc.setProducer('PDF-Werkstatt Pro v' + (window.PDFSTUDIO_VERSION || '1.1.0') + ' Desktop Suite');
 
         doc.meta = { title: title, author: author, subject: subject };
         doc.bytes = await pdfDoc.save();
@@ -4482,8 +4482,9 @@
 
         var fixAuthor = (pdfDoc.getAuthor() || '').trim() || 'PDF-Werkstatt Pro';
         var fixSubject = (pdfDoc.getSubject() || '').trim() || 'Barrierefreies PDF-Dokument (PDF/UA-1 & WCAG 2.1)';
-        var fixCreator = 'PDF-Werkstatt Pro v1.0';
-        var fixProducer = 'PDF-Werkstatt Pro v1.0 PDF/UA-1 Engine';
+        var appVer = window.PDFSTUDIO_VERSION || '1.1.0';
+        var fixCreator = 'PDF-Werkstatt Pro v' + appVer;
+        var fixProducer = 'PDF-Werkstatt Pro v' + appVer + ' PDF/UA-1 Engine';
         var nowSec = new Date(Math.floor(Date.now() / 1000) * 1000);
         var isoDateStr = nowSec.toISOString().replace(/\.\d{3}Z$/, 'Z');
 

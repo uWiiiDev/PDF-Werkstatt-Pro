@@ -12,7 +12,7 @@ $serverInfo = pdfstudio_get_server_info();
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hilfe &amp; Benutzerhandbuch — PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?></title>
-    <link rel="stylesheet" href="assets/css/desktop.css?v=<?php echo urlencode(PDFSTUDIO_VERSION); ?>">
+    <link rel="stylesheet" href="assets/css/desktop.css?v=<?php echo urlencode(PDFSTUDIO_VERSION) . '.' . (int)@filemtime(__DIR__ . '/assets/css/desktop.css'); ?>">
     <style>
         html, body {
             overflow-y: auto !important;

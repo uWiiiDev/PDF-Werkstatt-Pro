@@ -51,9 +51,12 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF-Werkstatt Pro v<?php echo htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8'); ?> — Desktop PDF Suite</title>
-    <link rel="stylesheet" href="assets/css/desktop.css?v=<?php echo urlencode(PDFSTUDIO_VERSION); ?>">
+    <link rel="stylesheet" href="assets/css/desktop.css?v=<?php echo urlencode(PDFSTUDIO_VERSION) . '.' . (int)@filemtime(__DIR__ . '/assets/css/desktop.css'); ?>">
     <!-- 100% Local Offline Engines (No Internet or CDN required) -->
-    <script>window.PDFSTUDIO_CSRF_TOKEN = <?php echo json_encode(pdfstudio_get_csrf_token()); ?>;</script>
+    <script>
+        window.PDFSTUDIO_CSRF_TOKEN = <?php echo json_encode(pdfstudio_get_csrf_token()); ?>;
+        window.PDFSTUDIO_VERSION = <?php echo json_encode(PDFSTUDIO_VERSION); ?>;
+    </script>
     <script src="assets/vendor/pdf-lib.min.js"></script>
     <script src="assets/vendor/pdf.min.js"></script>
     <script src="assets/vendor/jszip.min.js"></script>
