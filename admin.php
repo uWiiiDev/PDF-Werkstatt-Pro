@@ -165,14 +165,14 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
             $uName = isset($_POST['target_username']) ? (string)$_POST['target_username'] : '';
             pdfstudio_delete_local_user($uName);
             $flashSuccess = 'Lokaler Benutzer "' . htmlspecialchars($uName, ENT_QUOTES, 'UTF-8') . '" wurde gelöscht.';
-        } elseif ($act === 'save_system_settings') {
+        } elseif ($act === 'save_system_settings' || $act === 'test_smtp_live') {
             $newSmtpPw = isset($_POST['smtp_password']) ? (string)$_POST['smtp_password'] : '';
             if ($newSmtpPw === '' && !empty($settings['smtp_password']) && empty($_POST['clear_smtp_password'])) {
                 $newSmtpPw = $settings['smtp_password'];
             }
             $sysUpdate = array(
-                'max_login_attempts'    => max(3, min(50, (int)(isset($_POST['max_login_attempts']) ? $_POST['max_login_attempts'] : 8))),
-                'login_lockout_seconds' => max(30, min(86400, (int)(isset($_POST['login_lockout_seconds']) ? $_POST['login_lockout_seconds'] : 300))),
+                'max_login_attempts'    => max(3, min(50, (int)(isset($_POST['max_login_attempts']) ? $_POST['max_login_attempts'] : $settings['max_login_attempts']))),
+                'login_lockout_seconds' => max(30, min(86400, (int)(isset($_POST['login_lockout_seconds']) ? $_POST['login_lockout_seconds'] : $settings['login_lockout_seconds']))),
                 'mail_transport'        => (isset($_POST['mail_transport']) && $_POST['mail_transport'] === 'mail') ? 'mail' : 'smtp',
                 'mail_from_address'     => trim((string)(isset($_POST['mail_from_address']) ? $_POST['mail_from_address'] : 'noreply@pdf-werkstatt.local')),
                 'mail_from_name'        => trim((string)(isset($_POST['mail_from_name']) ? $_POST['mail_from_name'] : 'PDF-Werkstatt Pro')),
@@ -186,7 +186,27 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
             );
             pdfstudio_save_admin_settings($sysUpdate);
             $settings = pdfstudio_load_admin_settings();
-            $flashSuccess = 'System-, Sicherheits- und SMTP-Einstellungen wurden gespeichert.';
+
+            if ($act === 'test_smtp_live') {
+                $testRcpt = isset($_POST['smtp_test_recipient']) ? trim((string)$_POST['smtp_test_recipient']) : '';
+                if ($testRcpt === '' || strpos($testRcpt, '@') === false) {
+                    $flashError = 'Bitte geben Sie eine gültige Empfänger-E-Mail-Adresse für die Test-E-Mail ein.';
+                } else {
+                    $subj = 'PDF-Werkstatt Pro v' . PDFSTUDIO_VERSION . ' — SMTP-Testnachricht';
+                    $body = "Hallo,\n\ndies ist eine automatische Test-E-Mail aus dem Administrationsbereich der PDF-Werkstatt Pro (v" . PDFSTUDIO_VERSION . ").\n\n"
+                          . "Versandmethode : " . strtoupper($settings['mail_transport']) . "\n"
+                          . "SMTP-Server    : " . ($settings['smtp_host'] !== '' ? ($settings['smtp_host'] . ':' . $settings['smtp_port']) : 'PHP mail()') . "\n"
+                          . "Zeitpunkt      : " . date('d.m.Y H:i:s') . "\n";
+                    $mailRes = pdfstudio_send_email($testRcpt, $subj, $body);
+                    if (!empty($mailRes['sent'])) {
+                        $flashSuccess = 'Test-E-Mail wurde erfolgreich über ' . strtoupper($mailRes['method']) . ' an "' . $testRcpt . '" versendet!';
+                    } else {
+                        $flashError = 'Test-E-Mail konnte nicht zugestellt werden: ' . (!empty($mailRes['error']) ? $mailRes['error'] : 'Prüfen Sie SMTP-Host, Port und Zugangsdaten.');
+                    }
+                }
+            } else {
+                $flashSuccess = 'E-Mail-, SMTP- und Sicherheitseinstellungen wurden gespeichert.';
+            }
         } elseif ($act === 'change_admin_password') {
             $curPw = isset($_POST['current_admin_password']) ? (string)$_POST['current_admin_password'] : '';
             $newPw1 = isset($_POST['new_admin_password']) ? (string)$_POST['new_admin_password'] : '';
@@ -733,77 +753,155 @@ $ldapExtLoaded = function_exists('ldap_connect');
             <?php endif; ?>
         </div>
 
-        <!-- 4. GENERAL SYSTEM SETTINGS (FORMERLY CONFIG.PHP) & ADMIN PASSWORD -->
-        <div class="adm-grid-2">
-            <div class="adm-card">
-                <h2>⚙️ 4. Sicherheit &amp; E-Mail / SMTP (vormals config.php)</h2>
-                <p class="adm-desc">
-                    Brute-Force-Schutz für Anmeldungen sowie optionale SMTP-Server-Parameter.
-                </p>
-                <form method="post" action="admin.php">
-                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
-                    <input type="hidden" name="action" value="save_system_settings">
-                    <div class="adm-grid-2">
-                        <div class="adm-field">
-                            <label for="maxLoginAtt">Max. Fehlversuche pro IP</label>
+        <!-- 4. E-MAIL & SMTP SERVER CONFIGURATION (WITH LIVE TEST MAIL) -->
+        <div class="adm-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+                <h2 style="margin:0;">📧 4. E-Mail &amp; SMTP-Server Konfiguration (für E-Mail-Versand)</h2>
+                <?php if (trim((string)$settings['smtp_host']) !== ''): ?>
+                    <span class="adm-pill adm-pill-ok">✔ SMTP-Server hinterlegt (<?php echo htmlspecialchars((string)$settings['smtp_host'] . ':' . (int)$settings['smtp_port'], ENT_QUOTES, 'UTF-8'); ?>)</span>
+                <?php else: ?>
+                    <span class="adm-pill adm-pill-off">Noch kein SMTP-Server eingetragen</span>
+                <?php endif; ?>
+            </div>
+            <p class="adm-desc">
+                Hinterlegen Sie hier Ihren ausgehenden Mailserver (SMTP), um den E-Mail-Versand aus der Anwendung heraus zu ermöglichen. Über das Testfeld unten können Sie direkt eine Test-E-Mail versenden.
+            </p>
+
+            <form method="post" action="admin.php">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+
+                <div class="adm-grid-3">
+                    <div class="adm-field">
+                        <label for="mailTransport">Versand-Methode</label>
+                        <select id="mailTransport" name="mail_transport" class="adm-select">
+                            <option value="smtp" <?php echo ($settings['mail_transport'] === 'smtp') ? 'selected' : ''; ?>>Direkter SMTP-Server (empfohlen)</option>
+                            <option value="mail" <?php echo ($settings['mail_transport'] === 'mail') ? 'selected' : ''; ?>>Lokale PHP mail()-Funktion des Webservers</option>
+                        </select>
+                    </div>
+                    <div class="adm-field">
+                        <label for="smtpHost">SMTP-Server (Host oder IP)</label>
+                        <input type="text" id="smtpHost" name="smtp_host" class="adm-input" placeholder="z. B. smtp.dienststelle.intern oder mail.example.de" value="<?php echo htmlspecialchars((string)$settings['smtp_host'], ENT_QUOTES, 'UTF-8'); ?>">
+                    </div>
+                    <div class="adm-field">
+                        <label for="smtpPort">SMTP-Port</label>
+                        <input type="number" id="smtpPort" name="smtp_port" class="adm-input" value="<?php echo (int)$settings['smtp_port']; ?>">
+                        <small>Standard: <code>587</code> (STARTTLS), <code>465</code> (SSL/TLS) oder <code>25</code> (Relay)</small>
+                    </div>
+                </div>
+
+                <div class="adm-grid-3" style="margin-top:4px;">
+                    <div class="adm-field">
+                        <label for="smtpEnc">Verschlüsselung</label>
+                        <select id="smtpEnc" name="smtp_encryption" class="adm-select">
+                            <option value="tls" <?php echo ($settings['smtp_encryption'] === 'tls') ? 'selected' : ''; ?>>STARTTLS (Standard für Port 587)</option>
+                            <option value="ssl" <?php echo ($settings['smtp_encryption'] === 'ssl') ? 'selected' : ''; ?>>Implizites SSL/TLS (Standard für Port 465)</option>
+                            <option value="" <?php echo ($settings['smtp_encryption'] === '') ? 'selected' : ''; ?>>Keine / Unverschlüsselt (Port 25 Intranet-Relay)</option>
+                        </select>
+                    </div>
+                    <div class="adm-field">
+                        <label for="smtpUser">SMTP-Benutzername / Postfach</label>
+                        <input type="text" id="smtpUser" name="smtp_username" class="adm-input" placeholder="z. B. noreply@ihre-organisation.de" value="<?php echo htmlspecialchars((string)$settings['smtp_username'], ENT_QUOTES, 'UTF-8'); ?>">
+                    </div>
+                    <div class="adm-field">
+                        <label for="smtpPass">SMTP-Passwort</label>
+                        <input type="password" id="smtpPass" name="smtp_password" class="adm-input" placeholder="<?php echo !empty($settings['smtp_password']) ? '•••••••• (gespeichert — leer lassen zum Behalten)' : 'SMTP-Passwort eingeben'; ?>" autocomplete="new-password">
+                    </div>
+                </div>
+
+                <div class="adm-grid-3" style="margin-top:4px;">
+                    <div class="adm-field">
+                        <label for="mailFromAddr">Offizielle Absender-E-Mail (From)</label>
+                        <input type="text" id="mailFromAddr" name="mail_from_address" class="adm-input" placeholder="noreply@ihre-organisation.de" value="<?php echo htmlspecialchars((string)$settings['mail_from_address'], ENT_QUOTES, 'UTF-8'); ?>">
+                    </div>
+                    <div class="adm-field">
+                        <label for="mailFromName">Absender-Anzeigename</label>
+                        <input type="text" id="mailFromName" name="mail_from_name" class="adm-input" placeholder="PDF-Werkstatt Pro" value="<?php echo htmlspecialchars((string)$settings['mail_from_name'], ENT_QUOTES, 'UTF-8'); ?>">
+                    </div>
+                    <div class="adm-field">
+                        <label>Authentifizierung &amp; Timeout</label>
+                        <div style="display:flex;align-items:center;gap:12px;padding-top:4px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin:0;font-size:12.5px;white-space:nowrap;">
+                                <input type="checkbox" name="smtp_auth" value="1" <?php echo !empty($settings['smtp_auth']) ? 'checked' : ''; ?>>
+                                SMTP-Login (AUTH) aktiv
+                            </label>
+                            <input type="number" name="smtp_timeout" class="adm-input" style="width:80px;height:30px;" value="<?php echo (int)$settings['smtp_timeout']; ?>" title="Timeout in Sekunden">
+                            <span style="font-size:11.5px;color:#94a3b8;">Sek.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LIVE SMTP TEST BOX -->
+                <div style="margin-top:14px;padding:14px 16px;background:#121721;border:1px solid #283449;border-radius:8px;">
+                    <div style="font-size:13px;font-weight:700;margin-bottom:8px;color:#93c5fd;">
+                        📨 Live-Test: SMTP-Einstellungen speichern &amp; Test-E-Mail senden
+                    </div>
+                    <div class="adm-grid-2" style="align-items:end;">
+                        <div class="adm-field" style="margin-bottom:0;">
+                            <label for="smtpTestRcpt">Empfänger-E-Mail-Adresse für Testnachricht (optional)</label>
+                            <input type="email" id="smtpTestRcpt" name="smtp_test_recipient" class="adm-input" placeholder="z. B. ihre.adresse@dienststelle.de" value="<?php echo isset($_POST['smtp_test_recipient']) ? htmlspecialchars((string)$_POST['smtp_test_recipient'], ENT_QUOTES, 'UTF-8') : ''; ?>">
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button type="submit" name="action" value="test_smtp_live" class="adm-btn">
+                                📨 Test-E-Mail jetzt senden
+                            </button>
+                            <button type="submit" name="action" value="save_system_settings" class="adm-btn adm-btn-primary">
+                                💾 SMTP-Einstellungen speichern
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. BRUTE FORCE SETTINGS -->
+                <div style="margin-top:18px;padding-top:16px;border-top:1px solid #263042;">
+                    <div style="font-size:13.5px;font-weight:700;margin-bottom:10px;">🛡️ Brute-Force-Schutz (Anmeldeversuche)</div>
+                    <div class="adm-grid-3" style="align-items:end;">
+                        <div class="adm-field" style="margin-bottom:0;">
+                            <label for="maxLoginAtt">Max. Fehlversuche pro IP-Adresse</label>
                             <input type="number" id="maxLoginAtt" name="max_login_attempts" class="adm-input" value="<?php echo (int)$settings['max_login_attempts']; ?>">
                         </div>
-                        <div class="adm-field">
-                            <label for="lockoutSec">Sperrzeit bei Fehlversuchen (Sek.)</label>
+                        <div class="adm-field" style="margin-bottom:0;">
+                            <label for="lockoutSec">Sperrzeit nach Fehlversuchen (Sekunden)</label>
                             <input type="number" id="lockoutSec" name="login_lockout_seconds" class="adm-input" value="<?php echo (int)$settings['login_lockout_seconds']; ?>">
                         </div>
-                    </div>
-                    <div class="adm-grid-2">
-                        <div class="adm-field">
-                            <label for="smtpHost">SMTP-Server (optional)</label>
-                            <input type="text" id="smtpHost" name="smtp_host" class="adm-input" value="<?php echo htmlspecialchars((string)$settings['smtp_host'], ENT_QUOTES, 'UTF-8'); ?>">
-                        </div>
-                        <div class="adm-field">
-                            <label for="smtpPort">SMTP-Port</label>
-                            <input type="number" id="smtpPort" name="smtp_port" class="adm-input" value="<?php echo (int)$settings['smtp_port']; ?>">
+                        <div>
+                            <button type="submit" name="action" value="save_system_settings" class="adm-btn adm-btn-primary">
+                                💾 Sicherheitseinstellungen speichern
+                            </button>
                         </div>
                     </div>
-                    <div class="adm-grid-2">
-                        <div class="adm-field">
-                            <label for="mailFromAddr">Absender-E-Mail</label>
-                            <input type="text" id="mailFromAddr" name="mail_from_address" class="adm-input" value="<?php echo htmlspecialchars((string)$settings['mail_from_address'], ENT_QUOTES, 'UTF-8'); ?>">
-                        </div>
-                        <div class="adm-field">
-                            <label for="mailFromName">Absender-Name</label>
-                            <input type="text" id="mailFromName" name="mail_from_name" class="adm-input" value="<?php echo htmlspecialchars((string)$settings['mail_from_name'], ENT_QUOTES, 'UTF-8'); ?>">
-                        </div>
-                    </div>
-                    <button type="submit" class="adm-btn adm-btn-primary" style="margin-top:6px;">
-                        💾 Systemeinstellungen speichern
-                    </button>
-                </form>
-            </div>
+                </div>
+            </form>
+        </div>
 
-            <div class="adm-card">
-                <h2>🔑 5. Administrator-Passwort ändern</h2>
-                <p class="adm-desc">
-                    Ändert das Passwort für diesen Administrationsbereich (`admin.php`).
-                </p>
-                <form method="post" action="admin.php">
-                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
-                    <input type="hidden" name="action" value="change_admin_password">
-                    <div class="adm-field">
+        <!-- 6. CHANGE ADMIN PASSWORD -->
+        <div class="adm-card">
+            <h2>🔑 5. Administrator-Passwort ändern</h2>
+            <p class="adm-desc">
+                Ändert das Passwort für diesen Administrationsbereich (`admin.php`). Das Passwort wird als Bcrypt-Hash gespeichert.
+            </p>
+            <form method="post" action="admin.php">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="action" value="change_admin_password">
+                <div class="adm-grid-3" style="align-items:end;">
+                    <div class="adm-field" style="margin-bottom:0;">
                         <label for="curAdmPw">Aktuelles Admin-Passwort</label>
                         <input type="password" id="curAdmPw" name="current_admin_password" class="adm-input" required>
                     </div>
-                    <div class="adm-field">
+                    <div class="adm-field" style="margin-bottom:0;">
                         <label for="newAdmPw1">Neues Admin-Passwort (mind. 8 Zeichen)</label>
                         <input type="password" id="newAdmPw1" name="new_admin_password" class="adm-input" minlength="8" required>
                     </div>
-                    <div class="adm-field">
+                    <div class="adm-field" style="margin-bottom:0;">
                         <label for="newAdmPw2">Neues Admin-Passwort wiederholen</label>
-                        <input type="password" id="newAdmPw2" name="confirm_admin_password" class="adm-input" minlength="8" required>
+                        <div style="display:flex;gap:8px;">
+                            <input type="password" id="newAdmPw2" name="confirm_admin_password" class="adm-input" minlength="8" required>
+                            <button type="submit" class="adm-btn adm-btn-primary" style="white-space:nowrap;">
+                                🔑 Passwort ändern
+                            </button>
+                        </div>
                     </div>
-                    <button type="submit" class="adm-btn adm-btn-primary" style="margin-top:6px;">
-                        🔑 Admin-Passwort aktualisieren
-                    </button>
-                </form>
-            </div>
+                </div>
+            </form>
         </div>
 
     <?php endif; ?>
