@@ -1090,3 +1090,797 @@ function pdfstudio_save_stats_and_report($stats)
 
     @file_put_contents(PDFSTUDIO_STATS_TXT, implode("\r\n", $lines), LOCK_EX);
 }
+
+// ============================================================================
+// ADMIN SETTINGS, LOCAL USERS (NO-DB) & LDAP / GATEKEEPER AUTHENTICATION
+// ============================================================================
+
+define('PDFSTUDIO_ADMIN_SETTINGS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'admin_settings.json');
+define('PDFSTUDIO_GATEKEEPER_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json');
+
+/**
+ * Default settings structure combining config.php defaults + LDAP & Gatekeeper options
+ */
+function pdfstudio_get_default_admin_settings()
+{
+    return array(
+        // Admin panel password hash (empty = initial setup required on first visit to admin.php)
+        'admin_password_hash'   => '',
+        'admin_updated_at'      => '',
+
+        // Application Gatekeeper Mode: 'none' | 'local' | 'ldap' | 'both'
+        'auth_mode'             => 'none',
+        'auth_banner_title'     => 'Anmeldung an der PDF-Werkstatt Pro',
+        'auth_banner_hint'      => 'Bitte melden Sie sich mit Ihrer Benutzerkennung an.',
+
+        // LDAP / Active Directory settings
+        'ldap_host'             => '',
+        'ldap_port'             => 389,
+        'ldap_use_starttls'     => false,
+        'ldap_ignore_cert'      => false,
+        'ldap_timeout'          => 8,
+        'ldap_bind_mode'        => 'direct_upn', // 'direct_upn' | 'search_bind' | 'direct_dn'
+        'ldap_upn_suffix'       => '',           // e.g. @polizei.bwl.de
+        'ldap_netbios_domain'   => '',           // e.g. LKA
+        'ldap_dn_template'      => 'uid={username},ou=users,dc=example,dc=de',
+        'ldap_base_dn'          => '',           // e.g. OU=Mitarbeiter,DC=dienststelle,DC=intern
+        'ldap_bind_dn'          => '',           // Technical reader DN/UPN for search_bind
+        'ldap_bind_password'    => '',           // Technical reader password
+        'ldap_search_filter'    => '(&(objectClass=user)(sAMAccountName={username}))',
+        'ldap_display_attr'     => 'displayName',
+        'ldap_required_group'   => '',           // Optional group DN in memberOf
+
+        // Brute-Force & Security settings (from config.php)
+        'max_login_attempts'    => 8,
+        'login_lockout_seconds' => 300,
+
+        // Mail / SMTP settings (from config.php)
+        'mail_transport'        => 'smtp',
+        'mail_from_address'     => 'noreply@pdf-werkstatt.local',
+        'mail_from_name'        => 'PDF-Werkstatt Pro',
+        'smtp_host'             => '',
+        'smtp_port'             => 587,
+        'smtp_encryption'       => 'tls',
+        'smtp_auth'             => true,
+        'smtp_username'         => '',
+        'smtp_password'         => '',
+        'smtp_timeout'          => 10
+    );
+}
+
+/**
+ * Load merged settings from config.php and storage/admin_settings.json into $GLOBALS['PDFSTUDIO_CONFIG']
+ */
+function pdfstudio_load_admin_settings()
+{
+    $defaults = pdfstudio_get_default_admin_settings();
+    $baseCfg = isset($GLOBALS['PDFSTUDIO_CONFIG']) && is_array($GLOBALS['PDFSTUDIO_CONFIG'])
+        ? $GLOBALS['PDFSTUDIO_CONFIG']
+        : array();
+
+    $merged = array_merge($defaults, $baseCfg);
+
+    if (is_file(PDFSTUDIO_ADMIN_SETTINGS_FILE)) {
+        $raw = @file_get_contents(PDFSTUDIO_ADMIN_SETTINGS_FILE);
+        $saved = $raw ? @json_decode($raw, true) : null;
+        if (is_array($saved)) {
+            foreach ($saved as $k => $v) {
+                $merged[$k] = $v;
+            }
+        }
+    }
+
+    $GLOBALS['PDFSTUDIO_CONFIG'] = $merged;
+    return $merged;
+}
+
+/**
+ * Save admin settings to storage/admin_settings.json and update $GLOBALS['PDFSTUDIO_CONFIG']
+ */
+function pdfstudio_save_admin_settings($newSettings)
+{
+    $current = pdfstudio_load_admin_settings();
+    if (is_array($newSettings)) {
+        foreach ($newSettings as $k => $v) {
+            $current[$k] = $v;
+        }
+    }
+    $current['admin_updated_at'] = date('d.m.Y H:i:s');
+    $GLOBALS['PDFSTUDIO_CONFIG'] = $current;
+
+    $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
+    return @file_put_contents(PDFSTUDIO_ADMIN_SETTINGS_FILE, json_encode($current, $flags), LOCK_EX) !== false;
+}
+
+/**
+ * Load database-free local Gatekeeper users from storage/gatekeeper_users.json
+ */
+function pdfstudio_load_local_users()
+{
+    if (!is_file(PDFSTUDIO_GATEKEEPER_USERS_FILE)) {
+        return array();
+    }
+    $raw = @file_get_contents(PDFSTUDIO_GATEKEEPER_USERS_FILE);
+    $decoded = $raw ? @json_decode($raw, true) : null;
+    if (!is_array($decoded) || !isset($decoded['users']) || !is_array($decoded['users'])) {
+        return array();
+    }
+    return $decoded['users'];
+}
+
+/**
+ * Save local Gatekeeper users to storage/gatekeeper_users.json
+ */
+function pdfstudio_save_local_users($users)
+{
+    $payload = array(
+        'updated_at' => date('d.m.Y H:i:s'),
+        'users'      => array_values($users)
+    );
+    $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
+    return @file_put_contents(PDFSTUDIO_GATEKEEPER_USERS_FILE, json_encode($payload, $flags), LOCK_EX) !== false;
+}
+
+/**
+ * Create or update a local user (password is ALWAYS stored as a Bcrypt/HMAC hash, never plaintext)
+ */
+function pdfstudio_upsert_local_user($username, $displayName, $plainPassword = '', $active = true)
+{
+    $normUser = strtolower(trim((string)$username));
+    if (!preg_match('/^[a-z0-9._@-]{2,64}$/', $normUser)) {
+        return array('ok' => false, 'error' => 'Ungültiger Benutzername (erlaubt: a-z, 0-9, Punkt, Bindestrich, Unterstrich, @; 2–64 Zeichen).');
+    }
+
+    $users = pdfstudio_load_local_users();
+    $foundIdx = -1;
+    for ($i = 0; $i < count($users); $i++) {
+        if (isset($users[$i]['username']) && strtolower($users[$i]['username']) === $normUser) {
+            $foundIdx = $i;
+            break;
+        }
+    }
+
+    if ($foundIdx === -1) {
+        if (strlen((string)$plainPassword) < 6) {
+            return array('ok' => false, 'error' => 'Das Passwort für einen neuen Benutzer muss mindestens 6 Zeichen lang sein.');
+        }
+        $users[] = array(
+            'username'      => $normUser,
+            'display_name'  => trim((string)$displayName) !== '' ? trim((string)$displayName) : $normUser,
+            'password_hash' => pdfstudio_hash_password($plainPassword),
+            'active'        => (bool)$active,
+            'created_at'    => date('d.m.Y H:i'),
+            'last_login'    => '—',
+            'login_count'   => 0
+        );
+    } else {
+        if (trim((string)$displayName) !== '') {
+            $users[$foundIdx]['display_name'] = trim((string)$displayName);
+        }
+        $users[$foundIdx]['active'] = (bool)$active;
+        if ((string)$plainPassword !== '') {
+            if (strlen((string)$plainPassword) < 6) {
+                return array('ok' => false, 'error' => 'Das neue Passwort muss mindestens 6 Zeichen lang sein.');
+            }
+            $users[$foundIdx]['password_hash'] = pdfstudio_hash_password($plainPassword);
+        }
+    }
+
+    if (!pdfstudio_save_local_users($users)) {
+        return array('ok' => false, 'error' => 'Benutzerdatei konnte nicht in storage/ gespeichert werden.');
+    }
+    return array('ok' => true);
+}
+
+/**
+ * Delete a local Gatekeeper user
+ */
+function pdfstudio_delete_local_user($username)
+{
+    $normUser = strtolower(trim((string)$username));
+    $users = pdfstudio_load_local_users();
+    $filtered = array();
+    foreach ($users as $u) {
+        if (isset($u['username']) && strtolower($u['username']) === $normUser) {
+            continue;
+        }
+        $filtered[] = $u;
+    }
+    return pdfstudio_save_local_users($filtered);
+}
+
+/**
+ * Toggle active state of a local Gatekeeper user
+ */
+function pdfstudio_toggle_local_user($username)
+{
+    $normUser = strtolower(trim((string)$username));
+    $users = pdfstudio_load_local_users();
+    for ($i = 0; $i < count($users); $i++) {
+        if (isset($users[$i]['username']) && strtolower($users[$i]['username']) === $normUser) {
+            $users[$i]['active'] = empty($users[$i]['active']);
+            break;
+        }
+    }
+    return pdfstudio_save_local_users($users);
+}
+
+/**
+ * Authenticate a user against local hashed user store
+ */
+function pdfstudio_authenticate_local_user($username, $password)
+{
+    $normUser = strtolower(trim((string)$username));
+    $password = (string)$password;
+    if ($normUser === '' || $password === '') {
+        return array('ok' => false, 'error' => 'Bitte Benutzername und Passwort eingeben.');
+    }
+
+    $users = pdfstudio_load_local_users();
+    for ($i = 0; $i < count($users); $i++) {
+        $u = $users[$i];
+        if (isset($u['username']) && strtolower($u['username']) === $normUser) {
+            if (empty($u['active'])) {
+                return array('ok' => false, 'error' => 'Dieses Benutzerkonto ist aktuell deaktiviert.');
+            }
+            if (isset($u['password_hash']) && pdfstudio_verify_password($password, $u['password_hash'])) {
+                $users[$i]['last_login'] = date('d.m.Y H:i');
+                $users[$i]['login_count'] = (isset($u['login_count']) ? (int)$u['login_count'] : 0) + 1;
+                pdfstudio_save_local_users($users);
+                return array(
+                    'ok' => true,
+                    'user' => array(
+                        'username'     => $u['username'],
+                        'display_name' => isset($u['display_name']) && $u['display_name'] !== '' ? $u['display_name'] : $u['username'],
+                        'auth_source'  => 'Lokal'
+                    )
+                );
+            }
+            return array('ok' => false, 'error' => 'Ungültiger Benutzername oder Passwort.');
+        }
+    }
+    return array('ok' => false, 'error' => 'Ungültiger Benutzername oder Passwort.');
+}
+
+/**
+ * Escape special characters in LDAP search filter values (RFC 4515)
+ */
+function pdfstudio_ldap_escape_filter($str)
+{
+    $str = (string)$str;
+    if (function_exists('ldap_escape')) {
+        return ldap_escape($str, '', LDAP_ESCAPE_FILTER);
+    }
+    return str_replace(
+        array('\\', '*', '(', ')', "\x00"),
+        array('\\5c', '\\2a', '\\28', '\\29', '\\00'),
+        $str
+    );
+}
+
+/**
+ * Authenticate a user via LDAP / Active Directory OR run a step-by-step live diagnostic test
+ */
+function pdfstudio_ldap_authenticate($username, $password, $overrideCfg = null, $testConnectionOnly = false)
+{
+    $cfg = is_array($overrideCfg) ? array_merge(pdfstudio_load_admin_settings(), $overrideCfg) : pdfstudio_load_admin_settings();
+    $steps = array();
+
+    $rawHost = trim((string)(isset($cfg['ldap_host']) ? $cfg['ldap_host'] : ''));
+    $port = max(1, (int)(isset($cfg['ldap_port']) ? $cfg['ldap_port'] : 389));
+    $useStartTls = !empty($cfg['ldap_use_starttls']);
+    $ignoreCert = !empty($cfg['ldap_ignore_cert']);
+    $timeout = max(2, (int)(isset($cfg['ldap_timeout']) ? $cfg['ldap_timeout'] : 8));
+    $bindMode = isset($cfg['ldap_bind_mode']) ? (string)$cfg['ldap_bind_mode'] : 'direct_upn';
+
+    if ($rawHost === '') {
+        return array(
+            'ok'    => false,
+            'error' => 'Kein LDAP-Server (Host/IP) konfiguriert.',
+            'steps' => array(array('status' => 'fail', 'title' => 'Konfiguration', 'detail' => 'Feld "LDAP-Server / Host" ist leer.'))
+        );
+    }
+
+    // Parse host for TCP reachability test
+    $tcpHost = preg_replace('#^ldaps?://#i', '', $rawHost);
+    $tcpHost = preg_replace('#/.*$#', '', $tcpHost);
+    $tcpHost = preg_replace('#:\d+$#', '', $tcpHost);
+    $isLdaps = (stripos($rawHost, 'ldaps://') === 0) || ($port === 636);
+
+    // Step 1: TCP Socket Reachability Check (works even without php-ldap installed)
+    $sockPrefix = $isLdaps ? 'ssl://' : '';
+    $errNo = 0;
+    $errStr = '';
+    $t0 = microtime(true);
+    $ctx = stream_context_create(array(
+        'ssl' => array(
+            'verify_peer'      => !$ignoreCert,
+            'verify_peer_name' => !$ignoreCert,
+            'allow_self_signed'=> $ignoreCert
+        )
+    ));
+    $fp = @stream_socket_client(
+        ($sockPrefix . $tcpHost . ':' . $port),
+        $errNo,
+        $errStr,
+        $timeout,
+        STREAM_CLIENT_CONNECT,
+        $ctx
+    );
+    $latencyMs = round((microtime(true) - $t0) * 1000);
+    if ($fp) {
+        @fclose($fp);
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => '1. Netzwerk- & Port-Erreichbarkeit',
+            'detail' => 'Server ' . $tcpHost . ':' . $port . ($isLdaps ? ' (LDAPS/SSL)' : '') . ' antwortet (' . $latencyMs . ' ms).'
+        );
+    } else {
+        $steps[] = array(
+            'status' => 'fail',
+            'title'  => '1. Netzwerk- & Port-Erreichbarkeit',
+            'detail' => 'Verbindung zu ' . $tcpHost . ':' . $port . ' fehlgeschlagen: ' . ($errStr ? $errStr : ('Fehler #' . $errNo))
+        );
+        return array(
+            'ok'    => false,
+            'error' => 'LDAP-Server ' . $tcpHost . ':' . $port . ' ist über das Netzwerk nicht erreichbar (' . ($errStr ? $errStr : ('Code ' . $errNo)) . ').',
+            'steps' => $steps
+        );
+    }
+
+    // Step 2: Check PHP LDAP extension
+    if (!function_exists('ldap_connect')) {
+        $steps[] = array(
+            'status' => 'fail',
+            'title'  => '2. PHP-LDAP Erweiterung (php-ldap)',
+            'detail' => 'Das PHP-Modul "php-ldap" ist auf diesem Webserver noch nicht aktiviert (apt install php-ldap).'
+        );
+        return array(
+            'ok'    => false,
+            'error' => 'Netzwerkverbindung zu ' . $tcpHost . ':' . $port . ' steht (' . $latencyMs . ' ms), aber das PHP-Modul "php-ldap" ist auf dem Server nicht installiert.',
+            'steps' => $steps
+        );
+    }
+    $steps[] = array(
+        'status' => 'ok',
+        'title'  => '2. PHP-LDAP Erweiterung (php-ldap)',
+        'detail' => 'PHP-Erweiterung "ldap" ist geladen und einsatzbereit.'
+    );
+
+    if ($ignoreCert && defined('LDAP_OPT_X_TLS_REQUIRE_CERT') && defined('LDAP_OPT_X_TLS_NEVER')) {
+        @ldap_set_option(null, LDAP_OPT_X_TLS_REQUIRE_CERT, LDAP_OPT_X_TLS_NEVER);
+    }
+
+    $ldapUri = (stripos($rawHost, 'ldap://') === 0 || stripos($rawHost, 'ldaps://') === 0)
+        ? $rawHost
+        : (($isLdaps ? 'ldaps://' : 'ldap://') . $tcpHost . ':' . $port);
+
+    $conn = @ldap_connect($ldapUri);
+    if (!$conn) {
+        $steps[] = array(
+            'status' => 'fail',
+            'title'  => '3. LDAP-Handle & Protokolloptionen',
+            'detail' => 'ldap_connect("' . $ldapUri . '") schlug fehl.'
+        );
+        return array('ok' => false, 'error' => 'Ungültige LDAP-URI: ' . $ldapUri, 'steps' => $steps);
+    }
+
+    @ldap_set_option($conn, LDAP_OPT_PROTOCOL_VERSION, 3);
+    @ldap_set_option($conn, LDAP_OPT_REFERRALS, 0);
+    if (defined('LDAP_OPT_NETWORK_TIMEOUT')) {
+        @ldap_set_option($conn, LDAP_OPT_NETWORK_TIMEOUT, $timeout);
+    }
+
+    if ($useStartTls && !$isLdaps) {
+        if (!@ldap_start_tls($conn)) {
+            $tlsErr = function_exists('ldap_error') ? @ldap_error($conn) : 'Unbekannter TLS-Fehler';
+            $steps[] = array(
+                'status' => 'fail',
+                'title'  => '3. StartTLS-Verschlüsselung',
+                'detail' => 'StartTLS konnte nicht ausgehandelt werden: ' . $tlsErr
+            );
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'StartTLS-Fehler: ' . $tlsErr, 'steps' => $steps);
+        }
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => '3. StartTLS-Verschlüsselung',
+            'detail' => 'StartTLS erfolgreich ausgehandelt.'
+        );
+    } else {
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => '3. LDAP-Protokoll & Verbindung',
+            'detail' => 'LDAPv3 initialisiert (' . $ldapUri . ').'
+        );
+    }
+
+    $username = trim((string)$username);
+    $password = (string)$password;
+
+    // If connection-only test without user credentials in Direct Bind mode
+    if ($testConnectionOnly && ($username === '' || $password === '') && $bindMode !== 'search_bind') {
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => '4. Bereit für Direct-Bind-Anmeldungen',
+            'detail' => 'Server antwortet. Geben Sie optional unten einen Test-Benutzernamen + Passwort ein, um auch die Anmeldung live zu prüfen.'
+        );
+        @ldap_unbind($conn);
+        return array('ok' => true, 'error' => '', 'steps' => $steps);
+    }
+
+    $userDnToBind = '';
+    $displayName = $username;
+    $userGroups = array();
+
+    if ($bindMode === 'search_bind') {
+        $bindDn = trim((string)(isset($cfg['ldap_bind_dn']) ? $cfg['ldap_bind_dn'] : ''));
+        $bindPw = (string)(isset($cfg['ldap_bind_password']) ? $cfg['ldap_bind_password'] : '');
+        $baseDn = trim((string)(isset($cfg['ldap_base_dn']) ? $cfg['ldap_base_dn'] : ''));
+
+        if ($baseDn === '') {
+            @ldap_unbind($conn);
+            $steps[] = array(
+                'status' => 'fail',
+                'title'  => '4. Verzeichnissuche (Search & Bind)',
+                'detail' => 'Base-DN fehlt für den Modus "Search & Bind".'
+            );
+            return array('ok' => false, 'error' => 'Base-DN fehlt für Search & Bind.', 'steps' => $steps);
+        }
+
+        $searchBindOk = ($bindDn !== '') ? @ldap_bind($conn, $bindDn, $bindPw) : @ldap_bind($conn);
+        if (!$searchBindOk) {
+            $bErr = function_exists('ldap_error') ? @ldap_error($conn) : 'Bind fehlgeschlagen';
+            $steps[] = array(
+                'status' => 'fail',
+                'title'  => '4. Technischer Lese-Bind',
+                'detail' => 'Anmeldung mit Bind-DN "' . ($bindDn !== '' ? $bindDn : 'anonym') . '" fehlgeschlagen: ' . $bErr
+            );
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'Technischer LDAP-Bind fehlgeschlagen: ' . $bErr, 'steps' => $steps);
+        }
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => '4. Technischer Lese-Bind',
+            'detail' => 'Bind erfolgreich (' . ($bindDn !== '' ? $bindDn : 'anonym') . ').'
+        );
+
+        if ($testConnectionOnly && ($username === '' || $password === '')) {
+            @ldap_unbind($conn);
+            return array('ok' => true, 'error' => '', 'steps' => $steps);
+        }
+
+        if ($username === '' || $password === '') {
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'Bitte Benutzername und Passwort eingeben.', 'steps' => $steps);
+        }
+
+        $filterTpl = trim((string)(isset($cfg['ldap_search_filter']) ? $cfg['ldap_search_filter'] : '(&(objectClass=user)(sAMAccountName={username}))'));
+        if ($filterTpl === '') {
+            $filterTpl = '(sAMAccountName={username})';
+        }
+        $safeUser = pdfstudio_ldap_escape_filter($username);
+        $filter = str_replace(array('{username}', '%s'), $safeUser, $filterTpl);
+        $dispAttr = strtolower(trim((string)(isset($cfg['ldap_display_attr']) ? $cfg['ldap_display_attr'] : 'displayName')));
+        $attrs = array('dn', 'cn', 'displayname', 'mail', 'memberof');
+        if ($dispAttr !== '' && !in_array($dispAttr, $attrs, true)) {
+            $attrs[] = $dispAttr;
+        }
+
+        $sr = @ldap_search($conn, $baseDn, $filter, $attrs);
+        if (!$sr) {
+            $sErr = function_exists('ldap_error') ? @ldap_error($conn) : 'Suche fehlgeschlagen';
+            $steps[] = array(
+                'status' => 'fail',
+                'title'  => '5. Benutzersuche in Base-DN',
+                'detail' => 'Suche in "' . $baseDn . '" mit Filter "' . $filter . '" fehlgeschlagen: ' . $sErr
+            );
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'LDAP-Suche fehlgeschlagen: ' . $sErr, 'steps' => $steps);
+        }
+
+        $entries = @ldap_get_entries($conn, $sr);
+        if (!is_array($entries) || empty($entries['count']) || (int)$entries['count'] < 1) {
+            $steps[] = array(
+                'status' => 'fail',
+                'title'  => '5. Benutzersuche in Base-DN',
+                'detail' => 'Kein Eintrag für Filter "' . $filter . '" unter "' . $baseDn . '" gefunden.'
+            );
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'Benutzer "' . $username . '" wurde im LDAP-Verzeichnis nicht gefunden.', 'steps' => $steps);
+        }
+
+        $first = $entries[0];
+        $userDnToBind = isset($first['dn']) ? (string)$first['dn'] : '';
+        if ($dispAttr !== '' && isset($first[$dispAttr][0])) {
+            $displayName = (string)$first[$dispAttr][0];
+        } elseif (isset($first['displayname'][0])) {
+            $displayName = (string)$first['displayname'][0];
+        } elseif (isset($first['cn'][0])) {
+            $displayName = (string)$first['cn'][0];
+        }
+
+        if (isset($first['memberof']) && is_array($first['memberof'])) {
+            $cnt = isset($first['memberof']['count']) ? (int)$first['memberof']['count'] : 0;
+            for ($gi = 0; $gi < $cnt; $gi++) {
+                $userGroups[] = (string)$first['memberof'][$gi];
+            }
+        }
+
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => '5. Benutzersuche in Base-DN',
+            'detail' => 'Gefunden: DN="' . $userDnToBind . '" (' . $displayName . ').'
+        );
+    } elseif ($bindMode === 'direct_dn') {
+        if ($username === '' || $password === '') {
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'Bitte Benutzername und Passwort eingeben.', 'steps' => $steps);
+        }
+        $tpl = trim((string)(isset($cfg['ldap_dn_template']) ? $cfg['ldap_dn_template'] : 'uid={username},ou=users,dc=example,dc=de'));
+        $userDnToBind = str_replace('{username}', $username, $tpl);
+    } else {
+        // direct_upn (Active Directory UPN or NetBIOS domain)
+        if ($username === '' || $password === '') {
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'Bitte Benutzername und Passwort eingeben.', 'steps' => $steps);
+        }
+        $upnSuffix = trim((string)(isset($cfg['ldap_upn_suffix']) ? $cfg['ldap_upn_suffix'] : ''));
+        $netbios = trim((string)(isset($cfg['ldap_netbios_domain']) ? $cfg['ldap_netbios_domain'] : ''));
+
+        if (strpos($username, '@') !== false || strpos($username, '\\') !== false) {
+            $userDnToBind = $username;
+        } elseif ($upnSuffix !== '') {
+            $suffix = (strpos($upnSuffix, '@') === 0) ? $upnSuffix : ('@' . $upnSuffix);
+            $userDnToBind = $username . $suffix;
+        } elseif ($netbios !== '') {
+            $userDnToBind = rtrim($netbios, '\\') . '\\' . $username;
+        } else {
+            $userDnToBind = $username;
+        }
+    }
+
+    // Bind with user credentials
+    $authOk = ($password !== '') && @ldap_bind($conn, $userDnToBind, $password);
+    if (!$authOk) {
+        $uErr = function_exists('ldap_error') ? @ldap_error($conn) : 'Ungültige Anmeldedaten';
+        $steps[] = array(
+            'status' => 'fail',
+            'title'  => 'Benutzer-Authentifizierung (Bind)',
+            'detail' => 'Anmeldung als "' . $userDnToBind . '" abgelehnt: ' . $uErr
+        );
+        @ldap_unbind($conn);
+        return array('ok' => false, 'error' => 'LDAP-Anmeldung fehlgeschlagen (' . $uErr . ').', 'steps' => $steps);
+    }
+
+    $steps[] = array(
+        'status' => 'ok',
+        'title'  => 'Benutzer-Authentifizierung (Bind)',
+        'detail' => 'Passwort für "' . $userDnToBind . '" vom LDAP-Server bestätigt.'
+    );
+
+    // Optional group check
+    $reqGroup = trim((string)(isset($cfg['ldap_required_group']) ? $cfg['ldap_required_group'] : ''));
+    if ($reqGroup !== '') {
+        // If Direct Bind mode was used and base_dn is provided, query memberOf now after binding as user
+        if (empty($userGroups) && !empty($cfg['ldap_base_dn'])) {
+            $safeUser = pdfstudio_ldap_escape_filter($username);
+            $srG = @ldap_search($conn, trim((string)$cfg['ldap_base_dn']), '(|(sAMAccountName=' . $safeUser . ')(userPrincipalName=' . pdfstudio_ldap_escape_filter($userDnToBind) . ')(uid=' . $safeUser . '))', array('memberof', 'displayname', 'cn'));
+            if ($srG) {
+                $entG = @ldap_get_entries($conn, $srG);
+                if (is_array($entG) && !empty($entG['count']) && isset($entG[0]['memberof'])) {
+                    $gCnt = (int)$entG[0]['memberof']['count'];
+                    for ($gi = 0; $gi < $gCnt; $gi++) {
+                        $userGroups[] = (string)$entG[0]['memberof'][$gi];
+                    }
+                }
+            }
+        }
+
+        $groupMatched = false;
+        foreach ($userGroups as $ug) {
+            if (strcasecmp(trim($ug), $reqGroup) === 0 || stripos($ug, $reqGroup) !== false) {
+                $groupMatched = true;
+                break;
+            }
+        }
+        if (!$groupMatched) {
+            $steps[] = array(
+                'status' => 'fail',
+                'title'  => 'Gruppenberechtigung (memberOf)',
+                'detail' => 'Benutzer ist nicht Mitglied der erforderlichen Gruppe "' . $reqGroup . '".'
+            );
+            @ldap_unbind($conn);
+            return array('ok' => false, 'error' => 'Zugriff verweigert: Erforderliche LDAP-Gruppe fehlt.', 'steps' => $steps);
+        }
+        $steps[] = array(
+            'status' => 'ok',
+            'title'  => 'Gruppenberechtigung (memberOf)',
+            'detail' => 'Mitgliedschaft in "' . $reqGroup . '" bestätigt.'
+        );
+    }
+
+    @ldap_unbind($conn);
+    return array(
+        'ok'    => true,
+        'error' => '',
+        'steps' => $steps,
+        'user'  => array(
+            'username'     => $username,
+            'display_name' => $displayName,
+            'auth_source'  => 'LDAP',
+            'dn'           => $userDnToBind,
+            'groups'       => $userGroups
+        )
+    );
+}
+
+/**
+ * Combined Gatekeeper Authentication (checks Local Users and/or LDAP based on auth_mode)
+ */
+function pdfstudio_gatekeeper_authenticate($username, $password)
+{
+    $mode = (string)pdfstudio_config('auth_mode', 'none');
+    $username = trim((string)$username);
+    $password = (string)$password;
+
+    if ($username === '' || $password === '') {
+        return array('ok' => false, 'error' => 'Bitte Benutzername und Passwort eingeben.');
+    }
+
+    if ($mode === 'local') {
+        return pdfstudio_authenticate_local_user($username, $password);
+    }
+
+    if ($mode === 'ldap') {
+        return pdfstudio_ldap_authenticate($username, $password);
+    }
+
+    if ($mode === 'both') {
+        // Check local users first (fast, no network wait), then LDAP
+        $localRes = pdfstudio_authenticate_local_user($username, $password);
+        if (!empty($localRes['ok'])) {
+            return $localRes;
+        }
+        if (trim((string)pdfstudio_config('ldap_host', '')) !== '') {
+            $ldapRes = pdfstudio_ldap_authenticate($username, $password);
+            if (!empty($ldapRes['ok'])) {
+                return $ldapRes;
+            }
+        }
+        return array('ok' => false, 'error' => 'Ungültige Anmeldedaten (weder lokal noch über LDAP bestätigt).');
+    }
+
+    return array('ok' => true, 'user' => array('username' => $username, 'display_name' => $username, 'auth_source' => 'Offen'));
+}
+
+/**
+ * Enforce Gatekeeper Login before allowing access to index.php, hilfe.php, or api.php
+ */
+function pdfstudio_enforce_app_gatekeeper($isApi = false)
+{
+    // Handle logout request
+    if (isset($_GET['gatekeeper_logout'])) {
+        unset($_SESSION['pdfstudio_gatekeeper_user']);
+        if (!$isApi) {
+            $cleanUrl = strtok($_SERVER['REQUEST_URI'], '?');
+            header('Location: ' . ($cleanUrl ? $cleanUrl : 'index.php'));
+            exit;
+        }
+    }
+
+    $mode = (string)pdfstudio_config('auth_mode', 'none');
+    if ($mode === 'none' || $mode === '') {
+        return;
+    }
+
+    // Already authenticated via Gatekeeper or logged in as Admin
+    if (!empty($_SESSION['pdfstudio_gatekeeper_user']) && is_array($_SESSION['pdfstudio_gatekeeper_user'])) {
+        return;
+    }
+    if (!empty($_SESSION['pdfstudio_admin_logged_in'])) {
+        $_SESSION['pdfstudio_gatekeeper_user'] = array(
+            'username'     => 'admin',
+            'display_name' => 'Administrator',
+            'auth_source'  => 'Admin'
+        );
+        return;
+    }
+
+    if ($isApi) {
+        if (!headers_sent()) {
+            if (function_exists('http_response_code')) {
+                http_response_code(401);
+            }
+            header('Content-Type: application/json; charset=UTF-8');
+        }
+        echo json_encode(array('ok' => false, 'error' => 'Nicht angemeldet. Bitte melden Sie sich zuerst an.'));
+        exit;
+    }
+
+    $loginError = '';
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gatekeeper_login_submit'])) {
+        if (!pdfstudio_verify_csrf_token()) {
+            $loginError = 'Ungültiges Sicherheits-Token (CSRF). Bitte laden Sie die Seite neu.';
+        } else {
+            $rl = pdfstudio_check_rate_limit('gatekeeper_login');
+            if (empty($rl['allowed'])) {
+                $loginError = 'Zu viele Fehlversuche. Bitte warten Sie ' . (int)$rl['retry_after'] . ' Sekunden.';
+            } else {
+                $uName = isset($_POST['username']) ? trim((string)$_POST['username']) : '';
+                $uPass = isset($_POST['password']) ? (string)$_POST['password'] : '';
+                $authRes = pdfstudio_gatekeeper_authenticate($uName, $uPass);
+                if (!empty($authRes['ok']) && isset($authRes['user'])) {
+                    pdfstudio_clear_rate_limit('gatekeeper_login');
+                    if (function_exists('session_regenerate_id')) {
+                        @session_regenerate_id(true);
+                    }
+                    $_SESSION['pdfstudio_gatekeeper_user'] = $authRes['user'];
+                    pdfstudio_record_stat('login_success');
+                    $redirectUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : 'index.php';
+                    header('Location: ' . $redirectUri);
+                    exit;
+                } else {
+                    pdfstudio_record_rate_limit_failure('gatekeeper_login');
+                    pdfstudio_record_stat('login_failed');
+                    $loginError = isset($authRes['error']) ? $authRes['error'] : 'Anmeldung fehlgeschlagen.';
+                }
+            }
+        }
+    }
+
+    $modeLabel = 'Lokale Anmeldung';
+    if ($mode === 'ldap') {
+        $modeLabel = 'LDAP / Active Directory Anmeldung';
+    } elseif ($mode === 'both') {
+        $modeLabel = 'LDAP / Active Directory oder lokales Benutzerkonto';
+    }
+
+    $bannerTitle = (string)pdfstudio_config('auth_banner_title', 'Anmeldung an der PDF-Werkstatt Pro');
+    $bannerHint = (string)pdfstudio_config('auth_banner_hint', 'Bitte melden Sie sich mit Ihrer Benutzerkennung an.');
+
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=UTF-8');
+    }
+    echo '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">';
+    echo '<meta name="viewport" content="width=device-width, initial-scale=1.0">';
+    echo '<title>' . htmlspecialchars($bannerTitle, ENT_QUOTES, 'UTF-8') . ' — v' . htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8') . '</title>';
+    echo '<link rel="stylesheet" href="assets/css/desktop.css?v=' . urlencode(PDFSTUDIO_VERSION) . '">';
+    echo '<style>
+        body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; background:#0f131a; color:#f1f5f9; font-family:system-ui,-apple-system,sans-serif; }
+        .gk-card { width:100%; max-width:420px; background:#181e29; border:1px solid #2a3446; border-radius:12px; padding:28px; box-shadow:0 20px 50px rgba(0,0,0,0.45); }
+        .gk-brand { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+        .gk-badge { background:#3b82f6; color:#fff; font-weight:800; font-size:12px; padding:4px 8px; border-radius:6px; }
+        .gk-title { font-size:18px; font-weight:700; margin:0 0 6px; }
+        .gk-sub { font-size:12.5px; color:#94a3b8; margin:0 0 20px; line-height:1.45; }
+        .gk-field { margin-bottom:14px; }
+        .gk-field label { display:block; font-size:12px; font-weight:600; color:#cbd5e1; margin-bottom:5px; }
+        .gk-input { width:100%; height:38px; padding:0 12px; border-radius:7px; border:1px solid #334155; background:#0f131a; color:#f8fafc; font-size:13.5px; box-sizing:border-box; }
+        .gk-input:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,0.25); }
+        .gk-btn { width:100%; height:40px; border:none; border-radius:7px; background:#3b82f6; color:#fff; font-size:13.5px; font-weight:600; cursor:pointer; margin-top:6px; }
+        .gk-btn:hover { background:#2563eb; }
+        .gk-err { background:rgba(239,68,68,0.14); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; padding:10px 12px; border-radius:7px; font-size:12.5px; margin-bottom:16px; }
+        .gk-foot { margin-top:18px; padding-top:14px; border-top:1px solid #263042; display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:#64748b; }
+        .gk-foot a { color:#94a3b8; text-decoration:none; }
+        .gk-foot a:hover { color:#e2e8f0; text-decoration:underline; }
+    </style></head><body>';
+    echo '<div class="gk-card">';
+    echo '<div class="gk-brand"><span class="gk-badge">PDF</span><strong>PDF-Werkstatt Pro v' . htmlspecialchars(PDFSTUDIO_VERSION, ENT_QUOTES, 'UTF-8') . '</strong></div>';
+    echo '<h1 class="gk-title">' . htmlspecialchars($bannerTitle, ENT_QUOTES, 'UTF-8') . '</h1>';
+    echo '<p class="gk-sub">' . htmlspecialchars($bannerHint, ENT_QUOTES, 'UTF-8') . '<br><span style="color:#60a5fa;font-size:11.5px;">Modus: ' . htmlspecialchars($modeLabel, ENT_QUOTES, 'UTF-8') . '</span></p>';
+    if ($loginError !== '') {
+        echo '<div class="gk-err">⚠️ ' . htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+    echo '<form method="post" action="">';
+    echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(pdfstudio_get_csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
+    echo '<input type="hidden" name="gatekeeper_login_submit" value="1">';
+    echo '<div class="gk-field"><label for="gkUser">Benutzername / Kennung</label>';
+    echo '<input type="text" id="gkUser" name="username" class="gk-input" required autofocus autocomplete="username"></div>';
+    echo '<div class="gk-field"><label for="gkPass">Passwort</label>';
+    echo '<input type="password" id="gkPass" name="password" class="gk-input" required autocomplete="current-password"></div>';
+    echo '<button type="submit" class="gk-btn">🔐 Anmelden</button>';
+    echo '</form>';
+    echo '<div class="gk-foot"><span>100 % Lokale Verarbeitung</span><a href="admin.php">⚙️ Adminbereich</a></div>';
+    echo '</div></body></html>';
+    exit;
+}

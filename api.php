@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
+pdfstudio_enforce_app_gatekeeper(true);
 
 $action = isset($_REQUEST['action']) ? (string)$_REQUEST['action'] : 'status';
 

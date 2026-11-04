@@ -4,6 +4,7 @@
  * 100% Offline, kompatibel ab PHP 5.4+
  */
 require_once __DIR__ . '/includes/bootstrap.php';
+pdfstudio_enforce_app_gatekeeper(false);
 pdfstudio_record_stat('help_view');
 $serverInfo = pdfstudio_get_server_info();
 ?><!DOCTYPE html>

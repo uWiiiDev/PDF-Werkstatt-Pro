@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.1.0');
+define('PDFSTUDIO_VERSION', '1.2.0');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }
@@ -322,6 +322,7 @@ function pdfstudio_get_server_info()
 pdfstudio_init_storage();
 require_once __DIR__ . '/account.php';
 pdfstudio_init_account_storage();
+pdfstudio_load_admin_settings();
 if (!is_file(PDFSTUDIO_STATS_TXT)) {
     pdfstudio_save_stats_and_report(pdfstudio_load_stats());
 }

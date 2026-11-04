@@ -42,9 +42,10 @@ if (!is_readable(__DIR__ . '/includes/bootstrap.php')) {
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
+$GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
+pdfstudio_enforce_app_gatekeeper(false);
 pdfstudio_record_stat('pageview');
 $serverInfo = pdfstudio_get_server_info();
-$GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
 ?><!DOCTYPE html>
 <html lang="de">
 <head>
@@ -103,11 +104,18 @@ $GLOBALS['PDFSTUDIO_BOOT_OK'] = true;
         </div>
 
         <div class="titlebar-right">
+            <?php if (!empty($_SESSION['pdfstudio_gatekeeper_user']) && (string)pdfstudio_config('auth_mode', 'none') !== 'none'): ?>
+                <span style="font-size:11.5px;color:#cbd5e1;padding:0 6px;display:inline-flex;align-items:center;gap:5px;">
+                    👤 <?php echo htmlspecialchars((string)$_SESSION['pdfstudio_gatekeeper_user']['display_name'], ENT_QUOTES, 'UTF-8'); ?>
+                    <a href="index.php?gatekeeper_logout=1" title="Abmelden" style="color:#f87171;text-decoration:none;margin-left:3px;font-weight:700;">⎋</a>
+                </span>
+            <?php endif; ?>
             <button type="button" class="qa-btn" data-cmd="toggle-left-dock" title="Linke Seitenleiste ein-/ausblenden">◧</button>
             <button type="button" class="qa-btn" data-cmd="toggle-right-dock" title="Werkzeug-Eigenschaften rechts ein-/ausblenden">◨</button>
             <button type="button" class="qa-btn" data-cmd="toggle-theme" title="Dark / Light Theme wechseln">◐</button>
             <button type="button" class="qa-btn" id="btnFullscreenTitlebar" data-cmd="toggle-fullscreen" title="Vollbild-Modus umschalten — Browserelemente ausblenden (F11)">⛶</button>
             <button type="button" class="qa-btn" data-cmd="open-help" title="Benutzerhandbuch &amp; Funktionshilfe öffnen (F1)">❓</button>
+            <a href="admin.php" class="qa-btn" title="Administrationsbereich öffnen (LDAP, Benutzer &amp; Systemeinstellungen)" style="text-decoration:none;">⚙️</a>
             <button type="button" class="qa-btn" id="btnToggleRibbonDeck" title="Ribbon-Menü ein-/ausklappen">▴</button>
         </div>
     </header>
