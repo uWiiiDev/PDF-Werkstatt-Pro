@@ -107,6 +107,7 @@ $serverInfo = pdfstudio_get_server_info();
             <?php if (!empty($_SESSION['pdfstudio_gatekeeper_user']) && (string)pdfstudio_config('auth_mode', 'none') !== 'none'): ?>
                 <span style="font-size:11.5px;color:#cbd5e1;padding:0 6px;display:inline-flex;align-items:center;gap:5px;">
                     👤 <?php echo htmlspecialchars((string)$_SESSION['pdfstudio_gatekeeper_user']['display_name'], ENT_QUOTES, 'UTF-8'); ?>
+                    <button type="button" class="qa-btn" data-cmd="open-change-password-modal" title="Eigenes Passwort ändern" style="width:22px;height:22px;font-size:11px;padding:0;margin-left:2px;">🔑</button>
                     <a href="index.php?gatekeeper_logout=1" title="Abmelden" style="color:#f87171;text-decoration:none;margin-left:3px;font-weight:700;">⎋</a>
                 </span>
             <?php endif; ?>
@@ -1777,6 +1778,55 @@ $serverInfo = pdfstudio_get_server_info();
             <button type="button" class="tool-btn btn-primary" id="btnInsertQrIntoPdf">
                 📱 QR-Code auf aktueller Seite einfügen
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: CHANGE OWN USER PASSWORD -->
+<div class="modal-backdrop hidden" id="modalChangeUserPassword">
+    <div class="modal-dialog" style="max-width:440px;">
+        <div class="modal-header">
+            <h3>🔑 Eigenes Passwort ändern</h3>
+            <button type="button" class="doc-tab-close" data-close-modal="modalChangeUserPassword">✕</button>
+        </div>
+        <div class="modal-body">
+            <?php
+            $gkCurrentUser = (!empty($_SESSION['pdfstudio_gatekeeper_user']) && is_array($_SESSION['pdfstudio_gatekeeper_user']))
+                ? $_SESSION['pdfstudio_gatekeeper_user']
+                : array('username' => '', 'display_name' => '', 'auth_source' => 'Lokal');
+            $isLdapUser = stripos((string)$gkCurrentUser['auth_source'], 'LDAP') !== false;
+            ?>
+            <?php if ($isLdapUser): ?>
+                <div style="padding:12px 14px;border-radius:8px;background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.35);font-size:12.5px;line-height:1.5;">
+                    ℹ️ <strong>Hinweis für LDAP / Active Directory Konten:</strong><br>
+                    Sie sind über das zentrale Verzeichnis (<strong><?php echo htmlspecialchars((string)$gkCurrentUser['auth_source'], ENT_QUOTES, 'UTF-8'); ?></strong>) angemeldet. Bitte ändern Sie Ihr Passwort direkt über Ihre reguläre Windows-/Domänen-Anmeldung.
+                </div>
+            <?php else: ?>
+                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">
+                    Angemeldet als: <strong><?php echo htmlspecialchars((string)$gkCurrentUser['display_name'], ENT_QUOTES, 'UTF-8'); ?></strong> (<code><?php echo htmlspecialchars((string)$gkCurrentUser['username'], ENT_QUOTES, 'UTF-8'); ?></code>)
+                </div>
+                <div class="form-group">
+                    <label for="userCurPwInput">Aktuelles Passwort *</label>
+                    <input type="password" id="userCurPwInput" class="form-control" placeholder="Ihr bisheriges Passwort" autocomplete="current-password">
+                </div>
+                <div class="form-group">
+                    <label for="userNewPw1Input">Neues Passwort (mind. 6 Zeichen) *</label>
+                    <input type="password" id="userNewPw1Input" class="form-control" placeholder="Neues Passwort eingeben" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="userNewPw2Input">Neues Passwort wiederholen *</label>
+                    <input type="password" id="userNewPw2Input" class="form-control" placeholder="Neues Passwort bestätigen" autocomplete="new-password">
+                </div>
+                <div id="userPwChangeStatus" class="hidden" style="margin-top:10px;padding:10px 12px;border-radius:6px;font-size:12px;"></div>
+            <?php endif; ?>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="tool-btn" data-close-modal="modalChangeUserPassword">Schließen</button>
+            <?php if (!$isLdapUser): ?>
+                <button type="button" class="tool-btn btn-primary" id="btnSubmitUserPwChange">
+                    💾 Passwort speichern
+                </button>
+            <?php endif; ?>
         </div>
     </div>
 </div>

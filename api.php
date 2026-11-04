@@ -219,6 +219,69 @@ switch ($action) {
         ));
         break;
 
+    case 'change_gatekeeper_password':
+        pdfstudio_require_csrf();
+        $rl = pdfstudio_check_rate_limit('gatekeeper_pw_change');
+        if (empty($rl['allowed'])) {
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => 'Zu viele Versuche. Bitte warten Sie ' . (int)$rl['retry_after'] . ' Sekunden.'
+            ), 429);
+        }
+        $gkUser = (!empty($_SESSION['pdfstudio_gatekeeper_user']) && is_array($_SESSION['pdfstudio_gatekeeper_user']))
+            ? $_SESSION['pdfstudio_gatekeeper_user']
+            : null;
+        if (!$gkUser || empty($gkUser['username'])) {
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => 'Sie sind aktuell nicht mit einem Benutzerkonto angemeldet.'
+            ), 401);
+        }
+        $authSource = isset($gkUser['auth_source']) ? (string)$gkUser['auth_source'] : 'Lokal';
+        if (stripos($authSource, 'LDAP') !== false) {
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => 'Ihr Konto wird zentral über LDAP / Active Directory verwaltet. Bitte ändern Sie Ihr Passwort direkt über Ihre Windows-/Domänen-Anmeldung.'
+            ), 400);
+        }
+
+        $curPw  = isset($_POST['current_password']) ? (string)$_POST['current_password'] : '';
+        $newPw1 = isset($_POST['new_password']) ? (string)$_POST['new_password'] : '';
+        $newPw2 = isset($_POST['confirm_password']) ? (string)$_POST['confirm_password'] : '';
+
+        if ($authSource === 'Admin') {
+            $admSettings = pdfstudio_load_admin_settings();
+            if (!pdfstudio_verify_password($curPw, (string)$admSettings['admin_password_hash'])) {
+                pdfstudio_record_rate_limit_failure('gatekeeper_pw_change');
+                pdfstudio_json_response(array('ok' => false, 'error' => 'Das aktuelle Administrator-Passwort ist nicht korrekt.'), 400);
+            }
+            if (strlen($newPw1) < 8) {
+                pdfstudio_json_response(array('ok' => false, 'error' => 'Das neue Administrator-Passwort muss mindestens 8 Zeichen lang sein.'), 400);
+            }
+            if ($newPw1 !== $newPw2) {
+                pdfstudio_json_response(array('ok' => false, 'error' => 'Die neuen Passwörter stimmen nicht überein.'), 400);
+            }
+            pdfstudio_save_admin_settings(array('admin_password_hash' => pdfstudio_hash_password($newPw1)));
+            pdfstudio_clear_rate_limit('gatekeeper_pw_change');
+            pdfstudio_json_response(array('ok' => true, 'message' => 'Ihr Administrator-Passwort wurde erfolgreich geändert.'));
+        }
+
+        $res = pdfstudio_change_local_user_password($gkUser['username'], $curPw, $newPw1, $newPw2);
+        if (!empty($res['ok'])) {
+            pdfstudio_clear_rate_limit('gatekeeper_pw_change');
+            pdfstudio_json_response(array(
+                'ok' => true,
+                'message' => 'Ihr Passwort wurde erfolgreich geändert!'
+            ));
+        } else {
+            pdfstudio_record_rate_limit_failure('gatekeeper_pw_change');
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => isset($res['error']) ? $res['error'] : 'Passwortänderung fehlgeschlagen.'
+            ), 400);
+        }
+        break;
+
     // =========================================================================
     // USER ACCOUNT AUTHENTICATION & PROFILE ENDPOINTS
     // =========================================================================

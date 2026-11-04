@@ -7015,6 +7015,21 @@
             case 'open-qrcode-modal':
                 await openQrCodeModal();
                 break;
+            case 'open-change-password-modal':
+                var curInp = document.getElementById('userCurPwInput');
+                var np1Inp = document.getElementById('userNewPw1Input');
+                var np2Inp = document.getElementById('userNewPw2Input');
+                var stBox = document.getElementById('userPwChangeStatus');
+                if (curInp) curInp.value = '';
+                if (np1Inp) np1Inp.value = '';
+                if (np2Inp) np2Inp.value = '';
+                if (stBox) {
+                    stBox.classList.add('hidden');
+                    stBox.textContent = '';
+                }
+                openModal('modalChangeUserPassword');
+                if (curInp) setTimeout(function () { curInp.focus(); }, 60);
+                break;
         }
     }
 
@@ -8381,6 +8396,71 @@
         var btnInsertQrIntoPdf = document.getElementById('btnInsertQrIntoPdf');
         if (btnInsertQrIntoPdf) {
             btnInsertQrIntoPdf.addEventListener('click', insertQrCodeIntoActivePage);
+        }
+
+        var btnSubmitUserPwChange = document.getElementById('btnSubmitUserPwChange');
+        if (btnSubmitUserPwChange) {
+            btnSubmitUserPwChange.addEventListener('click', async function () {
+                var curInp = document.getElementById('userCurPwInput');
+                var np1Inp = document.getElementById('userNewPw1Input');
+                var np2Inp = document.getElementById('userNewPw2Input');
+                var stBox = document.getElementById('userPwChangeStatus');
+
+                var curPw = curInp ? curInp.value : '';
+                var newPw1 = np1Inp ? np1Inp.value : '';
+                var newPw2 = np2Inp ? np2Inp.value : '';
+
+                function showPwMsg(msg, isOk) {
+                    if (!stBox) return;
+                    stBox.classList.remove('hidden');
+                    stBox.style.background = isOk ? 'rgba(16,185,129,0.14)' : 'rgba(239,68,68,0.14)';
+                    stBox.style.border = isOk ? '1px solid rgba(16,185,129,0.4)' : '1px solid rgba(239,68,68,0.4)';
+                    stBox.style.color = isOk ? '#6ee7b7' : '#fca5a5';
+                    stBox.textContent = msg;
+                }
+
+                if (!curPw || !newPw1 || !newPw2) {
+                    showPwMsg('Bitte füllen Sie alle Passwortfelder vollständig aus.', false);
+                    return;
+                }
+                if (newPw1.length < 6) {
+                    showPwMsg('Das neue Passwort muss mindestens 6 Zeichen lang sein.', false);
+                    return;
+                }
+                if (newPw1 !== newPw2) {
+                    showPwMsg('Das neue Passwort und die Wiederholung stimmen nicht überein.', false);
+                    return;
+                }
+
+                btnSubmitUserPwChange.disabled = true;
+                try {
+                    var fd = new FormData();
+                    fd.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+                    fd.append('current_password', curPw);
+                    fd.append('new_password', newPw1);
+                    fd.append('confirm_password', newPw2);
+
+                    var resp = await fetch('api.php?action=change_gatekeeper_password', {
+                        method: 'POST',
+                        body: fd
+                    });
+                    var data = await resp.json();
+                    if (data && data.ok) {
+                        showPwMsg(data.message || 'Ihr Passwort wurde erfolgreich geändert!', true);
+                        showToast('Passwort erfolgreich geändert!', 'success');
+                        if (curInp) curInp.value = '';
+                        if (np1Inp) np1Inp.value = '';
+                        if (np2Inp) np2Inp.value = '';
+                        setTimeout(function () { closeModal('modalChangeUserPassword'); }, 1200);
+                    } else {
+                        showPwMsg((data && data.error) ? data.error : 'Passwortänderung fehlgeschlagen.', false);
+                    }
+                } catch (err) {
+                    showPwMsg('Verbindungsfehler beim Speichern des Passworts.', false);
+                } finally {
+                    btnSubmitUserPwChange.disabled = false;
+                }
+            });
         }
 
         // Keyboard shortcuts (Desktop feel)

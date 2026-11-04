@@ -1523,6 +1523,54 @@ function pdfstudio_authenticate_local_user($username, $password)
 }
 
 /**
+ * Self-service password change for a local Gatekeeper user (or Admin)
+ */
+function pdfstudio_change_local_user_password($username, $currentPassword, $newPassword, $confirmPassword)
+{
+    $normUser = strtolower(trim((string)$username));
+    $currentPassword = (string)$currentPassword;
+    $newPassword     = (string)$newPassword;
+    $confirmPassword = (string)$confirmPassword;
+
+    if ($normUser === '' || $currentPassword === '' || $newPassword === '') {
+        return array('ok' => false, 'error' => 'Bitte füllen Sie alle Passwortfelder vollständig aus.');
+    }
+    if (strlen($newPassword) < 6) {
+        return array('ok' => false, 'error' => 'Das neue Passwort muss mindestens 6 Zeichen lang sein.');
+    }
+    if ($newPassword !== $confirmPassword) {
+        return array('ok' => false, 'error' => 'Das neue Passwort und die Wiederholung stimmen nicht überein.');
+    }
+    if ($newPassword === $currentPassword) {
+        return array('ok' => false, 'error' => 'Das neue Passwort muss sich vom bisherigen Passwort unterscheiden.');
+    }
+
+    $users = pdfstudio_load_local_users();
+    for ($i = 0; $i < count($users); $i++) {
+        $u = $users[$i];
+        if (isset($u['username']) && strtolower($u['username']) === $normUser) {
+            if (empty($u['active'])) {
+                return array('ok' => false, 'error' => 'Dieses Benutzerkonto ist aktuell deaktiviert.');
+            }
+            if (!isset($u['password_hash']) || !pdfstudio_verify_password($currentPassword, $u['password_hash'])) {
+                return array('ok' => false, 'error' => 'Das eingegebene aktuelle Passwort ist nicht korrekt.');
+            }
+            $users[$i]['password_hash']       = pdfstudio_hash_password($newPassword);
+            $users[$i]['password_changed_at'] = date('d.m.Y H:i');
+            if (!pdfstudio_save_local_users($users)) {
+                return array('ok' => false, 'error' => 'Das neue Passwort konnte nicht gespeichert werden.');
+            }
+            if (function_exists('pdfstudio_record_stat')) {
+                pdfstudio_record_stat('password_reset');
+            }
+            return array('ok' => true);
+        }
+    }
+
+    return array('ok' => false, 'error' => 'Lokales Benutzerkonto "' . $normUser . '" wurde nicht gefunden (LDAP-Passwörter werden zentral verwaltet).');
+}
+
+/**
  * Escape special characters in LDAP search filter values (RFC 4515)
  */
 function pdfstudio_ldap_escape_filter($str)
@@ -1979,7 +2027,34 @@ function pdfstudio_enforce_app_gatekeeper($isApi = false)
     }
 
     $loginError = '';
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gatekeeper_login_submit'])) {
+    $loginSuccess = '';
+    $showPwChangeBox = false;
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gatekeeper_change_pw_submit'])) {
+        $showPwChangeBox = true;
+        if (!pdfstudio_verify_csrf_token()) {
+            $loginError = 'Ungültiges Sicherheits-Token (CSRF). Bitte laden Sie die Seite neu.';
+        } else {
+            $rl = pdfstudio_check_rate_limit('gatekeeper_login');
+            if (empty($rl['allowed'])) {
+                $loginError = 'Zu viele Fehlversuche. Bitte warten Sie ' . (int)$rl['retry_after'] . ' Sekunden.';
+            } else {
+                $uName  = isset($_POST['cp_username']) ? trim((string)$_POST['cp_username']) : '';
+                $curPw  = isset($_POST['cp_current_password']) ? (string)$_POST['cp_current_password'] : '';
+                $newPw1 = isset($_POST['cp_new_password']) ? (string)$_POST['cp_new_password'] : '';
+                $newPw2 = isset($_POST['cp_confirm_password']) ? (string)$_POST['cp_confirm_password'] : '';
+                $cpRes  = pdfstudio_change_local_user_password($uName, $curPw, $newPw1, $newPw2);
+                if (!empty($cpRes['ok'])) {
+                    pdfstudio_clear_rate_limit('gatekeeper_login');
+                    $loginSuccess = 'Ihr Passwort wurde erfolgreich geändert! Sie können sich jetzt mit Ihrem neuen Passwort anmelden.';
+                    $showPwChangeBox = false;
+                } else {
+                    pdfstudio_record_rate_limit_failure('gatekeeper_login');
+                    $loginError = isset($cpRes['error']) ? $cpRes['error'] : 'Passwortänderung fehlgeschlagen.';
+                }
+            }
+        }
+    } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gatekeeper_login_submit'])) {
         if (!pdfstudio_verify_csrf_token()) {
             $loginError = 'Ungültiges Sicherheits-Token (CSRF). Bitte laden Sie die Seite neu.';
         } else {
@@ -2039,7 +2114,10 @@ function pdfstudio_enforce_app_gatekeeper($isApi = false)
         .gk-input:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,0.25); }
         .gk-btn { width:100%; height:40px; border:none; border-radius:7px; background:#3b82f6; color:#fff; font-size:13.5px; font-weight:600; cursor:pointer; margin-top:6px; }
         .gk-btn:hover { background:#2563eb; }
+        .gk-btn-sec { width:100%; height:36px; border:1px solid #334155; border-radius:7px; background:#121721; color:#cbd5e1; font-size:12.5px; font-weight:600; cursor:pointer; margin-top:10px; }
+        .gk-btn-sec:hover { background:#1e293b; color:#fff; }
         .gk-err { background:rgba(239,68,68,0.14); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; padding:10px 12px; border-radius:7px; font-size:12.5px; margin-bottom:16px; }
+        .gk-ok { background:rgba(16,185,129,0.14); border:1px solid rgba(16,185,129,0.4); color:#6ee7b7; padding:10px 12px; border-radius:7px; font-size:12.5px; margin-bottom:16px; }
         .gk-foot { margin-top:18px; padding-top:14px; border-top:1px solid #263042; display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:#64748b; }
         .gk-foot a { color:#94a3b8; text-decoration:none; }
         .gk-foot a:hover { color:#e2e8f0; text-decoration:underline; }
@@ -2051,6 +2129,10 @@ function pdfstudio_enforce_app_gatekeeper($isApi = false)
     if ($loginError !== '') {
         echo '<div class="gk-err">⚠️ ' . htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8') . '</div>';
     }
+    if ($loginSuccess !== '') {
+        echo '<div class="gk-ok">✔ ' . htmlspecialchars($loginSuccess, ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+    echo '<div id="gkLoginBox" style="display:' . ($showPwChangeBox ? 'none' : 'block') . ';">';
     echo '<form method="post" action="">';
     echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(pdfstudio_get_csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
     echo '<input type="hidden" name="gatekeeper_login_submit" value="1">';
@@ -2060,6 +2142,29 @@ function pdfstudio_enforce_app_gatekeeper($isApi = false)
     echo '<input type="password" id="gkPass" name="password" class="gk-input" required autocomplete="current-password"></div>';
     echo '<button type="submit" class="gk-btn">🔐 Anmelden</button>';
     echo '</form>';
+    if ($mode === 'local' || $mode === 'both') {
+        echo '<button type="button" class="gk-btn-sec" onclick="document.getElementById(\'gkLoginBox\').style.display=\'none\';document.getElementById(\'gkPwBox\').style.display=\'block\';">🔑 Eigenes Passwort ändern</button>';
+    }
+    echo '</div>';
+
+    if ($mode === 'local' || $mode === 'both') {
+        echo '<div id="gkPwBox" style="display:' . ($showPwChangeBox ? 'block' : 'none') . ';">';
+        echo '<form method="post" action="">';
+        echo '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(pdfstudio_get_csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
+        echo '<input type="hidden" name="gatekeeper_change_pw_submit" value="1">';
+        echo '<div class="gk-field"><label for="cpUser">Benutzername</label>';
+        echo '<input type="text" id="cpUser" name="cp_username" class="gk-input" required autocomplete="username"></div>';
+        echo '<div class="gk-field"><label for="cpCurPass">Aktuelles Passwort</label>';
+        echo '<input type="password" id="cpCurPass" name="cp_current_password" class="gk-input" required autocomplete="current-password"></div>';
+        echo '<div class="gk-field"><label for="cpNewPass1">Neues Passwort (mind. 6 Zeichen)</label>';
+        echo '<input type="password" id="cpNewPass1" name="cp_new_password" class="gk-input" minlength="6" required autocomplete="new-password"></div>';
+        echo '<div class="gk-field"><label for="cpNewPass2">Neues Passwort wiederholen</label>';
+        echo '<input type="password" id="cpNewPass2" name="cp_confirm_password" class="gk-input" minlength="6" required autocomplete="new-password"></div>';
+        echo '<button type="submit" class="gk-btn">💾 Neues Passwort speichern</button>';
+        echo '<button type="button" class="gk-btn-sec" onclick="document.getElementById(\'gkPwBox\').style.display=\'none\';document.getElementById(\'gkLoginBox\').style.display=\'block\';">← Zurück zur Anmeldung</button>';
+        echo '</form>';
+        echo '</div>';
+    }
     echo '<div class="gk-foot"><span>100 % Lokale Verarbeitung</span><a href="admin.php">⚙️ Adminbereich</a></div>';
     echo '</div></body></html>';
     exit;
