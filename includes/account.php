@@ -2825,9 +2825,14 @@ function pdfstudio_copy_update_tree($srcDir, $dstDir, $relPrefix = '', &$copiedC
         $srcPath = $srcDir . DIRECTORY_SEPARATOR . $item;
         $dstPath = $dstDir . DIRECTORY_SEPARATOR . $item;
         if (is_dir($srcPath)) {
+            if (!is_dir($dstPath)) {
+                @mkdir($dstPath, 0755, true);
+            }
+            @chmod($dstPath, 0755);
             pdfstudio_copy_update_tree($srcPath, $dstPath, $relPath, $copiedCount);
         } else {
             if (@copy($srcPath, $dstPath)) {
+                @chmod($dstPath, 0644);
                 $copiedCount++;
             }
         }

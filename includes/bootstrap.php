@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.4.2');
+define('PDFSTUDIO_VERSION', '1.4.3');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }
@@ -236,7 +236,22 @@ function pdfstudio_config($key, $default = null)
 function pdfstudio_init_storage()
 {
     if (!is_dir(PDFSTUDIO_STORAGE)) {
-        @mkdir(PDFSTUDIO_STORAGE, 0755, true);
+        @mkdir(PDFSTUDIO_STORAGE, 0775, true);
+    }
+
+    // Self-heal if an index.html file was accidentally copied into the application root directory
+    $rootIndexHtml = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . 'index.html';
+    if (is_file($rootIndexHtml)) {
+        @unlink($rootIndexHtml);
+    }
+
+    // Ensure root and PHP entrypoints have world-readable permissions (0755/0644) for Apache/Nginx
+    @chmod(PDFSTUDIO_ROOT, 0755);
+    foreach (array('index.php', 'admin.php', 'api.php', 'hilfe.php', 'diagnose.php', 'config.php', '.htaccess') as $rootFile) {
+        $rfPath = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . $rootFile;
+        if (is_file($rfPath)) {
+            @chmod($rfPath, 0644);
+        }
     }
 
     // Deny direct HTTP access to storage/ without using 'Options -Indexes' (which triggers HTTP 500 if AllowOverride Options is off)

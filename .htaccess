@@ -1,2 +1,5 @@
-# PDF-Werkstatt Pro v1.0 - Apache Configuration (Compatible with Apache 2.2 & 2.4 without AllowOverride Options/Limit 500 errors)
-# Note: config.php and includes/ are protected directly in PHP via PDFSTUDIO_INIT check.
+# PDF-Werkstatt Pro - Apache Configuration (Compatible with Apache 2.2 & 2.4 without AllowOverride Options/Limit 500 errors)
+# Ensure index.php is always preferred as DirectoryIndex over any index.html
+<IfModule mod_dir.c>
+    DirectoryIndex index.php index.html
+</IfModule>
