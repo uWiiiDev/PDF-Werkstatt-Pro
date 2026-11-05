@@ -1712,8 +1712,11 @@ function pdfstudio_load_admin_settings()
                     $cStripped = pdfstudio_storage_strip_guard($cRaw);
                     $cArr = $cStripped ? @json_decode($cStripped, true) : null;
                     if (is_array($cArr) && !empty($cArr['admin_password_hash'])) {
+                        $merged['admin_password_hash'] = $cArr['admin_password_hash'];
                         foreach ($cArr as $ck => $cv) {
-                            $merged[$ck] = $cv;
+                            if (!isset($merged[$ck]) || $merged[$ck] === '') {
+                                $merged[$ck] = $cv;
+                            }
                         }
                         break;
                     }

@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.4.1');
+define('PDFSTUDIO_VERSION', '1.4.2');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }
@@ -96,7 +96,7 @@ if (!function_exists('json_decode')) {
             }
             return $out;
         };
-        $parseVal = function () use ($json, $len, &$pos, $assoc, &$parseVal, $skipWs, $parseStr) {
+        $parseVal = function () use ($json, $len, &$pos, $assoc, &$parseVal, &$skipWs, &$parseStr) {
             $skipWs();
             if ($pos >= $len) return null;
             $ch = $json[$pos];
