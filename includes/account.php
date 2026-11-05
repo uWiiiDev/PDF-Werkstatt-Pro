@@ -17,6 +17,8 @@ define('PDFSTUDIO_STATS_JSON', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'nutzun
 define('PDFSTUDIO_STATS_TXT', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'nutzungsstatistik.txt.php');
 define('PDFSTUDIO_MAIL_LOG_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'mail_outbox.log.php');
 define('PDFSTUDIO_SECRET_KEY_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . '.secret_key.php');
+define('PDFSTUDIO_ADMIN_SETTINGS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'admin_settings.json.php');
+define('PDFSTUDIO_GATEKEEPER_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json.php');
 
 /**
  * PHP-exit guard header prepended to all files in storage/ so direct HTTP requests on Nginx/Apache/IIS return 403 Forbidden
@@ -27,48 +29,44 @@ function pdfstudio_storage_guard_header()
 }
 
 /**
- * Check if a PHP-guarded storage file (or its legacy unguarded counterpart) exists
+ * Resolve persistent fallback storage path in /var/tmp or sys_get_temp_dir()
+ * Used automatically if the primary storage/ directory is owned by root and not writable by the webserver user (www-data)
  */
-function pdfstudio_storage_exists($path)
+function pdfstudio_storage_fallback_path($path)
 {
-    if (is_file($path)) {
-        return true;
+    $baseName = basename((string)$path);
+    $instHash = substr(md5(defined('PDFSTUDIO_ROOT') ? PDFSTUDIO_ROOT : __DIR__), 0, 12);
+    $candidates = array('/var/tmp', @sys_get_temp_dir());
+    foreach ($candidates as $baseDir) {
+        $baseDir = rtrim((string)$baseDir, '/\\');
+        if ($baseDir !== '' && @is_dir($baseDir) && @is_writable($baseDir)) {
+            $dir = $baseDir . DIRECTORY_SEPARATOR . 'pdfstudio_storage_' . $instHash;
+            if (!@is_dir($dir)) {
+                @mkdir($dir, 0700, true);
+            }
+            if (@is_dir($dir) && @is_writable($dir)) {
+                return $dir . DIRECTORY_SEPARATOR . $baseName;
+            }
+        }
     }
-    $legacy = preg_replace('/\.php$/', '', (string)$path);
-    if ($legacy !== $path && is_file($legacy)) {
-        return true;
-    }
-    return false;
+    return '';
 }
 
 /**
- * Read a PHP-guarded storage file (automatically migrates and deletes any legacy .json/.txt/.log file)
+ * Strip PHP-exit guard line from raw file content
  */
-function pdfstudio_storage_read($path)
+function pdfstudio_storage_strip_guard($raw)
 {
-    $legacy = preg_replace('/\.php$/', '', (string)$path);
-    if (!is_file($path) && $legacy !== $path && is_file($legacy)) {
-        $legacyRaw = @file_get_contents($legacy);
-        if ($legacyRaw !== false) {
-            pdfstudio_storage_write($path, $legacyRaw, false);
-            @unlink($legacy);
-            return $legacyRaw;
-        }
-    }
-    if (!is_file($path)) {
+    if (!is_string($raw)) {
         return false;
     }
-    if ($legacy !== $path && is_file($legacy)) {
-        @unlink($legacy);
-    }
-    $raw = @file_get_contents($path);
-    if ($raw === false) {
-        return false;
+    if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) {
+        $raw = substr($raw, 3);
     }
     if (strncmp($raw, '<?php', 5) === 0) {
         $nlPos = strpos($raw, "\n");
         if ($nlPos !== false) {
-            return substr($raw, $nlPos + 1);
+            return trim(substr($raw, $nlPos + 1), "\r\n");
         }
         return '';
     }
@@ -76,26 +74,209 @@ function pdfstudio_storage_read($path)
 }
 
 /**
- * Write a PHP-guarded storage file (and remove any legacy unguarded file)
+ * Check if a PHP-guarded storage file (or its legacy / fallback counterpart) exists
+ */
+function pdfstudio_storage_exists($path)
+{
+    if (is_file($path) && is_readable($path)) {
+        return true;
+    }
+    $legacy = preg_replace('/\.php$/', '', (string)$path);
+    if ($legacy !== $path && is_file($legacy) && is_readable($legacy)) {
+        return true;
+    }
+    $fb = pdfstudio_storage_fallback_path($path);
+    if ($fb !== '' && is_file($fb) && is_readable($fb)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Read a PHP-guarded storage file (supports primary storage/, legacy .json migration, and fallback directory)
+ */
+function pdfstudio_storage_read($path)
+{
+    @clearstatcache(true, (string)$path);
+    $legacy = preg_replace('/\.php$/', '', (string)$path);
+    $fb = pdfstudio_storage_fallback_path($path);
+    if ($fb !== '') {
+        @clearstatcache(true, $fb);
+    }
+
+    // 1. If a fallback file exists and is newer than (or replaces an unwritable) primary file, prefer it
+    if ($fb !== '' && is_file($fb) && is_readable($fb)) {
+        $useFallback = false;
+        if (!is_file($path) || !is_readable($path)) {
+            $useFallback = true;
+        } else {
+            $fbMtime = (int)@filemtime($fb);
+            $pMtime  = (int)@filemtime($path);
+            if ($fbMtime >= $pMtime) {
+                $useFallback = true;
+            }
+        }
+        if ($useFallback) {
+            $fbRaw = @file_get_contents($fb);
+            if ($fbRaw !== false && strlen(trim($fbRaw)) > 0) {
+                return pdfstudio_storage_strip_guard($fbRaw);
+            }
+        }
+    }
+
+    // 2. Migrate legacy unguarded file (.json / .txt / .log) if primary .php file does not exist yet
+    if (!is_file($path) && $legacy !== $path && is_file($legacy) && is_readable($legacy)) {
+        $legacyRaw = @file_get_contents($legacy);
+        if ($legacyRaw !== false) {
+            $cleanLegacy = pdfstudio_storage_strip_guard($legacyRaw);
+            if (pdfstudio_storage_write($path, $cleanLegacy, false)) {
+                if (is_file($path) && @filesize($path) > 0) {
+                    @unlink($legacy);
+                }
+            }
+            return $cleanLegacy;
+        }
+    }
+
+    // 3. Read primary PHP-guarded file
+    if (is_file($path) && is_readable($path)) {
+        $raw = @file_get_contents($path);
+        if ($raw !== false) {
+            $stripped = pdfstudio_storage_strip_guard($raw);
+            if ($stripped !== '' || $legacy === $path || !is_file($legacy)) {
+                if ($legacy !== $path && is_file($legacy) && strlen($stripped) > 2) {
+                    @unlink($legacy);
+                }
+                return $stripped;
+            }
+        }
+    }
+
+    // 4. Last-resort fallback to legacy file if primary could not be read
+    if ($legacy !== $path && is_file($legacy) && is_readable($legacy)) {
+        $legacyRaw = @file_get_contents($legacy);
+        if ($legacyRaw !== false) {
+            return pdfstudio_storage_strip_guard($legacyRaw);
+        }
+    }
+
+    // 5. Last-resort fallback to temp storage directory
+    if ($fb !== '' && is_file($fb) && is_readable($fb)) {
+        $fbRaw = @file_get_contents($fb);
+        if ($fbRaw !== false) {
+            return pdfstudio_storage_strip_guard($fbRaw);
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Helper to write content to a specific file path (with atomic rename, unlink recovery, and LOCK_EX fallback)
+ */
+function pdfstudio_storage_write_single($targetPath, $fullPayload, $rawAppendContent, $append = false)
+{
+    $dir = dirname($targetPath);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    if (is_dir($dir) && !is_writable($dir)) {
+        @chmod($dir, 0775);
+    }
+
+    if ($append && is_file($targetPath)) {
+        if (!is_writable($targetPath)) {
+            @chmod($targetPath, 0664);
+        }
+        $res = @file_put_contents($targetPath, (string)$rawAppendContent, FILE_APPEND | LOCK_EX);
+        if ($res === false) {
+            $res = @file_put_contents($targetPath, (string)$rawAppendContent, FILE_APPEND);
+        }
+        @clearstatcache(true, $targetPath);
+        return $res !== false;
+    }
+
+    // Atomic write via temp file in same directory (also replaces root-owned 0600/0644 files if directory is writable!)
+    $tmpFile = $targetPath . '.tmp.' . uniqid(mt_rand(), true);
+    $written = @file_put_contents($tmpFile, $fullPayload, LOCK_EX);
+    if ($written === false) {
+        $written = @file_put_contents($tmpFile, $fullPayload);
+    }
+    if ($written !== false && is_file($tmpFile) && @filesize($tmpFile) > 0) {
+        @chmod($tmpFile, 0660);
+        if (@rename($tmpFile, $targetPath)) {
+            @clearstatcache(true, $targetPath);
+            return true;
+        }
+        @unlink($targetPath);
+        if (@rename($tmpFile, $targetPath)) {
+            @clearstatcache(true, $targetPath);
+            return true;
+        }
+        @unlink($tmpFile);
+    } else {
+        @unlink($tmpFile);
+    }
+
+    // Direct write fallback (if directory is not writable for creating .tmp, but target file itself exists and is writable)
+    if (is_file($targetPath) && !is_writable($targetPath)) {
+        @chmod($targetPath, 0660);
+        if (!is_writable($targetPath)) {
+            @unlink($targetPath);
+        }
+    }
+    $res = @file_put_contents($targetPath, $fullPayload, LOCK_EX);
+    if ($res === false) {
+        $res = @file_put_contents($targetPath, $fullPayload);
+    }
+    if ($res !== false && is_file($targetPath) && @filesize($targetPath) > 0) {
+        @chmod($targetPath, 0660);
+        @clearstatcache(true, $targetPath);
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Write a PHP-guarded storage file (with automatic fallback if storage/ is not writable by webserver user)
  */
 function pdfstudio_storage_write($path, $content, $append = false)
 {
-    $legacy = preg_replace('/\.php$/', '', (string)$path);
-    if ($legacy !== $path && is_file($legacy)) {
-        @unlink($legacy);
-    }
     $guard = pdfstudio_storage_guard_header();
-    if ($append) {
-        if (!is_file($path)) {
-            $res = @file_put_contents($path, $guard . (string)$content, LOCK_EX);
-        } else {
-            $res = @file_put_contents($path, (string)$content, FILE_APPEND | LOCK_EX);
+    $fullPayload = $guard . (string)$content;
+    $legacy = preg_replace('/\.php$/', '', (string)$path);
+    $fb = pdfstudio_storage_fallback_path($path);
+
+    // 1. Try writing to primary path in storage/
+    $okPrimary = pdfstudio_storage_write_single($path, $fullPayload, $content, $append);
+    if ($okPrimary) {
+        if ($legacy !== $path && is_file($legacy)) {
+            @unlink($legacy);
         }
-    } else {
-        $res = @file_put_contents($path, $guard . (string)$content, LOCK_EX);
+        if ($fb !== '' && is_file($fb)) {
+            @unlink($fb);
+        }
+        return true;
     }
-    @chmod($path, 0600);
-    return $res !== false;
+
+    // 2. If primary .php file could not be created because storage/ dir is 0755, but legacy file exists and is writable
+    if ($legacy !== $path && is_file($legacy) && is_writable($legacy)) {
+        $okLegacy = pdfstudio_storage_write_single($legacy, (string)$content, $content, $append);
+        if ($okLegacy) {
+            return true;
+        }
+    }
+
+    // 3. Automatic persistent fallback in /var/tmp or sys_get_temp_dir() when storage/ is owned by root (0755)
+    if ($fb !== '') {
+        $okFb = pdfstudio_storage_write_single($fb, $fullPayload, $content, $append);
+        if ($okFb) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -1433,9 +1614,6 @@ function pdfstudio_save_stats_and_report($stats)
 // ADMIN SETTINGS, LOCAL USERS (NO-DB) & LDAP / GATEKEEPER AUTHENTICATION
 // ============================================================================
 
-define('PDFSTUDIO_ADMIN_SETTINGS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'admin_settings.json.php');
-define('PDFSTUDIO_GATEKEEPER_USERS_FILE', PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json.php');
-
 /**
  * Default settings structure combining config.php defaults + LDAP & Gatekeeper options
  */
@@ -1500,9 +1678,9 @@ function pdfstudio_get_default_admin_settings()
 function pdfstudio_load_admin_settings()
 {
     $defaults = pdfstudio_get_default_admin_settings();
-    $baseCfg = isset($GLOBALS['PDFSTUDIO_CONFIG']) && is_array($GLOBALS['PDFSTUDIO_CONFIG'])
-        ? $GLOBALS['PDFSTUDIO_CONFIG']
-        : array();
+    $baseCfg = isset($GLOBALS['PDFSTUDIO_BASE_CONFIG']) && is_array($GLOBALS['PDFSTUDIO_BASE_CONFIG'])
+        ? $GLOBALS['PDFSTUDIO_BASE_CONFIG']
+        : (isset($GLOBALS['PDFSTUDIO_CONFIG']) && is_array($GLOBALS['PDFSTUDIO_CONFIG']) ? $GLOBALS['PDFSTUDIO_CONFIG'] : array());
 
     $merged = array_merge($defaults, $baseCfg);
 
@@ -1517,6 +1695,28 @@ function pdfstudio_load_admin_settings()
             foreach (array('ldap_bind_password', 'smtp_password', 'github_token') as $secKey) {
                 if (!empty($saved[$secKey]) && strpos((string)$saved[$secKey], 'ENCv1:') !== 0) {
                     $needsEncryptMigration = true;
+                }
+            }
+        }
+    }
+
+    // If admin_password_hash is still empty, check all candidate files (fallback & legacy) so a stale empty file never hides a saved hash
+    if (empty($merged['admin_password_hash'])) {
+        $legacyFile = preg_replace('/\.php$/', '', (string)PDFSTUDIO_ADMIN_SETTINGS_FILE);
+        $fbFile     = pdfstudio_storage_fallback_path(PDFSTUDIO_ADMIN_SETTINGS_FILE);
+        $candidates = array($fbFile, PDFSTUDIO_ADMIN_SETTINGS_FILE, $legacyFile);
+        foreach ($candidates as $cand) {
+            if ($cand !== '' && is_file($cand) && is_readable($cand)) {
+                $cRaw = @file_get_contents($cand);
+                if ($cRaw !== false) {
+                    $cStripped = pdfstudio_storage_strip_guard($cRaw);
+                    $cArr = $cStripped ? @json_decode($cStripped, true) : null;
+                    if (is_array($cArr) && !empty($cArr['admin_password_hash'])) {
+                        foreach ($cArr as $ck => $cv) {
+                            $merged[$ck] = $cv;
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -1551,13 +1751,17 @@ function pdfstudio_load_admin_settings()
 function pdfstudio_save_admin_settings($newSettings)
 {
     $current = pdfstudio_load_admin_settings();
+    $prevHash = isset($current['admin_password_hash']) ? (string)$current['admin_password_hash'] : '';
     if (is_array($newSettings)) {
         foreach ($newSettings as $k => $v) {
             $current[$k] = $v;
         }
     }
+    // Never clobber an existing admin_password_hash unless explicitly changed
+    if ($prevHash !== '' && (!is_array($newSettings) || !array_key_exists('admin_password_hash', $newSettings) || trim((string)$newSettings['admin_password_hash']) === '')) {
+        $current['admin_password_hash'] = $prevHash;
+    }
     $current['admin_updated_at'] = date('d.m.Y H:i:s');
-    $GLOBALS['PDFSTUDIO_CONFIG'] = $current;
 
     $toStore = $current;
     foreach (array('ldap_bind_password', 'smtp_password', 'github_token') as $secKey) {
@@ -1567,7 +1771,28 @@ function pdfstudio_save_admin_settings($newSettings)
     }
 
     $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
-    return pdfstudio_storage_write(PDFSTUDIO_ADMIN_SETTINGS_FILE, json_encode($toStore, $flags));
+    $jsonPayload = json_encode($toStore, $flags);
+    if (!is_string($jsonPayload) || strlen($jsonPayload) < 10) {
+        return false;
+    }
+
+    $written = pdfstudio_storage_write(PDFSTUDIO_ADMIN_SETTINGS_FILE, $jsonPayload);
+    if (!$written) {
+        return false;
+    }
+
+    // Verify by reading back from disk
+    $verifyRaw = pdfstudio_storage_read(PDFSTUDIO_ADMIN_SETTINGS_FILE);
+    $verifyArr = $verifyRaw ? @json_decode($verifyRaw, true) : null;
+    if (!is_array($verifyArr)) {
+        return false;
+    }
+    if (!empty($current['admin_password_hash']) && empty($verifyArr['admin_password_hash'])) {
+        return false;
+    }
+
+    $GLOBALS['PDFSTUDIO_CONFIG'] = $current;
+    return true;
 }
 
 /**

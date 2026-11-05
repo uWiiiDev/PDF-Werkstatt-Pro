@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.4.0');
+define('PDFSTUDIO_VERSION', '1.4.1');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }
@@ -49,6 +49,121 @@ if (!function_exists('json_encode')) {
             return $isList ? '[' . implode(',', $items) . ']' : '{' . implode(',', $items) . '}';
         }
         return 'null';
+    }
+}
+
+if (!function_exists('json_decode')) {
+    function json_decode($json, $assoc = false)
+    {
+        $json = trim((string)$json);
+        if ($json === '' || $json === 'null') return null;
+        if ($json === 'true') return true;
+        if ($json === 'false') return false;
+        if (is_numeric($json)) return (strpos($json, '.') !== false) ? (float)$json : (int)$json;
+        if ($json[0] === '"' && substr($json, -1) === '"') {
+            return stripcslashes(substr($json, 1, -1));
+        }
+        // Safe token-based parser for flat/nested JSON objects & arrays
+        $len = strlen($json);
+        $pos = 0;
+        $parseVal = null;
+        $skipWs = function () use ($json, $len, &$pos) {
+            while ($pos < $len && ($json[$pos] === ' ' || $json[$pos] === "\t" || $json[$pos] === "\r" || $json[$pos] === "\n")) {
+                $pos++;
+            }
+        };
+        $parseStr = function () use ($json, $len, &$pos) {
+            if ($pos >= $len || $json[$pos] !== '"') return '';
+            $pos++;
+            $out = '';
+            while ($pos < $len) {
+                $ch = $json[$pos++];
+                if ($ch === '"') return $out;
+                if ($ch === '\\' && $pos < $len) {
+                    $esc = $json[$pos++];
+                    if ($esc === 'n') $out .= "\n";
+                    elseif ($esc === 'r') $out .= "\r";
+                    elseif ($esc === 't') $out .= "\t";
+                    elseif ($esc === '"' || $esc === '\\' || $esc === '/') $out .= $esc;
+                    elseif ($esc === 'u' && ($pos + 4) <= $len) {
+                        $hex = substr($json, $pos, 4);
+                        $pos += 4;
+                        $out .= html_entity_decode('&#x' . $hex . ';', ENT_NOQUOTES, 'UTF-8');
+                    } else $out .= $esc;
+                } else {
+                    $out .= $ch;
+                }
+            }
+            return $out;
+        };
+        $parseVal = function () use ($json, $len, &$pos, $assoc, &$parseVal, $skipWs, $parseStr) {
+            $skipWs();
+            if ($pos >= $len) return null;
+            $ch = $json[$pos];
+            if ($ch === '"') return $parseStr();
+            if ($ch === '{') {
+                $pos++;
+                $res = array();
+                $skipWs();
+                if ($pos < $len && $json[$pos] === '}') {
+                    $pos++;
+                    return $assoc ? $res : (object)$res;
+                }
+                while ($pos < $len) {
+                    $skipWs();
+                    $key = $parseStr();
+                    $skipWs();
+                    if ($pos < $len && $json[$pos] === ':') $pos++;
+                    $val = $parseVal();
+                    $res[$key] = $val;
+                    $skipWs();
+                    if ($pos < $len && $json[$pos] === ',') {
+                        $pos++;
+                        continue;
+                    }
+                    if ($pos < $len && $json[$pos] === '}') {
+                        $pos++;
+                        break;
+                    }
+                    break;
+                }
+                return $assoc ? $res : (object)$res;
+            }
+            if ($ch === '[') {
+                $pos++;
+                $res = array();
+                $skipWs();
+                if ($pos < $len && $json[$pos] === ']') {
+                    $pos++;
+                    return $res;
+                }
+                while ($pos < $len) {
+                    $res[] = $parseVal();
+                    $skipWs();
+                    if ($pos < $len && $json[$pos] === ',') {
+                        $pos++;
+                        continue;
+                    }
+                    if ($pos < $len && $json[$pos] === ']') {
+                        $pos++;
+                        break;
+                    }
+                    break;
+                }
+                return $res;
+            }
+            $start = $pos;
+            while ($pos < $len && strpos(",]} \t\r\n", $json[$pos]) === false) {
+                $pos++;
+            }
+            $lit = substr($json, $start, $pos - $start);
+            if ($lit === 'true') return true;
+            if ($lit === 'false') return false;
+            if ($lit === 'null') return null;
+            if (is_numeric($lit)) return (strpos($lit, '.') !== false) ? (float)$lit : (int)$lit;
+            return $lit;
+        };
+        return $parseVal();
     }
 }
 
@@ -95,10 +210,12 @@ if (!headers_sent()) {
 }
 
 $GLOBALS['PDFSTUDIO_CONFIG'] = array();
+$GLOBALS['PDFSTUDIO_BASE_CONFIG'] = array();
 if (is_file(PDFSTUDIO_CONFIG_FILE)) {
     $loadedCfg = include PDFSTUDIO_CONFIG_FILE;
     if (is_array($loadedCfg)) {
         $GLOBALS['PDFSTUDIO_CONFIG'] = $loadedCfg;
+        $GLOBALS['PDFSTUDIO_BASE_CONFIG'] = $loadedCfg;
     }
 }
 

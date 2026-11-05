@@ -40,15 +40,20 @@ if (!$hasAdminPassword && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST[
             $flashError = 'Die beiden eingegebenen Passwörter stimmen nicht überein.';
         } else {
             $hash = pdfstudio_hash_password($pw1);
-            pdfstudio_save_admin_settings(array('admin_password_hash' => $hash));
+            $savedOk = pdfstudio_save_admin_settings(array('admin_password_hash' => $hash));
             $settings = pdfstudio_load_admin_settings();
-            $hasAdminPassword = true;
-            if (function_exists('session_regenerate_id')) {
-                @session_regenerate_id(true);
+            $hasAdminPassword = !empty($settings['admin_password_hash']);
+            if ($savedOk && $hasAdminPassword) {
+                if (function_exists('session_regenerate_id')) {
+                    @session_regenerate_id(true);
+                }
+                $_SESSION['pdfstudio_admin_logged_in'] = true;
+                $isAdminLoggedIn = true;
+                $flashSuccess = 'Admin-Passwort wurde sicher (Bcrypt-Hash) gespeichert. Willkommen im Administrationsbereich!';
+            } else {
+                $hasAdminPassword = false;
+                $flashError = 'Das Admin-Passwort konnte nicht dauerhaft auf dem Server gespeichert werden. Bitte prüfen Sie die Schreibrechte des Webserver-Benutzers (z. B. www-data) für den Ordner storage/.';
             }
-            $_SESSION['pdfstudio_admin_logged_in'] = true;
-            $isAdminLoggedIn = true;
-            $flashSuccess = 'Admin-Passwort wurde sicher (Bcrypt-Hash) gespeichert. Willkommen im Administrationsbereich!';
         }
     }
 }
@@ -221,16 +226,22 @@ if ($isAdminLoggedIn && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['a
             $curPw = isset($_POST['current_admin_password']) ? (string)$_POST['current_admin_password'] : '';
             $newPw1 = isset($_POST['new_admin_password']) ? (string)$_POST['new_admin_password'] : '';
             $newPw2 = isset($_POST['confirm_admin_password']) ? (string)$_POST['confirm_admin_password'] : '';
-            if (!pdfstudio_verify_password($curPw, $settings['admin_password_hash'])) {
+            if (!empty($settings['admin_password_hash']) && !pdfstudio_verify_password($curPw, $settings['admin_password_hash'])) {
                 $flashError = 'Das aktuelle Admin-Passwort ist nicht korrekt.';
             } elseif (strlen($newPw1) < 8) {
                 $flashError = 'Das neue Admin-Passwort muss mindestens 8 Zeichen lang sein.';
             } elseif ($newPw1 !== $newPw2) {
                 $flashError = 'Die neuen Passwörter stimmen nicht überein.';
             } else {
-                pdfstudio_save_admin_settings(array('admin_password_hash' => pdfstudio_hash_password($newPw1)));
+                $newHash = pdfstudio_hash_password($newPw1);
+                $savedOk = pdfstudio_save_admin_settings(array('admin_password_hash' => $newHash));
                 $settings = pdfstudio_load_admin_settings();
-                $flashSuccess = 'Das Administrator-Passwort wurde erfolgreich geändert (Bcrypt-Hash aktualisiert).';
+                $hasAdminPassword = !empty($settings['admin_password_hash']);
+                if ($savedOk && $hasAdminPassword && pdfstudio_verify_password($newPw1, $settings['admin_password_hash'])) {
+                    $flashSuccess = 'Das Administrator-Passwort wurde erfolgreich geändert (Bcrypt-Hash aktualisiert).';
+                } else {
+                    $flashError = 'Das neue Administrator-Passwort konnte nicht dauerhaft gespeichert werden. Bitte prüfen Sie die Schreibrechte für den Ordner storage/.';
+                }
             }
         } elseif ($act === 'reset_usage_stats') {
             @unlink(PDFSTUDIO_STATS_JSON);

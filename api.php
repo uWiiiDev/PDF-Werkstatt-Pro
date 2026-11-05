@@ -261,7 +261,9 @@ switch ($action) {
             if ($newPw1 !== $newPw2) {
                 pdfstudio_json_response(array('ok' => false, 'error' => 'Die neuen Passwörter stimmen nicht überein.'), 400);
             }
-            pdfstudio_save_admin_settings(array('admin_password_hash' => pdfstudio_hash_password($newPw1)));
+            if (!pdfstudio_save_admin_settings(array('admin_password_hash' => pdfstudio_hash_password($newPw1)))) {
+                pdfstudio_json_response(array('ok' => false, 'error' => 'Das neue Administrator-Passwort konnte nicht gespeichert werden (Schreibrechte in storage/ prüfen).'), 500);
+            }
             pdfstudio_clear_rate_limit('gatekeeper_pw_change');
             pdfstudio_json_response(array('ok' => true, 'message' => 'Ihr Administrator-Passwort wurde erfolgreich geändert.'));
         }
