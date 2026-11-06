@@ -2986,6 +2986,7 @@
         var pagesMissingTabsS = 0;
         var totalAnnotsCount = 0;
         var untaggedAnnotsCount = 0;
+        var linkedUrisLower = {};
 
         for (var pIdx = 0; pIdx < pdfPages.length; pIdx++) {
             var pNode = pdfPages[pIdx].node;
@@ -3007,6 +3008,19 @@
                     var hasAnnotStructParent = Boolean(aDict.get(PDFLib.PDFName.of('StructParent')));
                     if (!hasAnnotContents || !hasAnnotStructParent) {
                         untaggedAnnotsCount++;
+                    }
+                    if (aSub === '/Link') {
+                        var actObj = aDict.lookup ? aDict.lookup(PDFLib.PDFName.of('A')) : null;
+                        if (actObj && typeof actObj.get === 'function') {
+                            var uVal = actObj.get(PDFLib.PDFName.of('URI'));
+                            if (uVal) {
+                                var rawU = String(uVal).replace(/^[(\s]+|[)\s]+$/g, '').toLowerCase();
+                                if (rawU) {
+                                    linkedUrisLower[rawU] = true;
+                                    linkedUrisLower[rawU.replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '')] = true;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3202,6 +3216,18 @@
         var headingLevelsFound = {};
         var figureCount = 0;
         var figuresMissingAltCount = 0;
+        var emptyStructElemsCount = 0;
+        var nonStandardStructTypesCount = 0;
+        var standardStructSet = {
+            '/Document': 1, '/Part': 1, '/Art': 1, '/Sect': 1, '/Div': 1,
+            '/BlockQuote': 1, '/Caption': 1, '/TOC': 1, '/TOCI': 1, '/Index': 1, '/NonStruct': 1, '/Private': 1,
+            '/H': 1, '/H1': 1, '/H2': 1, '/H3': 1, '/H4': 1, '/H5': 1, '/H6': 1,
+            '/P': 1, '/L': 1, '/LI': 1, '/Lbl': 1, '/LBody': 1,
+            '/Table': 1, '/TR': 1, '/TH': 1, '/TD': 1, '/THead': 1, '/TBody': 1, '/TFoot': 1,
+            '/Span': 1, '/Quote': 1, '/Note': 1, '/Reference': 1, '/BibEntry': 1, '/Code': 1,
+            '/Link': 1, '/Annot': 1, '/Ruby': 1, '/RB': 1, '/RT': 1, '/RP': 1, '/Warichu': 1, '/WT': 1, '/WP': 1,
+            '/Figure': 1, '/Formula': 1, '/Form': 1
+        };
 
         for (var objIdx = 0; objIdx < indirectObjects.length; objIdx++) {
             var iObj = indirectObjects[objIdx][1];
@@ -3215,6 +3241,18 @@
             if (tName === '/StructElem' || (structS && !sName && iObj.get(PDFLib.PDFName.of('P')))) {
                 if (structS === '/Document') hasDocumentRootElem = true;
                 if (structS === '/Sect') hasSectElem = true;
+                if (structS && !standardStructSet[structS]) {
+                    nonStandardStructTypesCount++;
+                }
+                var kVal = iObj.lookup ? iObj.lookup(PDFLib.PDFName.of('K')) : iObj.get(PDFLib.PDFName.of('K'));
+                var hasAltOrActual = Boolean(iObj.get(PDFLib.PDFName.of('Alt')) || iObj.get(PDFLib.PDFName.of('ActualText')));
+                if (!hasAltOrActual) {
+                    if (!kVal) {
+                        emptyStructElemsCount++;
+                    } else if (typeof kVal.size === 'function' && kVal.size() === 0) {
+                        emptyStructElemsCount++;
+                    }
+                }
                 if (/^\/H[1-6]$/.test(structS)) {
                     var hLvl = parseInt(structS.charAt(2), 10);
                     headingLevelsFound[hLvl] = (headingLevelsFound[hLvl] || 0) + 1;
@@ -3301,19 +3339,38 @@
         var headingsPass = hasH1 && !skippedHeadingLevel;
 
         // ---------------------------------------------------------------------
-        // 7. Searchable Text per Page (check via PDF.js — WCAG 1.4.5)
+        // 7. Searchable Text & Unlinked Emails/URLs per Page (check via PDF.js — WCAG 1.4.5 & PAC Quality)
         // ---------------------------------------------------------------------
         var pdfJsDoc = await loadPdfJsDocument(doc.bytes);
         var pagesToScan = quickMode ? Math.min(pdfJsDoc.numPages, 15) : pdfJsDoc.numPages;
         var pagesWithText = 0;
         var totalChars = 0;
+        var unlinkedEmailsAndUrlsCount = 0;
+        var detectedEmailsAndUrlsTotal = 0;
+        var emailOrUrlPattern = /\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}|https?:\/\/[^\s<>()"']+|www\.[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}[^\s<>()"']*)/g;
+
         for (var p = 1; p <= pagesToScan; p++) {
             var page = await pdfJsDoc.getPage(p);
             var tc = await page.getTextContent();
-            var pageText = tc.items.map(function (it) { return it.str; }).join('').trim();
+            var pageText = tc.items.map(function (it) { return it.str; }).join(' ').trim();
             if (pageText.length > 0) {
                 pagesWithText++;
                 totalChars += pageText.length;
+                var mArr = pageText.match(emailOrUrlPattern);
+                if (mArr) {
+                    for (var mi = 0; mi < mArr.length; mi++) {
+                        var tok = mArr[mi].replace(/[.,;:!?)\]]+$/, '');
+                        if (tok.length < 5) continue;
+                        detectedEmailsAndUrlsTotal++;
+                        var normTok = tok.toLowerCase().replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+                        var fullMailto = 'mailto:' + normTok;
+                        var fullHttp = 'http://' + normTok;
+                        var fullHttps = 'https://' + normTok;
+                        if (!linkedUrisLower[normTok] && !linkedUrisLower[fullMailto] && !linkedUrisLower[fullHttp] && !linkedUrisLower[fullHttps]) {
+                            unlinkedEmailsAndUrlsCount++;
+                        }
+                    }
+                }
             }
         }
         var hasSearchableText = pagesWithText > 0 && totalChars > 0;
@@ -3325,6 +3382,10 @@
         // Outlines & Navigation (WCAG 2.4.1 & 2.4.5)
         var hasOutlines = Boolean(catalog.get(PDFLib.PDFName.of('Outlines')));
         var navigationPass = hasOutlines && hasSectElem;
+
+        // PAC Quality checks
+        var qualityStructurePass = hasStructTree && emptyStructElemsCount === 0 && nonStandardStructTypesCount === 0 && !standardTypesRemappedInRoleMap;
+        var qualityLinksAndOutlinesPass = unlinkedEmailsAndUrlsCount === 0 && hasOutlines && headingsPass;
 
         // Security (PDF/UA 26-001)
         var isEncryptedLocked = rawStr.indexOf('/Encrypt') !== -1;
@@ -3472,13 +3533,44 @@
                 detail: navigationPass
                     ? 'Lesezeichen-Baum (/Outlines) und semantische <Sect>-Abschnittsgliederung vorhanden.'
                     : 'Fehlt: ' + (!hasOutlines ? 'Keine Lesezeichen (/Outlines) vorhanden. ' : '') + (!hasSectElem ? 'Keine <Sect>-Abschnittsstruktur vorhanden.' : '')
+            },
+            // === TEIL 3: PAC 2026 — Quality (Best Practices & E-Mail/URL-Verlinkung) ===
+            {
+                id: 'quality_structure',
+                category: 'Quality',
+                title: '13. [Quality • Struktur] Keine leeren Struktur-Tags & direkte PDF-Standard-Rollen ohne RoleMap-Umwege',
+                standard: 'PAC 2026 Quality • PDF Association Best Practice (Empty Tags & RoleMap)',
+                passed: qualityStructurePass,
+                status: qualityStructurePass ? 'pass' : 'fail',
+                detail: qualityStructurePass
+                    ? '0 leere Struktur-Tags und 100 % native PDF-Standard-Tags (/H1, /H2, /P, /Sect, /Link, /Figure).'
+                    : (emptyStructElemsCount > 0 ? emptyStructElemsCount + ' leere(s) Struktur-Tag(s) ohne Inhalt. ' : '') +
+                      (nonStandardStructTypesCount > 0 ? nonStandardStructTypesCount + ' Nicht-Standard-Tag(s) gefunden. ' : '') +
+                      (standardTypesRemappedInRoleMap ? 'Standard-Tags in /RoleMap umdefiniert.' : '')
+            },
+            {
+                id: 'quality_links_bookmarks',
+                category: 'Quality',
+                title: '14. [Quality • Verlinkung & Navigation] Alle E-Mail-Adressen & Web-URLs aktiv verlinkt (<Link> + /URI) & Lesezeichen-Sync',
+                standard: 'PAC 2026 Quality • PDF/UA Best Practice (Active Links & Bookmarks)',
+                passed: qualityLinksAndOutlinesPass,
+                status: qualityLinksAndOutlinesPass ? 'pass' : 'fail',
+                detail: qualityLinksAndOutlinesPass
+                    ? (detectedEmailsAndUrlsTotal > 0
+                        ? 'Alle ' + detectedEmailsAndUrlsTotal + ' erkannten E-Mail-Adressen/URLs im Text sind aktiv verlinkt (<Link> + /OBJR) und Lesezeichen sind synchron.'
+                        : 'Keine unverlinkten E-Mail-Adressen/URLs im Text gefunden; Lesezeichen und Überschriften sind synchron.')
+                    : (unlinkedEmailsAndUrlsCount > 0 ? unlinkedEmailsAndUrlsCount + ' E-Mail-Adresse(n) oder Web-URL(s) im Text sind noch nicht als klickbarer Link (/Subtype /Link) verknüpft. ' : '') +
+                      (!hasOutlines ? 'Lesezeichen (/Outlines) fehlen. ' : '') +
+                      (!headingsPass ? 'Überschriftenhierarchie unvollständig.' : '')
             }
         ];
 
         var pdfUaChecks = checks.filter(function (c) { return c.category === 'PDF/UA'; });
         var wcagChecks = checks.filter(function (c) { return c.category === 'WCAG'; });
+        var qualityChecks = checks.filter(function (c) { return c.category === 'Quality'; });
         var pdfUaPassed = pdfUaChecks.filter(function (c) { return c.passed; }).length;
         var wcagPassed = wcagChecks.filter(function (c) { return c.passed; }).length;
+        var qualityPassed = qualityChecks.filter(function (c) { return c.passed; }).length;
 
         var passedCount = checks.filter(function (c) { return c.passed; }).length;
         var score = Math.round((passedCount / checks.length) * 100);
@@ -3495,6 +3587,8 @@
             pdfUaTotal: pdfUaChecks.length,
             wcagPassed: wcagPassed,
             wcagTotal: wcagChecks.length,
+            qualityPassed: qualityPassed,
+            qualityTotal: qualityChecks.length,
             checks: checks
         };
     }
@@ -3545,6 +3639,7 @@
         var scorePill = document.getElementById('a11yScorePill');
         var pdfUaBadge = document.getElementById('a11yPdfUaBadge');
         var wcagBadge = document.getElementById('a11yWcagBadge');
+        var qualityBadge = document.getElementById('a11yQualityBadge');
         var sumTitle = document.getElementById('a11ySummaryTitle');
         var sumSub = document.getElementById('a11ySummarySub');
         var sumBanner = document.getElementById('a11ySummaryBanner');
@@ -3567,8 +3662,9 @@
             }
             if (pdfUaBadge) pdfUaBadge.textContent = 'PDF/UA: …';
             if (wcagBadge) wcagBadge.textContent = 'WCAG: …';
+            if (qualityBadge) qualityBadge.textContent = 'Quality: …';
             if (sumTitle) {
-                sumTitle.textContent = '🔍 Prüfe PDF-Struktur, Content-Streams, Schriften & WCAG 2.1/2.2 analog PAC 2026…';
+                sumTitle.textContent = '🔍 Prüfe PDF/UA-1, WCAG 2.1/2.2 & Quality (inkl. E-Mail/URL-Links) analog PAC 2026…';
             }
             if (sumSub) {
                 sumSub.textContent = 'Analysiere Dokument: ' + doc.name + ' (' + doc.pageCount + ' Seiten)…';
@@ -3599,7 +3695,7 @@
             sideBadge.style.color = report.score === 100 ? '#10b981' : (report.score >= 60 ? '#f59e0b' : '#ef4444');
         }
 
-        // Update PAC 2026 PDF/UA & WCAG Sub-Badges
+        // Update PAC 2026 PDF/UA, WCAG & Quality Sub-Badges
         if (pdfUaBadge) {
             var uaOk = report.pdfUaPassed === report.pdfUaTotal;
             pdfUaBadge.textContent = (uaOk ? '✔ ' : '✕ ') + 'PDF/UA: ' + report.pdfUaPassed + '/' + report.pdfUaTotal;
@@ -3611,6 +3707,12 @@
             wcagBadge.textContent = (wcagOk ? '✔ ' : '✕ ') + 'WCAG: ' + report.wcagPassed + '/' + report.wcagTotal;
             wcagBadge.style.color = wcagOk ? '#10b981' : '#ef4444';
             wcagBadge.style.borderColor = wcagOk ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)';
+        }
+        if (qualityBadge) {
+            var qualOk = report.qualityPassed === report.qualityTotal;
+            qualityBadge.textContent = (qualOk ? '✔ ' : '✕ ') + 'Quality: ' + report.qualityPassed + '/' + report.qualityTotal;
+            qualityBadge.style.color = qualOk ? '#10b981' : '#ef4444';
+            qualityBadge.style.borderColor = qualOk ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)';
         }
 
         // Pre-fill Remediation Inputs
@@ -3644,6 +3746,11 @@
                         listContainer.appendChild(createA11ySectionDividerElement(
                             '🌐 Reiter 2: PAC 2026 — WCAG 2.1 / 2.2 & BITV 2.0 Konformität',
                             report.wcagPassed + ' von ' + report.wcagTotal + ' bestanden'
+                        ));
+                    } else if (lastCat === 'Quality') {
+                        listContainer.appendChild(createA11ySectionDividerElement(
+                            '✨ Reiter 3: PAC 2026 — Quality (Best Practices, E-Mail/URL-Links & Tag-Hygiene)',
+                            report.qualityPassed + ' von ' + report.qualityTotal + ' bestanden'
                         ));
                     }
                 }
@@ -3682,6 +3789,11 @@
                             '🌐 Reiter 2: PAC 2026 — WCAG 2.1 / 2.2 & BITV 2.0 Konformität',
                             report.wcagPassed + ' von ' + report.wcagTotal + ' bestanden'
                         ));
+                    } else if (prevCat === 'Quality') {
+                        listContainer.appendChild(createA11ySectionDividerElement(
+                            '✨ Reiter 3: PAC 2026 — Quality (Best Practices, E-Mail/URL-Links & Tag-Hygiene)',
+                            report.qualityPassed + ' von ' + report.qualityTotal + ' bestanden'
+                        ));
                     }
                 }
                 listContainer.appendChild(createA11yCheckRowElement(chk));
@@ -3694,19 +3806,20 @@
         if (report.score === 100) {
             scorePill.style.background = 'rgba(16, 185, 129, 0.18)';
             scorePill.style.color = '#10b981';
-            sumTitle.textContent = '✔ PDF/UA-1 & WCAG 2.1/2.2 vollständig konform (' + report.passedCount + '/' + report.totalChecks + ' Prüfpunkte)';
+            sumTitle.textContent = '✔ PDF/UA-1, WCAG 2.1/2.2 & Quality vollständig konform (' + report.passedCount + '/' + report.totalChecks + ' Prüfpunkte)';
         } else if (report.score >= 60) {
             scorePill.style.background = 'rgba(245, 158, 11, 0.18)';
             scorePill.style.color = '#f59e0b';
-            sumTitle.textContent = '⚠ Abweichungen bei PDF/UA oder WCAG gefunden (' + report.passedCount + '/' + report.totalChecks + ' erfüllt)';
+            sumTitle.textContent = '⚠ Abweichungen bei PDF/UA, WCAG oder Quality gefunden (' + report.passedCount + '/' + report.totalChecks + ' erfüllt)';
         } else {
             scorePill.style.background = 'rgba(239, 68, 68, 0.18)';
             scorePill.style.color = '#ef4444';
-            sumTitle.textContent = '✕ Nicht barrierefrei — PDF/UA- & WCAG-Anforderungen nicht erfüllt (' + report.passedCount + '/' + report.totalChecks + ')';
+            sumTitle.textContent = '✕ Nicht barrierefrei — PDF/UA-, WCAG- & Quality-Anforderungen nicht erfüllt (' + report.passedCount + '/' + report.totalChecks + ')';
         }
         sumSub.textContent =
             'Geprüft: ' + report.docName + ' (' + report.pageCount + ' S.) • ' +
             'PDF/UA: ' + report.pdfUaPassed + '/' + report.pdfUaTotal + ' • WCAG: ' + report.wcagPassed + '/' + report.wcagTotal + ' • ' +
+            'Quality: ' + report.qualityPassed + '/' + report.qualityTotal + ' • ' +
             'Stand: ' + timeStr + ' Uhr (' + rawElapsedMs + ' ms)';
 
         if (openModalWindow) {
@@ -3716,7 +3829,7 @@
                     sumBanner.style.borderColor = 'var(--border-strong)';
                 }, 900);
             }
-            setStatus('PAC-2026-Prüfung abgeschlossen: ' + report.score + ' % (PDF/UA ' + report.pdfUaPassed + '/' + report.pdfUaTotal + ', WCAG ' + report.wcagPassed + '/' + report.wcagTotal + ').');
+            setStatus('PAC-2026-Prüfung abgeschlossen: ' + report.score + ' % (PDF/UA ' + report.pdfUaPassed + '/' + report.pdfUaTotal + ', WCAG ' + report.wcagPassed + '/' + report.wcagTotal + ', Quality ' + report.qualityPassed + '/' + report.qualityTotal + ').');
             showToast('Prüfung abgeschlossen (' + timeStr + ' Uhr): ' + report.score + ' % (' + report.passedCount + '/' + report.totalChecks + ' Kriterien erfüllt)', report.score === 100 ? 'success' : 'info');
         }
         return report;
@@ -4576,6 +4689,65 @@
         // 3. Embed TrueType Fonts (/FontFile2 + /Widths + /ToUnicode) for all unembedded Fonts
         var sharedFontInfo = await embedPdfUaFontsIntoDocument(pdfDoc);
 
+        // 3b. Extract Email Addresses, Web URLs & Page Headings via PDF.js for PAC Quality Auto-Linking & Semantic Bookmarks
+        var autoLinkItemsByPage = {};
+        var extractedPageHeadings = {};
+        try {
+            var linkScanJsDoc = await loadPdfJsDocument(doc.bytes);
+            var linkTokenRegex = /\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}|https?:\/\/[^\s<>()"']+|www\.[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}[^\s<>()"']*)/g;
+            for (var lp = 1; lp <= linkScanJsDoc.numPages; lp++) {
+                var jsPage = await linkScanJsDoc.getPage(lp);
+                var jsTc = await jsPage.getTextContent();
+                var pLinks = [];
+                var firstLineCandidate = '';
+                for (var ti = 0; ti < jsTc.items.length; ti++) {
+                    var tItem = jsTc.items[ti];
+                    var tStr = (tItem && tItem.str) ? String(tItem.str) : '';
+                    if (!tStr) continue;
+                    if (!firstLineCandidate && tStr.trim().length >= 3) {
+                        firstLineCandidate = tStr.trim().slice(0, 80);
+                    }
+                    linkTokenRegex.lastIndex = 0;
+                    var mToken;
+                    while ((mToken = linkTokenRegex.exec(tStr)) !== null) {
+                        var rawMatch = mToken[0].replace(/[.,;:!?)\]]+$/, '');
+                        if (rawMatch.length < 5) continue;
+                        var isEmail = rawMatch.indexOf('@') !== -1 && !/^https?:\/\//i.test(rawMatch);
+                        var targetUri = isEmail
+                            ? ('mailto:' + rawMatch.replace(/^mailto:/i, ''))
+                            : (/^https?:\/\//i.test(rawMatch) ? rawMatch : ('https://' + rawMatch));
+                        var tr = tItem.transform || [10, 0, 0, 10, 72, 700];
+                        var fontH = Math.max(8, Math.abs(tr[3]) || Math.abs(tr[0]) || (tItem.height || 11));
+                        var itemW = Math.max(24, tItem.width || (tStr.length * fontH * 0.52));
+                        var startRatio = tStr.length > 0 ? (mToken.index / tStr.length) : 0;
+                        var lenRatio = tStr.length > 0 ? Math.min(1, rawMatch.length / tStr.length) : 1;
+                        var x1 = tr[4] + itemW * startRatio;
+                        var y1 = tr[5] - fontH * 0.22;
+                        var x2 = x1 + Math.max(20, itemW * lenRatio);
+                        var y2 = tr[5] + fontH * 0.92;
+                        pLinks.push({
+                            rawText: rawMatch,
+                            uri: targetUri,
+                            normKey: rawMatch.toLowerCase().replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, ''),
+                            isEmail: isEmail,
+                            rect: [
+                                Math.round(x1 * 100) / 100,
+                                Math.round(y1 * 100) / 100,
+                                Math.round(x2 * 100) / 100,
+                                Math.round(y2 * 100) / 100
+                            ]
+                        });
+                    }
+                }
+                autoLinkItemsByPage[lp - 1] = pLinks;
+                if (firstLineCandidate) {
+                    extractedPageHeadings[lp - 1] = firstLineCandidate;
+                }
+            }
+        } catch (linkScanErr) {
+            console.warn('Auto-link text scan warning:', linkScanErr);
+        }
+
         // 4. Tag all Page Content Streams (<H1>/<H2>/<P> MCID, non-text -> /Artifact) & build /StructTreeRoot + /ParentTree
         var structTreeRootRef = context.nextRef();
         var docElemRef = context.nextRef();
@@ -4733,6 +4905,66 @@
                 val: context.obj(mcidElemRefsForParentTree)
             });
 
+            // Auto-create clickable /Subtype /Link annotations for any unlinked email addresses & URLs on this page (PAC Quality)
+            var existingPageUris = {};
+            var existingAnnotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
+            var pageAnnotRefs = [];
+            if (existingAnnotsLookup && typeof existingAnnotsLookup.asArray === 'function') {
+                var exArr = existingAnnotsLookup.asArray();
+                for (var exIdx = 0; exIdx < exArr.length; exIdx++) {
+                    pageAnnotRefs.push(exArr[exIdx]);
+                    var exDict = context.lookup(exArr[exIdx]);
+                    if (exDict && typeof exDict.get === 'function') {
+                        var exAct = exDict.lookup ? exDict.lookup(PDFLib.PDFName.of('A')) : null;
+                        if (exAct && typeof exAct.get === 'function') {
+                            var exUriObj = exAct.get(PDFLib.PDFName.of('URI'));
+                            if (exUriObj) {
+                                var exClean = String(exUriObj).replace(/^[(\s]+|[)\s]+$/g, '').toLowerCase();
+                                if (exClean) {
+                                    existingPageUris[exClean] = true;
+                                    existingPageUris[exClean.replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '')] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            var pageDetectedLinks = autoLinkItemsByPage[i] || [];
+            if (pageDetectedLinks.length > 0) {
+                var addedAutoLinks = false;
+                for (var dlIdx = 0; dlIdx < pageDetectedLinks.length; dlIdx++) {
+                    var dlItem = pageDetectedLinks[dlIdx];
+                    if (existingPageUris[dlItem.normKey] || existingPageUris[dlItem.uri.toLowerCase()]) {
+                        continue;
+                    }
+                    existingPageUris[dlItem.normKey] = true;
+                    existingPageUris[dlItem.uri.toLowerCase()] = true;
+                    var linkAltLabel = dlItem.isEmail
+                        ? ('E-Mail senden an ' + dlItem.rawText)
+                        : ('Webseite öffnen: ' + dlItem.uri);
+                    var newLinkAnnot = context.obj({
+                        Type: 'Annot',
+                        Subtype: 'Link',
+                        Rect: dlItem.rect,
+                        Border: [0, 0, 0],
+                        F: PDFLib.PDFNumber.of(4),
+                        Contents: PDFLib.PDFString.of(linkAltLabel),
+                        A: context.obj({
+                            Type: 'Action',
+                            S: PDFLib.PDFName.of('URI'),
+                            URI: PDFLib.PDFString.of(dlItem.uri)
+                        })
+                    });
+                    var newLinkAnnotRef = context.register(newLinkAnnot);
+                    pageAnnotRefs.push(newLinkAnnotRef);
+                    addedAutoLinks = true;
+                }
+                if (addedAutoLinks) {
+                    pageNode.set(PDFLib.PDFName.of('Annots'), context.obj(pageAnnotRefs));
+                }
+            }
+
             // Tag all /Annots on this page with /Contents, /TU, /StructParent & inline <Link>/<Form> /OBJR inside <P>
             var annotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
             if (annotsLookup && typeof annotsLookup.asArray === 'function') {
@@ -4850,15 +5082,18 @@
         context.assign(structTreeRootRef, structTreeRoot);
         catalog.set(PDFLib.PDFName.of('StructTreeRoot'), structTreeRootRef);
 
-        // 5. Build /Outlines (Bookmarks for each page)
+        // 5. Build /Outlines (Bookmarks synchronized with document title & page headings for PAC Quality)
         var outlinesRootRef = context.nextRef();
         var itemRefs = [];
         for (var b = 0; b < pages.length; b++) {
             itemRefs.push(context.nextRef());
         }
         for (var k = 0; k < pages.length; k++) {
+            var bmHeading = extractedPageHeadings[k]
+                ? (k === 0 ? fixTitle : ('Seite ' + (k + 1) + ': ' + extractedPageHeadings[k]))
+                : (fixTitle + ' - Seite ' + (k + 1));
             var itemObj = {
-                Title: PDFLib.PDFString.of(fixTitle + ' - Seite ' + (k + 1)),
+                Title: PDFLib.PDFString.of(bmHeading),
                 Parent: outlinesRootRef,
                 Dest: [pages[k].ref, PDFLib.PDFName.of('Fit')]
             };
@@ -4956,7 +5191,7 @@
 
         trackUsageEvent('a11y_autofix');
         await updateAccessibilityUI(true);
-        showToast('PAC 2026 Tiefen-Reparatur (PDF/UA-1 + WCAG 2.1/2.2) abgeschlossen! Klicken Sie auf "💾 PDF herunterladen", um die Datei im PAC zu prüfen.', 'success');
+        showToast('PAC 2026 Tiefen-Reparatur (PDF/UA-1 + WCAG 2.1/2.2 + Quality inkl. E-Mail/URL-Verlinkung) abgeschlossen!', 'success');
         return doc.bytes;
     }
 
@@ -4967,7 +5202,7 @@
         if (!report) return;
 
         var lines = [];
-        lines.push('PAC 2026 PRUEFBERICHT BARRIEREFREIHEIT (PDF/UA-1 • WCAG 2.1/2.2 • BITV 2.0)');
+        lines.push('PAC 2026 PRUEFBERICHT BARRIEREFREIHEIT (PDF/UA-1 • WCAG 2.1/2.2 • QUALITY)');
         lines.push('================================================================================');
         lines.push('Geprueftes Dokument : ' + report.docName);
         lines.push('Seitenanzahl        : ' + report.pageCount);
@@ -4976,6 +5211,7 @@
         lines.push('Pruefdatum          : ' + new Date().toLocaleString('de-DE'));
         lines.push('PDF/UA-1 Ergebnis   : ' + report.pdfUaPassed + ' von ' + report.pdfUaTotal + ' Kriterien bestanden');
         lines.push('WCAG 2.1 Ergebnis   : ' + report.wcagPassed + ' von ' + report.wcagTotal + ' Kriterien bestanden');
+        lines.push('Quality Ergebnis    : ' + report.qualityPassed + ' von ' + report.qualityTotal + ' Kriterien bestanden');
         lines.push('Gesamtergebnis      : ' + report.score + ' % (' + report.passedCount + ' von ' + report.totalChecks + ' Kriterien erfuellt)');
         lines.push('================================================================================');
         lines.push('');

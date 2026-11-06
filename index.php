@@ -1173,7 +1173,7 @@ $serverInfo = pdfstudio_get_server_info();
 <div class="modal-backdrop" id="modalAccessibility">
     <div class="modal-window" style="max-width:780px;">
         <div class="modal-header">
-            <span>♿ PAC 2026 Barrierefreiheits-Prüfung &amp; Reparatur (PDF/UA-1 • WCAG 2.1/2.2 • BITV 2.0)</span>
+            <span>♿ PAC 2026 Barrierefreiheits-Prüfung &amp; Reparatur (PDF/UA-1 • WCAG 2.1/2.2 • Quality)</span>
             <button type="button" class="doc-tab-close" data-close-modal="modalAccessibility">✕</button>
         </div>
         <div class="modal-body">
@@ -1182,7 +1182,7 @@ $serverInfo = pdfstudio_get_server_info();
                 <div style="flex:1;min-width:260px;">
                     <div id="a11ySummaryTitle" style="font-size:15px;font-weight:700;">Prüfe Dokument…</div>
                     <div id="a11ySummarySub" style="font-size:12px;color:var(--text-secondary);margin-top:2px;">
-                        Tiefenprüfung analog PAC 2026 nach PDF/UA-1 (Matterhorn-Protokoll) &amp; WCAG 2.1 / 2.2
+                        Tiefenprüfung analog PAC 2026 nach PDF/UA-1, WCAG 2.1/2.2 &amp; Quality (inkl. Auto-Verlinkung von E-Mails &amp; URLs)
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
@@ -1191,6 +1191,9 @@ $serverInfo = pdfstudio_get_server_info();
                     </span>
                     <span id="a11yWcagBadge" style="display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:var(--bg-input);border:1px solid var(--border-subtle);color:var(--text-secondary);">
                         WCAG: —
+                    </span>
+                    <span id="a11yQualityBadge" style="display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:var(--bg-input);border:1px solid var(--border-subtle);color:var(--text-secondary);">
+                        Quality: —
                     </span>
                     <span id="a11yScorePill" style="display:inline-block;font-size:18px;font-weight:800;padding:4px 12px;border-radius:999px;background:var(--accent-soft);color:var(--accent-primary);">
                         — %
@@ -1237,7 +1240,7 @@ $serverInfo = pdfstudio_get_server_info();
                     </div>
                 </div>
                 <p style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;margin-bottom:0;">
-                    Behebt automatisch beide PAC-2026-Prüfbereiche: <strong>PDF/UA-1</strong> (1:1 XMP-Sync <code>pdfuaid:part=1</code>, <code>/DisplayDocTitle</code>, <code>/Marked true</code>, <code>/Suspects false</code>, vollständiges Content-Stream- &amp; Form-XObject-Tagging, TrueType-Schrifteinbettung <code>/FontFile2</code> für alle Schriften inkl. <code>/Differences</code>-Unicode-CMap, <code>/Tabs /S</code>) sowie <strong>WCAG 2.1/2.2</strong> (semantische Überschriftenhierarchie <code>&lt;H1&gt;</code>/<code>&lt;H2&gt;</code>, AA-Textkontrast &ge; 4,5:1, <code>&lt;Link&gt;</code>/<code>&lt;Form&gt;</code> <code>/OBJR</code>-Annotation-Tagging &amp; <code>/Outlines</code>).
+                    Behebt automatisch alle 3 PAC-2026-Prüfbereiche: <strong>PDF/UA-1</strong> (1:1 XMP-Sync <code>pdfuaid:part=1</code>, <code>/DisplayDocTitle</code>, <code>/Marked true</code>, <code>/Suspects false</code>, vollständiges Content-Stream- &amp; Form-XObject-Tagging, TrueType-Schrifteinbettung <code>/FontFile2</code> inkl. <code>/Differences</code>-Unicode-CMap, <code>/Tabs /S</code>), <strong>WCAG 2.1/2.2</strong> (semantische Überschriftenhierarchie <code>&lt;H1&gt;</code>/<code>&lt;H2&gt;</code>, AA-Textkontrast &ge; 4,5:1, <code>&lt;Link&gt;</code>/<code>&lt;Form&gt;</code> <code>/OBJR</code>-Annotation-Tagging &amp; <code>/Outlines</code>) sowie <strong>PAC Quality</strong> (automatische <code>mailto:</code>- &amp; <code>https://</code>-Verlinkung von E-Mail-Adressen und Web-URLs im Text, keine leeren Struktur-Tags, native PDF-Standard-Tags ohne RoleMap-Umwege).
                 </p>
             </div>
         </div>
