@@ -270,15 +270,15 @@ $serverInfo = pdfstudio_get_server_info();
         <a href="#kap2">2. Oberfläche, Ribbon &amp; Ansichten</a>
         <a href="#kap3">3. Seiten sortieren, teilen &amp; verbinden</a>
         <a href="#kap4">4. PDF-Editor, Stempel &amp; Signatur</a>
-        <a href="#kap5">5. Sicheres Schwärzen &amp; Schutz</a>
-        <a href="#kap6">6. Formulare (AcroForms) &amp; Links</a>
-        <a href="#kap7">7. Zuschnitt, Bates &amp; Kopf-/Fußzeile</a>
+        <a href="#kap5">5. Schwärzen, DSGVO &amp; Forensik-Schutz</a>
+        <a href="#kap6">6. Formulare, Seriendruck &amp; Anhänge</a>
+        <a href="#kap7">7. Lesezeichen, Booklet, Bates &amp; QR</a>
         <a href="#kap8">8. Visueller &amp; Text-PDF-Vergleich</a>
-        <a href="#kap9">9. Konverter &amp; Durchsuchbares OCR</a>
-        <a href="#kap10">10. Barrierefreiheit (PDF/UA &amp; WCAG)</a>
-        <a href="#kap11">11. Automatische 5-Min.-Sicherung</a>
+        <a href="#kap9">9. Konverter, OCR, ZUGFeRD &amp; Batch</a>
+        <a href="#kap10">10. Barrierefreiheit (PDF/UA, WCAG &amp; Quality)</a>
+        <a href="#kap11">11. Auto-Save, E-Mail &amp; Passwort</a>
         <a href="#kap12">12. Tastenkombinationen</a>
-        <a href="#kap13">13. Sicherheitsarchitektur &amp; Statistik</a>
+        <a href="#kap13">13. Sicherheit, Admin &amp; Gatekeeper</a>
         <a href="#kap14">14. Installation &amp; Skalierbarkeit</a>
     </nav>
 
@@ -357,19 +357,31 @@ $serverInfo = pdfstudio_get_server_info();
 
         <!-- KAPITEL 5 -->
         <section class="help-card" id="kap5">
-            <h2>5. Sicheres Schwärzen (Sanitize), Wasserzeichen &amp; Komprimierung</h2>
+            <h2>5. Sicheres Schwärzen (Sanitize), DSGVO-Mustersuche &amp; Forensik-Bereiniger</h2>
             <div class="help-grid-2">
                 <div class="help-feature-box">
-                    <h4>██ Schwärzen &amp; 🛡️ Sicher schwärzen (Sanitize)</h4>
+                    <h4>██ Manuelles Schwärzen &amp; 🛡️ Sicher schwärzen (Sanitize)</h4>
                     <p>
                         <strong>Schritt 1:</strong> Wählen Sie unter <em>Bearbeiten</em> das Werkzeug <code>██ Schwärzen</code> und ziehen Sie schwarze Balken über sensible Textstellen (Personendaten, Aktenzeichen, Kontonummern).<br>
                         <strong>Schritt 2 (Wichtig für Behörden):</strong> Klicken Sie auf <code>🛡️ Sicher schwärzen</code>. Dadurch wird die Seite kryptografisch sauber gerastert, sodass der darunterliegende Textstrom <strong>physisch aus der PDF-Datei gelöscht</strong> wird und nicht mehr per Copy &amp; Paste oder Drittprogrammen auslesbar ist.
                     </p>
                 </div>
                 <div class="help-feature-box">
+                    <h4>🔍 DSGVO Auto-Schwärzung (Automatische Muster-Erkennung)</h4>
+                    <p>
+                        Über <strong>Bearbeiten → 🔍 Auto-Schwärzen</strong> (oder im Reiter <em>Layout &amp; Schutz</em>) durchsucht die Engine alle Seiten automatisch nach personenbezogenen Datenmustern: <strong>IBAN / Bankverbindung</strong>, <strong>E-Mail-Adressen</strong>, <strong>Telefonnummern</strong>, <strong>Steuernummern / USt-IdNr.</strong>, <strong>Geburts-/Kalenderdaten</strong> sowie frei definierbaren Suchbegriffen. Gefundene Treffer werden in einer Prüfliste mit Seitenzahl angezeigt und lassen sich per Klick mit Schwärzungsbalken belegen oder sofort physisch schwärzen.
+                    </p>
+                </div>
+                <div class="help-feature-box">
+                    <h4>🧹 Forensischer PDF-Bereiniger (Metadaten &amp; Aktive Inhalte)</h4>
+                    <p>
+                        Über <strong>Layout &amp; Schutz → 🧹 Bereinigen (Sanitize)</strong> prüft der forensische Bereiniger das PDF auf versteckte Risiken und Metadaten: eingebettetes <strong>JavaScript (<code>/JS</code>, <code>/JavaScript</code>)</strong>, automatische Start-Aktionen (<code>/OpenAction</code>, <code>/AA</code>, <code>/Launch</code>), eingebettete Multimedia-Objekte (<code>/RichMedia</code>), versteckte Anwendungsdaten (<code>/PieceInfo</code>) sowie Autoren-/Historien-Metadaten (<code>/Info</code> &amp; XMP). Mit einem Klick entfernen Sie sämtliche aktiven Skripte und bereinigen die Dokument-Metadaten.
+                    </p>
+                </div>
+                <div class="help-feature-box">
                     <h4>💧 Wasserzeichen &amp; 📉 PDF komprimieren</h4>
                     <p>
-                        <strong>Wasserzeichen:</strong> Im Reiter <em>Layout &amp; Schutz</em> (bzw. im rechten Eigenschaften-Fenster) bringen Sie diagonale Wasserzeichen mit wählbarer Deckkraft und Schriftgröße auf alle Seiten auf.<br>
+                        <strong>Wasserzeichen:</strong> Im Reiter <em>Layout &amp; Schutz</em> bringen Sie diagonale Wasserzeichen mit wählbarer Deckkraft und Schriftgröße auf alle Seiten auf.<br>
                         <strong>Komprimieren:</strong> Verkleinern Sie große PDF-Dateien in 3 Qualitätsstufen (<em>Stark komprimieren 96 DPI</em>, <em>Ausgewogen 140 DPI</em>, <em>Hohe Qualität 200 DPI</em>) inklusive Vorher-/Nachher-Größenvergleich.
                     </p>
                 </div>
@@ -378,35 +390,38 @@ $serverInfo = pdfstudio_get_server_info();
 
         <!-- KAPITEL 6 -->
         <section class="help-card" id="kap6">
-            <h2>6. Interaktive Formulare (AcroForms) &amp; Hyperlinks</h2>
-            <p>Im Reiter <strong>📋 Formulare &amp; Links</strong> erstellen und bearbeiten Sie echte PDF-Formularfelder nach PDF-Standard:</p>
+            <h2>6. Interaktive Formulare (AcroForms), Seriendruck &amp; PDF-Anhänge</h2>
+            <p>Im Reiter <strong>📋 Formulare &amp; Links</strong> erstellen, befüllen und verwalten Sie echte PDF-Formularfelder sowie eingebettete Begleitdateien:</p>
             <ul>
-                <li><strong>🔤 Textfeld (<code>form-text</code>):</strong> Ziehen Sie auf der Seite ein ausfüllbares Textfeld auf und vergeben Sie Feldname sowie optionalen Standardwert.</li>
-                <li><strong>☑️ Checkbox (<code>form-check</code>):</strong> Fügt ein anklickbares Kontrollkästchen ein (inkl. Wahl, ob standardmäßig angehakt).</li>
-                <li><strong>▾ Dropdown-Auswahlliste (<code>form-select</code>):</strong> Erzeugt ein Auswahlmenü mit frei definierbaren Optionen (kommagetrennt, z. B. <code>Ja, Nein, In Prüfung</code>).</li>
-                <li><strong>🔗 Link einfügen (<code>link</code>):</strong> Ziehen Sie einen klickbaren Bereich über beliebige Stellen im PDF, der entweder eine externe Webseite (<code>https://...</code>) öffnet oder direkt zu einer bestimmten Seite im Dokument (z. B. <code>Seite 3</code>) springt.</li>
+                <li><strong>🔤 Textfeld (<code>form-text</code>), ☑️ Checkbox (<code>form-check</code>) &amp; ▾ Dropdown (<code>form-select</code>):</strong> Ziehen Sie auf der Seite interaktive AcroForm-Felder auf und vergeben Sie Feldnamen, Standardwerte oder Auswahloptionen.</li>
+                <li><strong>🔗 Link einfügen (<code>link</code>):</strong> Ziehen Sie einen klickbaren Bereich über beliebige Stellen im PDF, der entweder eine externe Webseite (<code>https://...</code>), eine E-Mail (<code>mailto:...</code>) öffnet oder direkt zu einer bestimmten Seite im Dokument springt.</li>
                 <li><strong>🔒 Formular sperren (Flatten):</strong> Wandelt alle ausfüllbaren Formularfelder dauerhaft in statischen Seitentext um, sodass nachträgliche Änderungen durch Empfänger ausgeschlossen sind.</li>
+                <li><strong>📊 Formular-Seriendruck (CSV / Excel Batch-Ausfüllung):</strong> Über <strong>Formulare &amp; Links → 📊 Seriendruck</strong> lesen Sie alle vorhandenen Formularfelder eines PDFs automatisch aus, laden eine passende <strong>CSV-Vorlage</strong> herunter oder importieren eine ausgefüllte <strong>CSV- oder Excel-Datei (<code>.xlsx</code>)</strong>. Jede Tabellenzeile erzeugt vollautomatisch ein individuell ausgefülltes (und auf Wunsch gesperrtes) PDF-Dokument — gebündelt als <strong>ZIP-Archiv</strong>!</li>
+                <li><strong>📎 PDF-Anhänge / Eingebettete Dateien (<code>/EmbeddedFiles</code>):</strong> Über <strong>Formulare &amp; Links → 📎 Anhänge</strong> sehen Sie alle im PDF eingebetteten Begleitdateien (z. B. XML-Rechnungen, Tabellen, Nachweise), können diese einzeln herunterladen, löschen oder beliebige neue Dateien direkt in den PDF-Container einbetten.</li>
             </ul>
         </section>
 
         <!-- KAPITEL 7 -->
         <section class="help-card" id="kap7">
-            <h2>7. Seiten zuschneiden (Crop), Bates-Nummerierung &amp; Kopf-/Fußzeilen</h2>
+            <h2>7. Lesezeichen &amp; Inhaltsverzeichnis, Mehrseiten-Layout (N-up/Booklet), Bates &amp; QR-Code</h2>
             <div class="help-grid-2">
                 <div class="help-feature-box">
-                    <h4>📐 Seiten zuschneiden (CropBox / MediaBox)</h4>
-                    <p>Über <strong>Layout &amp; Schutz → Zuschneiden</strong> geben Sie millimetergenau (in <code>mm</code>) an, wie viel vom oberen, unteren, linken oder rechten Rand auf der aktuellen Seite oder allen Seiten entfernt werden soll (ideal zum Entfernen von Scan-Rändern oder Lochmarken).</p>
+                    <h4>🔖 Lesezeichen-Editor &amp; Klickbares Inhaltsverzeichnis (TOC)</h4>
+                    <p>Über <strong>Seiten → 🔖 Lesezeichen / TOC</strong> lesen Sie vorhandene PDF-Lesezeichen (<code>/Outlines</code>) aus oder lassen Überschriften im Dokument automatisch per Schriftgrößen-Analyse erkennen. Sie können Lesezeichen frei bearbeiten, im PDF-Katalog speichern und zusätzlich mit einem Klick eine <strong>formatierte Inhaltsverzeichnis-Seite mit klickbaren Sprunglinks und Seitenzahlen</strong> am Dokumentanfang einfügen.</p>
                 </div>
                 <div class="help-feature-box">
-                    <h4>🔢 Juristische / Behördliche Bates-Nummerierung</h4>
-                    <p>Über <strong>Layout &amp; Schutz → Kopf/Fuß &amp; Bates</strong> versehen Sie Akten mit einer eindeutigen, mehrstelligen Bates-Nummerierung (z. B. Präfix <code>AZ-2026-</code>, Startnummer <code>1</code>, 6 Stellen → <code>AZ-2026-000001</code>). Nach dem Anwenden wird die nächste fortlaufende Startnummer für weitere Dokumente automatisch hochgezählt.</p>
+                    <h4>📖 Mehrseiten-Layout (N-up: 2-auf-1, 4-auf-1) &amp; Broschürendruck</h4>
+                    <p>Über <strong>Seiten → 📖 N-up / Broschüre</strong> platzieren Sie wahlweise <strong>2 oder 4 Seiten auf einem DIN-A4-Blatt</strong> (inkl. optionalem Schneidrahmen) oder erstellen ein druckfertiges <strong>Broschüren-Layout (Booklet-Ausschießen für beidseitigen Druck mit Sattelheftung/Mittelfalz)</strong>.</p>
+                </div>
+                <div class="help-feature-box">
+                    <h4>📐 Seiten zuschneiden (CropBox) &amp; 📱 QR-Code Generator</h4>
+                    <p>Über <strong>Layout &amp; Schutz → Zuschneiden</strong> entfernen Sie Scan-Ränder millimetergenau in <code>mm</code>. Mit <strong>📱 QR-Code</strong> erzeugen Sie offline einen hochauflösenden QR-Code (für URLs, Aktenzeichen oder Zahlungslinks) und platzieren ihn direkt auf den gewünschten Seiten.</p>
+                </div>
+                <div class="help-feature-box">
+                    <h4>🔢 Bates-Nummerierung &amp; Dreispaltige Kopf-/Fußzeilen</h4>
+                    <p>Über <strong>Layout &amp; Schutz → Kopf/Fuß &amp; Bates</strong> versehen Sie Akten mit einer mehrstelligen Bates-Nummerierung (z. B. <code>AZ-2026-000001</code>) sowie dreispaltigen Kopf- und Fußzeilen mit den Platzhaltern <code>{page}</code>, <code>{total}</code>, <code>{date}</code> und <code>{file}</code>.</p>
                 </div>
             </div>
-            <h3>📑 Dreispaltige Kopf- &amp; Fußzeilen</h3>
-            <p>
-                Im selben Dialog können Sie Kopfzeile (Links, Mitte, Rechts) und Fußzeile (Links, Mitte, Rechts) gleichzeitig auf alle Seiten anwenden. Unterstützte dynamische Platzhalter:
-                <code>{page}</code> (aktuelle Seitenzahl), <code>{total}</code> (Gesamtseitenzahl), <code>{date}</code> (Tagesdatum) und <code>{file}</code> (Dateiname).
-            </p>
         </section>
 
         <!-- KAPITEL 8 -->
@@ -424,7 +439,7 @@ $serverInfo = pdfstudio_get_server_info();
 
         <!-- KAPITEL 9 -->
         <section class="help-card" id="kap9">
-            <h2>9. Konverter (Office/Bilder) &amp; Durchsuchbares Sandwich-OCR</h2>
+            <h2>9. Konverter (Office/Bilder), Sandwich-OCR, E-Rechnung (ZUGFeRD) &amp; Stapelverarbeitung</h2>
             <div class="help-grid-2">
                 <div class="help-feature-box">
                     <h4>🔄 Import: Bilder, Word (.docx), Excel (.xlsx), HTML &amp; Text → PDF</h4>
@@ -440,58 +455,80 @@ $serverInfo = pdfstudio_get_server_info();
                         Die lokale Offline-OCR-Engine (Deutsch/Englisch) erkennt alle Wörter samt ihren exakten Koordinaten und legt sie als <strong>unsichtbare, durchsuchbare Textebene</strong> passgenau über das Originalbild. Das Aussehen bleibt 1:1 erhalten, aber das PDF ist sofort per <span class="kbd">Strg</span>+<span class="kbd">F</span> durchsuchbar, kopierbar und für Screenreader lesbar!
                     </p>
                 </div>
+                <div class="help-feature-box">
+                    <h4>🧾 E-Rechnung: ZUGFeRD 2.x / Factur-X &amp; XRechnung (EN 16931)</h4>
+                    <p>
+                        Über <strong>Konverter &amp; OCR → 🧾 E-Rechnung / ZUGFeRD</strong> erkennt die Anwendung eingebettete XML-Rechnungsdaten (<code>factur-x.xml</code>, <code>zugferd-invoice.xml</code>, <code>xrechnung.xml</code>) in PDF-Rechnungen oder liest separate XML-Rechnungen ein. Rechnungsnummer, Rechnungsdatum, Verkäufer, Käufer, IBAN, Einzelpositionen sowie Netto-/Steuer-/Bruttobeträge werden übersichtlich aufbereitet. Zudem können Sie eigene EN-16931-konforme ZUGFeRD-XML-Strukturen direkt im Dialog erzeugen und in das aktuelle PDF einbetten.
+                    </p>
+                </div>
+                <div class="help-feature-box">
+                    <h4>🗂️ Stapelverarbeitung (Batch-Modus für mehrere PDFs)</h4>
+                    <p>
+                        Über <strong>Start → 🗂️ Stapel (Batch)</strong> wenden Sie wiederkehrende Aufgaben (z. B. <em>PDF/UA-1 Barrierefreiheit Auto-Fix</em>, <em>Wasserzeichen aufbringen</em>, <em>Bates-Nummerierung</em>, <em>Komprimierung</em> oder <em>Metadaten-Bereinigung</em>) in einem Durchgang auf Dutzende PDF-Dateien gleichzeitig an und erhalten alle fertig verarbeiteten Dokumente gebündelt als <strong>ZIP-Archiv</strong>.
+                    </p>
+                </div>
             </div>
         </section>
 
         <!-- KAPITEL 10 -->
         <section class="help-card" id="kap10">
-            <h2>10. Barrierefreiheit (PDF/UA-1, PAC 2026, BITV 2.0 &amp; WCAG 2.1/2.2)</h2>
+            <h2>10. Barrierefreiheit (PDF/UA-1, WCAG 2.1/2.2 &amp; PAC 2026 Quality)</h2>
             <p>
-                Im Reiter <strong>♿ Barrierefreiheit</strong> prüfen und reparieren Sie PDF-Dokumente für Screenreader und behördliche Barrierefreiheits-Vorgaben (Matterhorn-Protokoll &amp; WCAG):
+                Im Reiter <strong>♿ Barrierefreiheit</strong> prüfen und reparieren Sie PDF-Dokumente für Screenreader und behördliche Barrierefreiheits-Vorgaben exakt nach den <strong>3 Reitern des offiziellen PAC-2026-Prüfwerkzeugs (PDF Accessibility Checker)</strong>:
             </p>
-            <h3>1. 12-Punkte PDF/UA-1- &amp; WCAG-Prüfung (<code>♿ PDF/UA Prüfung</code>)</h3>
-            <p>Das System analysiert das Dokument automatisch auf alle 12 Prüfkriterien analog zum PAC-Prüfwerkzeug:</p>
+            <h3>1. 14-Punkte-Prüfung in 3 Reitern: PDF/UA-1, WCAG 2.1/2.2 &amp; PAC Quality (<code>♿ PDF/UA Prüfung</code>)</h3>
+            <p>Das System analysiert das Dokument automatisch auf alle <strong>14 Prüfkriterien</strong> und weist die Ergebnisse separat für <strong>PDF/UA-1</strong>, <strong>WCAG 2.1/2.2</strong> und <strong>Quality</strong> aus:</p>
             <ol>
-                <li><strong>Dokumenttitel (<code>/Title</code> &amp; XMP <code>dc:title</code>, WCAG 2.4.2):</strong> Aussagekräftiger Titel statt bloßem Dateinamen.</li>
+                <li><strong>Dokumenttitel (<code>/Title</code> &amp; XMP <code>dc:title</code> 1:1 synchron, WCAG 2.4.2):</strong> Aussagekräftiger Titel statt bloßem Dateinamen.</li>
                 <li><strong>Fenstertitel-Anzeige (<code>/ViewerPreferences /DisplayDocTitle true</code>, Matterhorn 06-004):</strong> Screenreader lesen den Dokumenttitel statt des Dateipfads vor.</li>
                 <li><strong>Dokumentsprache (<code>/Lang</code>, z. B. <code>de-DE</code>, WCAG 3.1.1):</strong> Zwingend erforderlich für die korrekte Sprachausgabe.</li>
-                <li><strong>Tagged PDF Status (<code>/MarkInfo /Marked true</code>, Matterhorn 01-001):</strong> Kennzeichnung als strukturiertes Dokument.</li>
-                <li><strong>Vollständiger Content-Tagging-Baum (<code>/StructTreeRoot</code>, <code>/ParentTree</code> &amp; <code>MCID</code>s, WCAG 1.3.1 / 1.3.2):</strong> Prüft, ob alle Seiteninhalte über Marked-Content-Sequenzen im Strukturbaum verankert oder als <code>/Artifact</code> deklariert sind.</li>
+                <li><strong>Tagged PDF Status (<code>/MarkInfo /Marked true</code> &amp; <code>/Suspects false</code>, Matterhorn 01-001):</strong> Kennzeichnung als fehlerfrei strukturiertes Dokument.</li>
+                <li><strong>Vollständiger Content-Tagging-Baum (<code>/StructTreeRoot</code>, <code>/ParentTree</code>, <code>MCID</code>s &amp; Form-XObjects, WCAG 1.3.1 / 1.3.2):</strong> Prüft, ob alle Seiteninhalte im Strukturbaum verankert oder als <code>/Artifact</code> deklariert sind.</li>
                 <li><strong>PDF/UA-1 Konformitätskennung (<code>pdfuaid:part=1</code>, Matterhorn 06-002):</strong> XMP-Metadaten-Kennung nach ISO 14289-1.</li>
                 <li><strong>Auslesbarer Textstrom (Kein ungetaggter Bild-Scan, WCAG 1.4.5):</strong> Prüft, ob echter Text vorhanden ist.</li>
-                <li><strong>Schriftarten-Einbettung, <code>/ToUnicode</code> &amp; Glyphen-Breiten (Matterhorn 21-001 bis 21-006):</strong> Prüft vollständige Schrifteinbettung, Unicode-Zuordnung und konsistente <code>/Widths</code>-Metriken.</li>
+                <li><strong>Schriftarten-Einbettung (<code>/FontFile2</code>), <code>/ToUnicode</code> &amp; <code>/Widths</code> (Matterhorn 21-001 bis 21-006):</strong> Prüft vollständige Schrifteinbettung, Unicode-Zuordnung inkl. Umlauten (<code>/Differences</code>) und konsistente Glyphenbreiten.</li>
                 <li><strong>Tabellen-Zeilen &amp; Spaltenüberschriften (<code>/TH</code> &amp; <code>/Scope</code>, WCAG 1.3.1):</strong> Prüft semantische Tabellen-Auszeichnung.</li>
-                <li><strong>Alternativtexte für Abbildungen (<code>&lt;Figure&gt; /Alt</code> &amp; <code>/BBox</code>, WCAG 1.1.1) &amp; Formularfelder (<code>/TU</code>, WCAG 4.1.2).</strong></li>
+                <li><strong>Alternativtexte für Abbildungen (<code>&lt;Figure&gt; /Alt</code> &amp; <code>/BBox</code>, WCAG 1.1.1) &amp; getaggte Annotationen (<code>&lt;Link&gt;</code> / <code>&lt;Form&gt;</code> mit <code>/OBJR</code> &amp; <code>/Contents</code>, Matterhorn 28-001).</strong></li>
                 <li><strong>Farbkontrast der Texte (WCAG 1.4.3 — mind. 4,5:1) &amp; Tab-Fokus-Reihenfolge (<code>/Tabs /S</code>, WCAG 2.4.3).</strong></li>
-                <li><strong>Lesezeichen / Gliederung (<code>/Outlines</code>, WCAG 2.4.5) &amp; barrierefreier Sicherheitszugriff.</strong></li>
+                <li><strong>Semantische Überschriften-Hierarchie (<code>&lt;H1&gt;</code>–<code>&lt;H6&gt;</code> ohne Ebenen-Sprünge) &amp; Lesezeichen (<code>/Outlines</code>, WCAG 2.4.5).</strong></li>
+                <li><strong>[PAC Quality] Klickbare E-Mail-Adressen (<code>mailto:</code>) &amp; Web-URLs (<code>https://</code>) im Text:</strong> Prüft, ob im Fließtext vorkommende E-Mail-Adressen und Web-Links mit einer klickbaren <code>/Subtype /Link</code>-Annotation samt barrierefreiem <code>&lt;Link&gt;</code>-Strukturelement (<code>/OBJR</code> + <code>/Contents</code>) verknüpft sind.</li>
+                <li><strong>[PAC Quality] Strukturbaum- &amp; Tag-Hygiene:</strong> Prüft, dass der Strukturbaum keine leeren Strukturelemente (ohne <code>/K</code>), ausschließlich native PDF-Standard-Tags (<code>H1</code>–<code>H6</code>, <code>P</code>, <code>Figure</code>, <code>Link</code>, <code>Form</code>) und eine mit den Überschriften synchronisierte Lesezeichen-Gliederung (<code>/Outlines</code>) besitzt.</li>
             </ol>
-            <h3>2. 1-Klick Auto-Remediation inkl. automatischer Offline-OCR (<code>⚡ Auto-Fix PDF/UA</code>)</h3>
+            <h3>2. 1-Klick Auto-Remediation inkl. automatischer E-Mail-/URL-Verlinkung &amp; Offline-OCR (<code>⚡ Auto-Fix PDF/UA</code>)</h3>
             <p>
-                Mit einem Klick auf <strong>„🛠️ Barrierefreiheit jetzt nachrüsten“</strong> behebt PDF-Werkstatt Pro vollautomatisch alle gefundenen Mängel:
-                Ist das Dokument ein reiner Bild-Scan ohne Textebene, startet der Auto-Fix <strong>automatisch die lokale Offline-Texterkennung (Tesseract-OCR)</strong>, bettet eine durchsuchbare Textschicht mit PDF/A-konformer TrueType-Schrift (Liberation Sans) ein, hebt zu schwache Textkontraste auf mindestens 4,5:1 an, korrigiert Schriftmetriken (<code>/Widths</code>), setzt <code>/Tabs /S</code> auf allen Seiten und generiert einen vollständigen PDF/UA-1-Strukturbaum (<code>/StructTreeRoot</code>, <code>/ParentTree</code>, <code>/RoleMap</code>, <code>&lt;Figure&gt;</code> mit <code>/Alt</code> und <code>/BBox</code>).
+                Mit einem Klick auf <strong>„🛠️ Barrierefreiheit jetzt nachrüsten“</strong> behebt PDF-Werkstatt Pro vollautomatisch alle gefundenen Mängel in allen 3 PAC-2026-Reitern (<strong>PDF/UA-1</strong>, <strong>WCAG</strong> und <strong>Quality</strong>):
+                Ist das Dokument ein reiner Bild-Scan ohne Textebene, startet der Auto-Fix automatisch die lokale Offline-Texterkennung (Tesseract-OCR), bettet eine durchsuchbare Textschicht mit PDF/A-konformer TrueType-Schrift (Liberation Sans) ein, hebt zu schwache Textkontraste auf mindestens 4,5:1 an, erkennt E-Mail-Adressen und Web-URLs im Text und wandelt sie automatisch in klickbare, getaggte <code>mailto:</code>- bzw. <code>https://</code>-Links (<code>&lt;Link&gt;</code> + <code>/OBJR</code>) um, erzeugt passende Lesezeichen (<code>/Outlines</code>) aus den erkannten Überschriften und baut einen bereinigten PDF/UA-1-Strukturbaum ohne leere Tags auf.
             </p>
             <h3>3. Visueller Tag- &amp; Alternativtext-Editor (<code>H1 Tag</code>, <code>H2 Tag</code>, <code>P Absatz</code>, <code>🖼️ Alt-Text</code>)</h3>
             <p>
                 Um Überschriften, Absätze oder Bilder/Grafiken gezielt für blinde Nutzer zu beschreiben, wählen Sie im Reiter <em>Barrierefreiheit</em> das entsprechende Tag-Werkzeug (z. B. <code>🖼️ Alt-Text</code> für eine Grafik/Unterschrift/Stempel), markieren den Bereich auf der Seite und geben den <strong>Alternativtext (<code>/Alt</code>)</strong> ein.
             </p>
             <h3>4. Offiziellen Prüfbericht als PDF exportieren (<code>📄 Prüfbericht PDF</code>)</h3>
-            <p>Erzeugt ein druckfertiges Prüfprotokoll mit Prüfergebnis in Prozent, Zeitstempel und Einzelbewertung aller 12 PDF/UA-1- &amp; WCAG-Prüfpunkte zur Ablage in der Akte.</p>
+            <p>Erzeugt ein druckfertiges Prüfprotokoll mit Prüfergebnis in Prozent, Zeitstempel und Einzelbewertung aller 14 PDF/UA-1-, WCAG- &amp; PAC-Quality-Prüfpunkte zur Ablage in der Akte.</p>
         </section>
 
         <!-- KAPITEL 11 -->
         <section class="help-card" id="kap11">
-            <h2>11. Automatische 5-Minuten-Sicherung (Lokaler Auto-Save)</h2>
+            <h2>11. Automatische 5-Minuten-Sicherung, E-Mail-Direktversand &amp; Passwortänderung</h2>
             <p>
-                <strong>PDF-Werkstatt Pro</strong> schützt Ihre laufende Arbeit vollautomatisch vor Datenverlust (z. B. bei versehentlichem Schließen des Browser-Tabs oder Stromausfall):
+                <strong>PDF-Werkstatt Pro</strong> schützt Ihre laufende Arbeit vollautomatisch vor Datenverlust und bietet komfortable Funktionen für den Direktversand und die Kontoverwaltung:
             </p>
             <div class="help-grid-2">
                 <div class="help-feature-box">
-                    <h4>⏱️ Automatischer Snapshot alle 5 Minuten</h4>
-                    <p>Solange ein PDF-Dokument geöffnet ist, sichert die Anwendung alle 5 Minuten automatisch den kompletten Arbeitsstand inklusive aller beweglichen Textfelder, Zeichnungen, Unterschriften, Stempel und Barrierefreiheits-Tags lokal in der Browser-Datenbank (<code>IndexedDB</code>).</p>
+                    <h4>⏱️ Automatischer Snapshot alle 5 Minuten &amp; 1-Klick-Wiederherstellung</h4>
+                    <p>Solange ein PDF-Dokument geöffnet ist, sichert die Anwendung alle 5 Minuten automatisch den kompletten Arbeitsstand inklusive aller beweglichen Textfelder, Zeichnungen, Unterschriften, Stempel und Barrierefreiheits-Tags lokal in der Browser-Datenbank (<code>IndexedDB</code>). Nach einem Browser-Neustart stellen Sie den Stand per Klick auf <strong><code>🔄 Auto-Save wiederherstellen</code></strong> sofort wieder her.</p>
                 </div>
                 <div class="help-feature-box">
-                    <h4>🔄 1-Klick-Wiederherstellung nach Neustart</h4>
-                    <p>Beim nächsten Öffnen von PDF-Werkstatt Pro erkennt die Anwendung automatisch einen vorhandenen Auto-Save-Stand und blendet unten in der Statusleiste den Button <strong><code>🔄 Auto-Save wiederherstellen</code></strong> ein, mit dem Sie nahtlos weiterarbeiten können.</p>
+                    <h4>📧 Direkter PDF-E-Mail-Versand per SMTP</h4>
+                    <p>Über den Button <strong><code>📧 E-Mail</code></strong> oben in der Titelleiste versenden Sie das aktuell bearbeitete PDF-Dokument direkt als E-Mail-Anhang an beliebige Empfänger (inkl. Betreff, Nachrichtentext und optionaler Antwortadresse) über den vom Administrator hinterlegten SMTP-Server.</p>
+                </div>
+                <div class="help-feature-box">
+                    <h4>🔑 Eigene Passwortänderung (Self-Service)</h4>
+                    <p>Wenn der Administrator die lokale Benutzeranmeldung (Gatekeeper) aktiviert hat, können Benutzer ihr eigenes Passwort jederzeit selbst ändern — entweder <strong>direkt auf dem Anmeldebildschirm</strong> über <em>„🔑 Eigenes Passwort ändern“</em> oder im angemeldeten Zustand über das <strong>Schlüssel-Symbol <code>🔑</code></strong> neben dem Benutzernamen oben rechts.</p>
+                </div>
+                <div class="help-feature-box">
+                    <h4>🗄️ Optionaler Dokumenten-Tresor &amp; Versionierung</h4>
+                    <p>Auf Wunsch können PDF-Projekte samt bearbeitbaren Annotationen und Versionshistorie im geschützten Server-Tresor gespeichert oder über zeitlich begrenzte Freigabe-Links geteilt werden.</p>
                 </div>
             </div>
         </section>
@@ -549,22 +586,28 @@ $serverInfo = pdfstudio_get_server_info();
 
         <!-- KAPITEL 13 -->
         <section class="help-card" id="kap13">
-            <h2>13. Sicherheitsarchitektur &amp; Anonyme Nutzungsstatistik</h2>
-            <h3>Integrierte Sicherheitsmechanismen (Hardening)</h3>
+            <h2>13. Sicherheitsarchitektur, Admin-Konsole (<code>admin.php</code>) &amp; Nutzungsstatistik</h2>
+            <h3>1. Mehrstufige Sicherheitsarchitektur (Defense-in-Depth)</h3>
             <ul>
-                <li><strong>100 % Lokale Dokumentenverarbeitung im Browser:</strong> Geöffnete PDF-Akten verbleiben während der gesamten Bearbeitung im Arbeitsspeicher Ihres Browsers und müssen nicht auf fremde Cloud-Server hochgeladen werden.</li>
-                <li><strong>Vollständige Verzeichnis-Abschottung (<code>.htaccess</code>):</strong> Direkter HTTP-Zugriff auf <code>config.php</code>, <code>includes/</code> und das gesamte <code>storage/</code>-Verzeichnis ist auf Webserver-Ebene komplett gesperrt (<code>403 Forbidden</code>).</li>
-                <li><strong>CSRF-Schutz &amp; Session-Hardening:</strong> Alle API-Aktionen erfordern ein kryptographisches, sitzungsgebundenes <code>X-CSRF-Token</code>. Session-Cookies werden als <code>HttpOnly</code> sowie <code>SameSite=Lax</code> gesetzt.</li>
-                <li><strong>Content-Security-Policy (CSP):</strong> Strikte HTTP-Security-Header (<code>default-src 'self'</code>, <code>object-src 'none'</code>, <code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: SAMEORIGIN</code>) unterbinden externe Datenabflüsse und Cross-Site-Scripting (XSS).</li>
+                <li><strong>100 % Lokale Dokumentenverarbeitung im Browser:</strong> Geöffnete PDF-Akten verbleiben während der gesamten Bearbeitung im Arbeitsspeicher Ihres Browsers und müssen nicht auf externe Cloud-Server hochgeladen werden.</li>
+                <li><strong>Doppelter Speicherschutz (<code>.htaccess</code> + PHP-Exit-Guard <code>*.json.php</code>):</strong> Sämtliche Konfigurations-, Benutzer- und Statistikdateien im Verzeichnis <code>storage/</code> sind doppelt abgesichert: Neben <code>storage/.htaccess</code> besitzt jede Datei einen ausführbaren <strong>PHP-Exit-Header (<code>&lt;?php http_response_code(403); exit('403 Forbidden'); ?&gt;</code>)</strong>. Selbst auf Nginx-, IIS- oder Apache-Servern ohne <code>AllowOverride</code> ist ein direkter Abruf über den Browser technisch unmöglich.</li>
+                <li><strong>Kryptografische Verschlüsselung im Ruhezustand (AES-256-CBC + HMAC-SHA256):</strong> Sensible Zugangsdaten in der Konfiguration (SMTP-Passwörter, technische LDAP-Bind-Passwörter, GitHub-Tokens) werden niemals im Klartext gespeichert, sondern automatisch mit einem installationsspezifischen 256-Bit-Schlüssel nach <strong>AES-256-CBC inkl. HMAC-SHA256-Integritätsschutz (<code>ENCv1:...</code>)</strong> verschlüsselt abgelegt.</li>
+                <li><strong>CSRF-Schutz, Brute-Force-Bremse &amp; Session-Hardening:</strong> Alle zustandsändernden API- und Admin-Aktionen erfordern ein sitzungsgebundenes <code>X-CSRF-Token</code> in zeitkonstanter Prüfung (<code>hash_equals</code>). Anmelde- und Passwort-Endpunkte sind durch einen IP-basierten Rate-Limiter gegen Brute-Force-Angriffe geschützt. Session-Cookies nutzen <code>HttpOnly</code>, <code>SameSite=Lax</code> und den strikten Session-Modus.</li>
+                <li><strong>Content-Security-Policy (CSP) &amp; Security-Header:</strong> Strikte HTTP-Security-Header (<code>Content-Security-Policy</code> mit <code>connect-src 'self' blob: data:</code>, <code>object-src 'none'</code>, <code>frame-ancestors 'self'</code>, <code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: SAMEORIGIN</code>, <code>Permissions-Policy</code>) unterbinden externe Datenabflüsse, Clickjacking und Cross-Site-Scripting (XSS).</li>
             </ul>
-            <h3>Anonyme Nutzungsstatistik für den Administrator (<code>storage/nutzungsstatistik.txt</code>)</h3>
+            <h3>2. Zentrale Admin-Konsole (<code>admin.php</code>), Gatekeeper &amp; 1-Klick-GitHub-Update</h3>
             <p>
-                Für den Administrator legt die Anwendung automatisch eine fortlaufend aktualisierte, übersichtlich formatierte <strong>Nutzungsstatistik im Verzeichnis <code>storage/</code></strong> ab (durch <code>storage/.htaccess</code> vor öffentlichem Web-Zugriff geschützt, direkt per FTP/SSH oder Dateimanager einsehbar):
+                Über das Zahnrad-Symbol <strong><code>⚙️</code></strong> oben rechts in der Titelleiste (oder direkten Aufruf von <code>admin.php</code>) öffnen Administratoren die passwortgeschützte Verwaltungskonsole:
             </p>
             <ul>
-                <li><strong><code>storage/nutzungsstatistik.txt</code> (Lesbarer Textbericht für den Administrator):</strong> Zeigt auf einen Blick, wie stark das Programm und die einzelnen PDF-Werkzeuge genutzt werden (Sitzungen, Seitenaufrufe, Monatsübersicht und 30-Tage-Tagesverlauf).</li>
-                <li><strong><code>storage/nutzungsstatistik.json</code> (Maschinenlesbare Rohdaten):</strong> Enthält alle Zählerstände im JSON-Format für eventuelle eigene Auswertungen.</li>
+                <li><strong>Zugangsschutz / Gatekeeper (Offen, Lokal, LDAP/Active Directory oder Kombiniert):</strong> Entscheiden Sie flexibel, ob die PDF-Werkstatt frei im Intranet zugänglich ist oder vor dem Start eine Anmeldung verlangt. Unterstützt werden sowohl <strong>lokale Benutzerkonten (komplett ohne Datenbank)</strong> als auch die direkte Anbindung an <strong>LDAP / Microsoft Active Directory</strong> (inkl. 4-Stufen-Live-Diagnose für TCP-Socket, STARTTLS/LDAPS, Bind und Suchfilter).</li>
+                <li><strong>SMTP-Mailserver &amp; Sicherheitsparameter:</strong> Konfigurieren und testen Sie den ausgehenden SMTP-Server für den direkten PDF-E-Mail-Versand direkt im Browser.</li>
+                <li><strong>🔄 1-Klick GitHub-Direkt-Update:</strong> Prüfen Sie im Reiter <em>„GitHub-Update“</em> per Klick, ob auf GitHub (<code>uWiiiDev/PDF-Werkstatt-Pro</code>) eine neuere Version vorliegt, und aktualisieren Sie die gesamte Installation direkt im Browser — Ihre lokalen Einstellungen und Benutzerdaten in <code>storage/</code> und <code>config.php</code> bleiben dabei unangetastet!</li>
             </ul>
+            <h3>3. Anonyme Nutzungsstatistik für den Administrator</h3>
+            <p>
+                Im Reiter <strong>„📊 Nutzungsstatistik“</strong> der Admin-Konsole (sowie als Textbericht unter <code>storage/nutzungsstatistik.txt.php</code>) sehen Administratoren auf einen Blick, wie stark das Programm und die einzelnen PDF-Werkzeuge genutzt werden (Sitzungen, Seitenaufrufe, beliebteste Werkzeuge, Monatsübersicht und 30-Tage-Tagesverlauf).
+            </p>
         </section>
 
         <!-- KAPITEL 14 -->

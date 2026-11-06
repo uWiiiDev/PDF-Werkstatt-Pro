@@ -725,7 +725,13 @@ switch ($action) {
 
     case 'change_password':
         pdfstudio_require_csrf();
-        pdfstudio_check_rate_limit('change_password');
+        $rl = pdfstudio_check_rate_limit('change_password');
+        if (empty($rl['allowed'])) {
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => 'Zu viele Versuche. Bitte warten Sie ' . (int)$rl['retry_after'] . ' Sekunden.'
+            ), 429);
+        }
         $user = pdfstudio_require_login();
         $currentPassword = isset($_POST['current_password']) ? (string)$_POST['current_password'] : '';
         $newPassword = isset($_POST['new_password']) ? (string)$_POST['new_password'] : '';
@@ -783,7 +789,13 @@ switch ($action) {
 
     case 'delete_account':
         pdfstudio_require_csrf();
-        pdfstudio_check_rate_limit('delete_account');
+        $rl = pdfstudio_check_rate_limit('delete_account');
+        if (empty($rl['allowed'])) {
+            pdfstudio_json_response(array(
+                'ok' => false,
+                'error' => 'Zu viele Versuche. Bitte warten Sie ' . (int)$rl['retry_after'] . ' Sekunden.'
+            ), 429);
+        }
         $user = pdfstudio_require_login();
         $currentPassword = isset($_POST['current_password']) ? (string)$_POST['current_password'] : '';
 
@@ -1580,8 +1592,8 @@ switch ($action) {
     case 'track_event':
         pdfstudio_require_csrf();
         @session_write_close();
-        $evKey = isset($_POST['event_key']) ? trim((string)$_POST['event_key']) : '';
-        if ($evKey !== '') {
+        $evKey = isset($_POST['event_key']) ? preg_replace('/[^a-zA-Z0-9_]/', '', trim((string)$_POST['event_key'])) : '';
+        if ($evKey !== '' && strlen($evKey) <= 48) {
             pdfstudio_record_stat('tool', $evKey);
         }
         pdfstudio_json_response(array('ok' => true));

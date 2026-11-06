@@ -35,6 +35,10 @@ function pdfstudio_storage_guard_header()
 function pdfstudio_storage_fallback_path($path)
 {
     $baseName = basename((string)$path);
+    if (isset($GLOBALS['PDFSTUDIO_FALLBACK_DIR_CACHE'])) {
+        $cachedDir = $GLOBALS['PDFSTUDIO_FALLBACK_DIR_CACHE'];
+        return $cachedDir !== '' ? ($cachedDir . DIRECTORY_SEPARATOR . $baseName) : '';
+    }
     $instHash = substr(md5(defined('PDFSTUDIO_ROOT') ? PDFSTUDIO_ROOT : __DIR__), 0, 12);
     $candidates = array('/var/tmp', @sys_get_temp_dir());
     foreach ($candidates as $baseDir) {
@@ -45,10 +49,12 @@ function pdfstudio_storage_fallback_path($path)
                 @mkdir($dir, 0700, true);
             }
             if (@is_dir($dir) && @is_writable($dir)) {
+                $GLOBALS['PDFSTUDIO_FALLBACK_DIR_CACHE'] = $dir;
                 return $dir . DIRECTORY_SEPARATOR . $baseName;
             }
         }
     }
+    $GLOBALS['PDFSTUDIO_FALLBACK_DIR_CACHE'] = '';
     return '';
 }
 
@@ -284,13 +290,18 @@ function pdfstudio_storage_write($path, $content, $append = false)
  */
 function pdfstudio_get_encryption_key()
 {
+    if (isset($GLOBALS['PDFSTUDIO_ENC_KEY_CACHE']) && is_string($GLOBALS['PDFSTUDIO_ENC_KEY_CACHE']) && strlen($GLOBALS['PDFSTUDIO_ENC_KEY_CACHE']) === 32) {
+        return $GLOBALS['PDFSTUDIO_ENC_KEY_CACHE'];
+    }
     $raw = pdfstudio_storage_read(PDFSTUDIO_SECRET_KEY_FILE);
     $keyHex = $raw !== false ? trim((string)$raw) : '';
     if (strlen($keyHex) < 64) {
         $keyHex = pdfstudio_generate_token(32);
         pdfstudio_storage_write(PDFSTUDIO_SECRET_KEY_FILE, $keyHex);
     }
-    return hash('sha256', $keyHex . '|pdf-werkstatt-pro-key', true);
+    $derived = hash('sha256', $keyHex . '|pdf-werkstatt-pro-key', true);
+    $GLOBALS['PDFSTUDIO_ENC_KEY_CACHE'] = $derived;
+    return $derived;
 }
 
 /**
@@ -488,7 +499,7 @@ function pdfstudio_init_account_storage()
     if (!is_dir(PDFSTUDIO_PUBLIC_DIR)) {
         @mkdir(PDFSTUDIO_PUBLIC_DIR, 0700, true);
     }
-    // Automatically migrate any legacy unguarded .json/.txt/.log files in storage/ to .php-guarded files
+    // Automatically migrate any legacy unguarded .json/.txt/.log files in storage/ to .php-guarded files only when legacy file exists
     $guardedFiles = array(
         PDFSTUDIO_USERS_FILE,
         PDFSTUDIO_SHARES_FILE,
@@ -500,7 +511,10 @@ function pdfstudio_init_account_storage()
         PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'gatekeeper_users.json.php'
     );
     foreach ($guardedFiles as $gf) {
-        pdfstudio_storage_read($gf);
+        $legacyGf = preg_replace('/\.php$/', '', (string)$gf);
+        if ($legacyGf !== $gf && is_file($legacyGf)) {
+            pdfstudio_storage_read($gf);
+        }
     }
     if (!pdfstudio_storage_exists(PDFSTUDIO_USERS_FILE)) {
         pdfstudio_storage_write(PDFSTUDIO_USERS_FILE, json_encode(array('users' => array())));
@@ -1421,6 +1435,15 @@ function pdfstudio_record_stat($type, $eventKey = null)
         $stats['daily'] = array_slice($stats['daily'], -90, 90, true);
     }
 
+    // Performance optimization: For high-frequency events (pageview, help_view, tool),
+    // write JSON immediately and only run the full user-vault directory scan + text report rebuild at most once per 60s
+    $isLightweightEvent = ($type === 'pageview' || $type === 'help_view' || $type === 'tool');
+    if ($isLightweightEvent && is_file(PDFSTUDIO_STATS_TXT) && (time() - (int)@filemtime(PDFSTUDIO_STATS_TXT)) < 60) {
+        $flags = defined('JSON_PRETTY_PRINT') ? JSON_PRETTY_PRINT : 0;
+        pdfstudio_storage_write(PDFSTUDIO_STATS_JSON, json_encode($stats, $flags));
+        return;
+    }
+
     pdfstudio_save_stats_and_report($stats);
 }
 
@@ -1675,8 +1698,13 @@ function pdfstudio_get_default_admin_settings()
 /**
  * Load merged settings from config.php and storage/admin_settings.json.php into $GLOBALS['PDFSTUDIO_CONFIG']
  */
-function pdfstudio_load_admin_settings()
+function pdfstudio_load_admin_settings($forceReload = false)
 {
+    if (!$forceReload && isset($GLOBALS['PDFSTUDIO_ADMIN_SETTINGS_CACHE']) && is_array($GLOBALS['PDFSTUDIO_ADMIN_SETTINGS_CACHE'])) {
+        $GLOBALS['PDFSTUDIO_CONFIG'] = $GLOBALS['PDFSTUDIO_ADMIN_SETTINGS_CACHE'];
+        return $GLOBALS['PDFSTUDIO_ADMIN_SETTINGS_CACHE'];
+    }
+
     $defaults = pdfstudio_get_default_admin_settings();
     $baseCfg = isset($GLOBALS['PDFSTUDIO_BASE_CONFIG']) && is_array($GLOBALS['PDFSTUDIO_BASE_CONFIG'])
         ? $GLOBALS['PDFSTUDIO_BASE_CONFIG']
@@ -1733,6 +1761,7 @@ function pdfstudio_load_admin_settings()
     }
 
     $GLOBALS['PDFSTUDIO_CONFIG'] = $merged;
+    $GLOBALS['PDFSTUDIO_ADMIN_SETTINGS_CACHE'] = $merged;
 
     if ($needsEncryptMigration) {
         $toStore = $merged;
@@ -1753,7 +1782,7 @@ function pdfstudio_load_admin_settings()
  */
 function pdfstudio_save_admin_settings($newSettings)
 {
-    $current = pdfstudio_load_admin_settings();
+    $current = pdfstudio_load_admin_settings(true);
     $prevHash = isset($current['admin_password_hash']) ? (string)$current['admin_password_hash'] : '';
     if (is_array($newSettings)) {
         foreach ($newSettings as $k => $v) {
@@ -1795,6 +1824,7 @@ function pdfstudio_save_admin_settings($newSettings)
     }
 
     $GLOBALS['PDFSTUDIO_CONFIG'] = $current;
+    $GLOBALS['PDFSTUDIO_ADMIN_SETTINGS_CACHE'] = $current;
     return true;
 }
 

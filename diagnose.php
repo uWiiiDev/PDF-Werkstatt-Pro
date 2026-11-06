@@ -4,10 +4,14 @@
  * Rufen Sie diese Datei im Browser auf (z. B. http://ihr-server/diagnose.php),
  * um Dateirechte, PHP-Module und Apache-Einstellungen zu pruefen.
  */
-@ini_set('display_errors', '1');
-error_reporting(E_ALL);
+@ini_set('display_errors', '0');
+error_reporting(0);
 if (!headers_sent()) {
     header('Content-Type: text/html; charset=UTF-8');
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: SAMEORIGIN');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
 }
 
 $root = dirname(__FILE__);

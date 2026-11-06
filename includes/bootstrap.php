@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.4.4');
+define('PDFSTUDIO_VERSION', '1.4.5');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }
@@ -207,6 +207,7 @@ if (!headers_sent()) {
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+    header("Content-Security-Policy: default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: data:; worker-src 'self' blob:; frame-src 'self' blob: data:; frame-ancestors 'self'; object-src 'none'; base-uri 'self'");
 }
 
 $GLOBALS['PDFSTUDIO_CONFIG'] = array();
@@ -245,15 +246,6 @@ function pdfstudio_init_storage()
         @unlink($rootIndexHtml);
     }
 
-    // Ensure root and PHP entrypoints have world-readable permissions (0755/0644) for Apache/Nginx
-    @chmod(PDFSTUDIO_ROOT, 0755);
-    foreach (array('index.php', 'admin.php', 'api.php', 'hilfe.php', 'diagnose.php', 'config.php', '.htaccess') as $rootFile) {
-        $rfPath = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . $rootFile;
-        if (is_file($rfPath)) {
-            @chmod($rfPath, 0644);
-        }
-    }
-
     // Deny direct HTTP access to storage/ without using 'Options -Indexes' (which triggers HTTP 500 if AllowOverride Options is off)
     $htaccess = PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . '.htaccess';
     $rules = "<IfModule mod_authz_core.c>\n"
@@ -263,15 +255,26 @@ function pdfstudio_init_storage()
            . "    Order Allow,Deny\n"
            . "    Deny from all\n"
            . "</IfModule>\n";
-    @file_put_contents($htaccess, $rules);
+
+    // Only perform disk writes & chmod normalization when .htaccess is missing or outdated
+    if (!is_file($htaccess) || (int)@filesize($htaccess) !== strlen($rules)) {
+        @file_put_contents($htaccess, $rules);
+        @chmod(PDFSTUDIO_ROOT, 0755);
+        foreach (array('index.php', 'admin.php', 'api.php', 'hilfe.php', 'diagnose.php', 'config.php', '.htaccess') as $rootFile) {
+            $rfPath = PDFSTUDIO_ROOT . DIRECTORY_SEPARATOR . $rootFile;
+            if (is_file($rfPath)) {
+                @chmod($rfPath, 0644);
+            }
+        }
+    }
 
     $incIndex = __DIR__ . DIRECTORY_SEPARATOR . 'index.html';
-    if (!file_exists($incIndex)) {
+    if (!is_file($incIndex)) {
         @file_put_contents($incIndex, '<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body></body></html>');
     }
 
     $indexFile = PDFSTUDIO_STORAGE . DIRECTORY_SEPARATOR . 'index.html';
-    if (!file_exists($indexFile)) {
+    if (!is_file($indexFile)) {
         @file_put_contents($indexFile, '<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body></body></html>');
     }
 }
