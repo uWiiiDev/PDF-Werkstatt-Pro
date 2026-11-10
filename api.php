@@ -1589,6 +1589,145 @@ switch ($action) {
         }
         break;
 
+    case 'generate_p12_cert':
+        pdfstudio_require_csrf();
+        @session_write_close();
+        $cn       = isset($_POST['cn']) ? trim((string)$_POST['cn']) : '';
+        $org      = isset($_POST['org']) ? trim((string)$_POST['org']) : '';
+        $ou       = isset($_POST['ou']) ? trim((string)$_POST['ou']) : '';
+        $email    = isset($_POST['email']) ? trim((string)$_POST['email']) : '';
+        $country  = isset($_POST['country']) ? trim((string)$_POST['country']) : 'DE';
+        $days     = isset($_POST['days']) ? (int)$_POST['days'] : 1095;
+        $password = isset($_POST['password']) ? (string)$_POST['password'] : '';
+
+        if (strlen($password) < 4) {
+            pdfstudio_json_response(array(
+                'ok'    => false,
+                'error' => 'Bitte vergeben Sie ein Zertifikats-Passwort mit mindestens 4 Zeichen zum Schutz Ihres privaten Schlüssels.'
+            ), 400);
+        }
+
+        $res = pdfstudio_generate_p12_certificate(array(
+            'cn'       => $cn,
+            'org'      => $org,
+            'ou'       => $ou,
+            'email'    => $email,
+            'country'  => $country,
+            'days'     => $days,
+            'password' => $password
+        ));
+
+        if (empty($res['ok']) || empty($res['p12_raw'])) {
+            pdfstudio_json_response(array(
+                'ok'    => false,
+                'error' => !empty($res['error']) ? $res['error'] : 'PKCS#12-Zertifikat (.p12) konnte nicht erstellt werden.'
+            ), 400);
+        }
+
+        $safeSlug = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $cn);
+        if ($safeSlug === '') {
+            $safeSlug = 'Signatur_Zertifikat';
+        }
+
+        pdfstudio_json_response(array(
+            'ok'         => true,
+            'p12_base64' => base64_encode($res['p12_raw']),
+            'filename'   => $safeSlug . '.p12',
+            'meta'       => $res['meta']
+        ));
+        break;
+
+    case 'sign_pdf_cert':
+        pdfstudio_require_csrf();
+        @session_write_close();
+
+        $pdfBytes = '';
+        if (isset($_FILES['pdf_file']) && isset($_FILES['pdf_file']['tmp_name']) && is_uploaded_file($_FILES['pdf_file']['tmp_name'])) {
+            $pdfBytes = (string)@file_get_contents($_FILES['pdf_file']['tmp_name']);
+        } elseif (!empty($_POST['pdf_base64'])) {
+            $dec = @base64_decode((string)$_POST['pdf_base64'], true);
+            if ($dec !== false) {
+                $pdfBytes = $dec;
+            }
+        }
+
+        if (strlen($pdfBytes) < 64 || strncmp($pdfBytes, '%PDF-', 5) !== 0) {
+            pdfstudio_json_response(array('ok' => false, 'error' => 'Ungültige oder fehlende PDF-Daten zum Signieren.'), 400);
+        }
+
+        $certMode = isset($_POST['cert_mode']) ? trim((string)$_POST['cert_mode']) : 'quick';
+        $p12Bytes = '';
+        if ($certMode === 'p12') {
+            if (isset($_FILES['p12_file']) && isset($_FILES['p12_file']['tmp_name']) && is_uploaded_file($_FILES['p12_file']['tmp_name'])) {
+                $p12Bytes = (string)@file_get_contents($_FILES['p12_file']['tmp_name']);
+            } elseif (!empty($_POST['p12_base64'])) {
+                $decP12 = @base64_decode((string)$_POST['p12_base64'], true);
+                if ($decP12 !== false) {
+                    $p12Bytes = $decP12;
+                }
+            }
+        }
+
+        $signRes = pdfstudio_sign_pdf_pkcs7($pdfBytes, array(
+            'cert_mode'    => $certMode,
+            'p12_bytes'    => $p12Bytes,
+            'p12_password' => isset($_POST['p12_password']) ? (string)$_POST['p12_password'] : '',
+            'cn'           => isset($_POST['cn']) ? trim((string)$_POST['cn']) : '',
+            'org'          => isset($_POST['org']) ? trim((string)$_POST['org']) : '',
+            'ou'           => isset($_POST['ou']) ? trim((string)$_POST['ou']) : '',
+            'email'        => isset($_POST['email']) ? trim((string)$_POST['email']) : '',
+            'country'      => isset($_POST['country']) ? trim((string)$_POST['country']) : 'DE',
+            'days'         => isset($_POST['days']) ? (int)$_POST['days'] : 1095,
+            'export_p12'   => !empty($_POST['export_p12'])
+        ));
+
+        if (empty($signRes['ok'])) {
+            pdfstudio_json_response(array(
+                'ok'    => false,
+                'error' => !empty($signRes['error']) ? $signRes['error'] : 'Kryptografische PDF-Signierung fehlgeschlagen.'
+            ), 400);
+        }
+
+        pdfstudio_record_stat('tool', 'digital_cert_signed');
+
+        $resp = array(
+            'ok'                => true,
+            'signed_pdf_base64' => base64_encode($signRes['signed_pdf']),
+            'cert_meta'         => $signRes['cert_meta'],
+            'byte_range'        => $signRes['byte_range'],
+            'sig_der_size'      => $signRes['sig_der_size']
+        );
+        if (!empty($signRes['p12_raw'])) {
+            $resp['p12_base64'] = base64_encode($signRes['p12_raw']);
+        }
+        pdfstudio_json_response($resp);
+        break;
+
+    case 'verify_pdf_cert':
+        pdfstudio_require_csrf();
+        @session_write_close();
+
+        $pdfBytes = '';
+        if (isset($_FILES['pdf_file']) && isset($_FILES['pdf_file']['tmp_name']) && is_uploaded_file($_FILES['pdf_file']['tmp_name'])) {
+            $pdfBytes = (string)@file_get_contents($_FILES['pdf_file']['tmp_name']);
+        } elseif (!empty($_POST['pdf_base64'])) {
+            $dec = @base64_decode((string)$_POST['pdf_base64'], true);
+            if ($dec !== false) {
+                $pdfBytes = $dec;
+            }
+        }
+
+        $verRes = pdfstudio_verify_pdf_signatures($pdfBytes);
+        if (empty($verRes['ok'])) {
+            pdfstudio_json_response(array(
+                'ok'    => false,
+                'error' => !empty($verRes['error']) ? $verRes['error'] : 'PDF-Signaturprüfung fehlgeschlagen.'
+            ), 400);
+        }
+
+        pdfstudio_json_response($verRes);
+        break;
+
     case 'track_event':
         pdfstudio_require_csrf();
         @session_write_close();

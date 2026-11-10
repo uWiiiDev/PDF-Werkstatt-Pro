@@ -1297,6 +1297,7 @@ function pdfstudio_get_stat_event_labels()
         'a11y_checked'        => 'Barrierefreiheits-Pruefung (PDF/UA & BITV)',
         'a11y_autofix'        => 'Barrierefreiheit Auto-Fix (PDF/UA Reparatur)',
         'signature_applied'   => 'Unterschrift / Signatur eingefuegt',
+        'digital_cert_signed' => 'Kryptografische Zertifikats-Signatur (PKCS#7 / PAdES)',
         'redaction_sanitized' => 'Sicher geschwaerzt (Sanitize)',
         'bates_header_footer' => 'Bates-Nummerierung / Kopf- & Fusszeilen',
         'pdf_compared'        => 'PDF-Vergleich (Visueller & Text-Diff)',
@@ -3011,4 +3012,675 @@ function pdfstudio_github_perform_update($settings = null)
         'updated_at'     => $nowStr
     );
 }
+
+// ============================================================================
+// CRYPTOGRAPHIC DIGITAL PDF SIGNATURES (PKCS#7 / CMS / PAdES & .P12 GENERATOR)
+// Compatible with Adobe Acrobat Reader, Foxit, Okular, pdfsig (PHP 5.4 - 8.4+)
+// ============================================================================
+
+/**
+ * Helper: Read ASN.1 DER length field at $offset and advance $offset
+ */
+function pdfstudio_asn1_read_len($bin, &$offset)
+{
+    $len = strlen($bin);
+    if ($offset >= $len) {
+        return 0;
+    }
+    $b = ord($bin[$offset++]);
+    if ($b < 0x80) {
+        return $b;
+    }
+    $numBytes = $b & 0x7F;
+    if ($numBytes === 0 || ($offset + $numBytes) > $len) {
+        return 0;
+    }
+    $val = 0;
+    for ($i = 0; $i < $numBytes; $i++) {
+        $val = ($val << 8) | ord($bin[$offset++]);
+    }
+    return $val;
+}
+
+/**
+ * Helper: Create a temporary minimal openssl.cnf if the server lacks a default OpenSSL config
+ */
+function pdfstudio_get_openssl_config_args($bits = 2048)
+{
+    $args = array(
+        'private_key_bits' => (int)$bits,
+        'private_key_type' => defined('OPENSSL_KEYTYPE_RSA') ? OPENSSL_KEYTYPE_RSA : 0,
+        'digest_alg'       => 'sha256'
+    );
+    $candidates = array(
+        '/etc/ssl/openssl.cnf',
+        '/etc/pki/tls/openssl.cnf',
+        '/usr/lib/ssl/openssl.cnf'
+    );
+    foreach ($candidates as $c) {
+        if (@is_file($c) && @is_readable($c)) {
+            $args['config'] = $c;
+            return $args;
+        }
+    }
+    $tmpCnf = @sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pdfstudio_openssl.cnf';
+    if (!@is_file($tmpCnf)) {
+        $cnfText = "[ req ]\ndefault_bits = 2048\ndistinguished_name = req_distinguished_name\nstring_mask = utf8only\n\n[ req_distinguished_name ]\n\n[ v3_ca ]\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature\n";
+        @file_put_contents($tmpCnf, $cnfText);
+    }
+    if (@is_file($tmpCnf)) {
+        $args['config'] = $tmpCnf;
+    }
+    return $args;
+}
+
+/**
+ * Extract structured certificate metadata from PEM string or X.509 resource
+ */
+function pdfstudio_extract_x509_meta($certPem)
+{
+    $info = @openssl_x509_parse($certPem);
+    if (!is_array($info)) {
+        return array(
+            'cn'                 => 'Unbekannt',
+            'org'                => '',
+            'ou'                 => '',
+            'email'              => '',
+            'country'            => 'DE',
+            'issuer_cn'          => 'Selbstsigniert',
+            'issuer_org'         => '',
+            'serial'             => '',
+            'valid_from'         => '',
+            'valid_to'           => '',
+            'is_expired'         => false,
+            'fingerprint_sha256' => ''
+        );
+    }
+
+    $subj = isset($info['subject']) && is_array($info['subject']) ? $info['subject'] : array();
+    $iss  = isset($info['issuer']) && is_array($info['issuer']) ? $info['issuer'] : array();
+
+    $cn      = isset($subj['CN']) ? (is_array($subj['CN']) ? reset($subj['CN']) : (string)$subj['CN']) : 'Unbekannt';
+    $org     = isset($subj['O']) ? (is_array($subj['O']) ? reset($subj['O']) : (string)$subj['O']) : '';
+    $ou      = isset($subj['OU']) ? (is_array($subj['OU']) ? reset($subj['OU']) : (string)$subj['OU']) : '';
+    $email   = isset($subj['emailAddress']) ? (is_array($subj['emailAddress']) ? reset($subj['emailAddress']) : (string)$subj['emailAddress']) : '';
+    $country = isset($subj['C']) ? (is_array($subj['C']) ? reset($subj['C']) : (string)$subj['C']) : 'DE';
+
+    $issuerCn  = isset($iss['CN']) ? (is_array($iss['CN']) ? reset($iss['CN']) : (string)$iss['CN']) : $cn;
+    $issuerOrg = isset($iss['O']) ? (is_array($iss['O']) ? reset($iss['O']) : (string)$iss['O']) : $org;
+
+    $validFromTs = isset($info['validFrom_time_t']) ? (int)$info['validFrom_time_t'] : 0;
+    $validToTs   = isset($info['validTo_time_t']) ? (int)$info['validTo_time_t'] : 0;
+
+    $fp = '';
+    if (function_exists('openssl_x509_fingerprint')) {
+        $fpRaw = @openssl_x509_fingerprint($certPem, 'sha256');
+        if ($fpRaw) {
+            $fp = strtoupper(implode(':', str_split($fpRaw, 2)));
+        }
+    }
+    if ($fp === '') {
+        $b64 = preg_replace('/-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s+/', '', (string)$certPem);
+        $der = @base64_decode($b64);
+        if ($der !== false && strlen($der) > 0) {
+            $fp = strtoupper(implode(':', str_split(hash('sha256', $der), 2)));
+        }
+    }
+
+    $serial = '';
+    if (!empty($info['serialNumberHex'])) {
+        $serial = strtoupper((string)$info['serialNumberHex']);
+    } elseif (isset($info['serialNumber'])) {
+        $serial = (string)$info['serialNumber'];
+    }
+
+    return array(
+        'cn'                 => $cn,
+        'org'                => $org,
+        'ou'                 => $ou,
+        'email'              => $email,
+        'country'            => $country,
+        'issuer_cn'          => $issuerCn,
+        'issuer_org'         => $issuerOrg,
+        'serial'             => $serial,
+        'valid_from'         => $validFromTs > 0 ? date('d.m.Y H:i', $validFromTs) : '',
+        'valid_to'           => $validToTs > 0 ? date('d.m.Y H:i', $validToTs) : '',
+        'is_expired'         => ($validToTs > 0 && time() > $validToTs),
+        'fingerprint_sha256' => $fp
+    );
+}
+
+/**
+ * Generate a new RSA-2048 X.509 certificate and export as PKCS#12 (.p12) + PEM pair
+ */
+function pdfstudio_generate_p12_certificate($params)
+{
+    if (!function_exists('openssl_pkey_new') || !function_exists('openssl_csr_new') || !function_exists('openssl_csr_sign')) {
+        return array(
+            'ok'    => false,
+            'error' => 'Die PHP-OpenSSL-Erweiterung ist auf diesem Server nicht aktiviert.'
+        );
+    }
+
+    $cn       = isset($params['cn']) ? trim((string)$params['cn']) : '';
+    $org      = isset($params['org']) ? trim((string)$params['org']) : '';
+    $ou       = isset($params['ou']) ? trim((string)$params['ou']) : '';
+    $email    = isset($params['email']) ? trim((string)$params['email']) : '';
+    $country  = isset($params['country']) ? strtoupper(substr(preg_replace('/[^A-Za-z]/', '', (string)$params['country']), 0, 2)) : 'DE';
+    $days     = isset($params['days']) ? max(30, min(3650, (int)$params['days'])) : 1095;
+    $password = isset($params['password']) ? (string)$params['password'] : '';
+
+    if ($cn === '') {
+        return array('ok' => false, 'error' => 'Bitte geben Sie den Namen des Unterzeichners (Common Name / CN) an.');
+    }
+    if (strlen($country) !== 2) {
+        $country = 'DE';
+    }
+
+    $dn = array(
+        'countryName' => $country,
+        'commonName'  => $cn
+    );
+    if ($org !== '') {
+        $dn['organizationName'] = $org;
+    }
+    if ($ou !== '') {
+        $dn['organizationalUnitName'] = $ou;
+    }
+    if ($email !== '') {
+        $dn['emailAddress'] = $email;
+    }
+
+    $cfgArgs = pdfstudio_get_openssl_config_args(2048);
+    $privKey = @openssl_pkey_new($cfgArgs);
+    if (!$privKey) {
+        unset($cfgArgs['config']);
+        $privKey = @openssl_pkey_new($cfgArgs);
+    }
+    if (!$privKey) {
+        return array('ok' => false, 'error' => 'RSA-2048-Schlüsselpaar konnte über OpenSSL nicht erzeugt werden.');
+    }
+
+    $csr = @openssl_csr_new($dn, $privKey, $cfgArgs);
+    if (!$csr) {
+        unset($cfgArgs['config']);
+        $csr = @openssl_csr_new($dn, $privKey, $cfgArgs);
+    }
+    if (!$csr) {
+        return array('ok' => false, 'error' => 'Zertifikatsanforderung (CSR) konnte nicht erstellt werden.');
+    }
+
+    $serial = (int)(mt_rand(100000, 999999999));
+    $cert = @openssl_csr_sign($csr, null, $privKey, $days, $cfgArgs, $serial);
+    if (!$cert) {
+        unset($cfgArgs['config']);
+        $cert = @openssl_csr_sign($csr, null, $privKey, $days, $cfgArgs, $serial);
+    }
+    if (!$cert) {
+        return array('ok' => false, 'error' => 'X.509-Zertifikat konnte nicht signiert werden.');
+    }
+
+    $certPem = '';
+    $pkeyPem = '';
+    @openssl_x509_export($cert, $certPem);
+    @openssl_pkey_export($privKey, $pkeyPem, null, $cfgArgs);
+    if ($pkeyPem === '') {
+        unset($cfgArgs['config']);
+        @openssl_pkey_export($privKey, $pkeyPem);
+    }
+
+    $p12Bytes = '';
+    if (function_exists('openssl_pkcs12_export')) {
+        @openssl_pkcs12_export($cert, $p12Bytes, $privKey, $password);
+    }
+
+    $meta = pdfstudio_extract_x509_meta($certPem);
+
+    return array(
+        'ok'       => true,
+        'cert_pem' => $certPem,
+        'pkey_pem' => $pkeyPem,
+        'p12_raw'  => $p12Bytes,
+        'meta'     => $meta
+    );
+}
+
+/**
+ * Cryptographically sign a prepared PDF containing a /Sig dictionary with /ByteRange and /Contents placeholders
+ */
+function pdfstudio_sign_pdf_pkcs7($pdfBytes, $options)
+{
+    if (!function_exists('openssl_pkcs7_sign')) {
+        return array('ok' => false, 'error' => 'PHP OpenSSL PKCS#7-Signaturmodul ist nicht verfügbar.');
+    }
+    if (strlen($pdfBytes) < 64 || strncmp($pdfBytes, '%PDF-', 5) !== 0) {
+        return array('ok' => false, 'error' => 'Ungültige PDF-Binärdaten zum Signieren.');
+    }
+
+    $certMode = isset($options['cert_mode']) ? (string)$options['cert_mode'] : 'quick';
+    $certPem  = '';
+    $pkeyPem  = '';
+    $extraCerts = array();
+    $generatedP12Raw = '';
+    $certMeta = array();
+
+    if ($certMode === 'p12') {
+        $p12Raw  = isset($options['p12_bytes']) ? (string)$options['p12_bytes'] : '';
+        $p12Pass = isset($options['p12_password']) ? (string)$options['p12_password'] : '';
+        if (strlen($p12Raw) < 16) {
+            return array('ok' => false, 'error' => 'Bitte wählen Sie eine gültige .p12- oder .pfx-Zertifikatsdatei aus.');
+        }
+        $certs = array();
+        if (!@openssl_pkcs12_read($p12Raw, $certs, $p12Pass)) {
+            return array('ok' => false, 'error' => 'Das .p12/.pfx-Zertifikat konnte nicht entschlüsselt werden. Bitte prüfen Sie das eingegebene Zertifikats-Passwort.');
+        }
+        $certPem = isset($certs['cert']) ? (string)$certs['cert'] : '';
+        $pkeyPem = isset($certs['pkey']) ? (string)$certs['pkey'] : '';
+        if (!empty($certs['extracerts']) && is_array($certs['extracerts'])) {
+            $extraCerts = $certs['extracerts'];
+        }
+        if ($certPem === '' || $pkeyPem === '') {
+            return array('ok' => false, 'error' => 'Die Zertifikatsdatei enthält keinen gültigen privaten Schlüssel.');
+        }
+        $certMeta = pdfstudio_extract_x509_meta($certPem);
+    } else {
+        $genRes = pdfstudio_generate_p12_certificate(array(
+            'cn'       => isset($options['cn']) ? $options['cn'] : '',
+            'org'      => isset($options['org']) ? $options['org'] : '',
+            'ou'       => isset($options['ou']) ? $options['ou'] : '',
+            'email'    => isset($options['email']) ? $options['email'] : '',
+            'country'  => isset($options['country']) ? $options['country'] : 'DE',
+            'days'     => isset($options['days']) ? (int)$options['days'] : 1095,
+            'password' => isset($options['p12_password']) ? (string)$options['p12_password'] : ''
+        ));
+        if (empty($genRes['ok'])) {
+            return $genRes;
+        }
+        $certPem = $genRes['cert_pem'];
+        $pkeyPem = $genRes['pkey_pem'];
+        $certMeta = $genRes['meta'];
+        if (!empty($options['export_p12']) && !empty($genRes['p12_raw'])) {
+            $generatedP12Raw = $genRes['p12_raw'];
+        }
+    }
+
+    // Locate the /ByteRange placeholder and /Contents <0000...> placeholder in the prepared PDF
+    if (!preg_match('/\/ByteRange\s*\[\s*0\s+1000000000\s+1000000000\s+1000000000\s*\]/', $pdfBytes, $brMatch, PREG_OFFSET_CAPTURE)) {
+        return array('ok' => false, 'error' => 'Kein vorbereiteter Signatur-Platzhalter (/ByteRange) im PDF gefunden.');
+    }
+    $brPlaceholderStr = $brMatch[0][0];
+    $brPlaceholderPos = (int)$brMatch[0][1];
+
+    // Search for /Contents <00000...> near the /ByteRange placeholder
+    $searchStart = max(0, $brPlaceholderPos - 2048);
+    if (!preg_match('/\/Contents\s*<(0{4096,})>/', $pdfBytes, $ctMatch, PREG_OFFSET_CAPTURE, $searchStart)) {
+        return array('ok' => false, 'error' => 'Kein vorbereiteter /Contents-Hex-Platzhalter im PDF gefunden.');
+    }
+
+    $hexPlaceholder = $ctMatch[1][0];
+    $hexLen = strlen($hexPlaceholder);
+    // $ctMatch[1][1] is the index of the first '0' right after '<'
+    $ltPos = (int)$ctMatch[1][1] - 1; // position of '<'
+    $gtPos = (int)$ctMatch[1][1] + $hexLen + 1; // position right after '>'
+
+    $len1 = $ltPos;
+    $off2 = $gtPos;
+    $len2 = strlen($pdfBytes) - $off2;
+
+    $brReplacement = sprintf('/ByteRange [ 0 %d %d %d ]', $len1, $off2, $len2);
+    if (strlen($brReplacement) > strlen($brPlaceholderStr)) {
+        $brReplacement = sprintf('/ByteRange [0 %d %d %d]', $len1, $off2, $len2);
+    }
+    $brPadded = str_pad($brReplacement, strlen($brPlaceholderStr), ' ', STR_PAD_RIGHT);
+
+    // Replace the /ByteRange placeholder in-place without changing a single byte offset
+    $pdfBytes = substr($pdfBytes, 0, $brPlaceholderPos) . $brPadded . substr($pdfBytes, $brPlaceholderPos + strlen($brPlaceholderStr));
+
+    // Extract the exact byte ranges to be signed
+    $dataToSign = substr($pdfBytes, 0, $len1) . substr($pdfBytes, $off2, $len2);
+
+    $inFile   = tempnam(sys_get_temp_dir(), 'pdfsig_in_');
+    $outFile  = tempnam(sys_get_temp_dir(), 'pdfsig_out_');
+    $extraFile = '';
+    @file_put_contents($inFile, $dataToSign);
+
+    $flags = PKCS7_DETACHED | PKCS7_BINARY;
+    $signOk = false;
+    if (!empty($extraCerts)) {
+        $extraFile = tempnam(sys_get_temp_dir(), 'pdfsig_ca_');
+        @file_put_contents($extraFile, implode("\n", $extraCerts));
+        $signOk = @openssl_pkcs7_sign($inFile, $outFile, $certPem, $pkeyPem, array(), $flags, $extraFile);
+    } else {
+        $signOk = @openssl_pkcs7_sign($inFile, $outFile, $certPem, $pkeyPem, array(), $flags);
+    }
+
+    $mimeOut = $signOk ? (string)@file_get_contents($outFile) : '';
+    @unlink($inFile);
+    @unlink($outFile);
+    if ($extraFile !== '') {
+        @unlink($extraFile);
+    }
+
+    if (!$signOk || $mimeOut === '') {
+        return array('ok' => false, 'error' => 'Kryptografische PKCS#7-Signatur konnte nicht berechnet werden.');
+    }
+
+    if (!preg_match('/Content-Disposition:[^\r\n]*\r?\n\r?\n([A-Za-z0-9+\/=\r\n]+)\r?\n--/s', $mimeOut, $mDer)) {
+        return array('ok' => false, 'error' => 'PKCS#7-DER-Block konnte aus der OpenSSL-Ausgabe nicht extrahiert werden.');
+    }
+
+    $derBinary = @base64_decode(preg_replace('/\s+/', '', $mDer[1]));
+    if ($derBinary === false || strlen($derBinary) < 128) {
+        return array('ok' => false, 'error' => 'Ungültiger PKCS#7-DER-Signaturblock.');
+    }
+
+    $derHex = strtoupper(bin2hex($derBinary));
+    if (strlen($derHex) > $hexLen) {
+        return array('ok' => false, 'error' => 'Das Zertifikat inkl. Signaturkette ist größer als der reservierte PDF-Signaturplatzhalter.');
+    }
+
+    $paddedHex = str_pad($derHex, $hexLen, '0', STR_PAD_RIGHT);
+    $signedPdf = substr($pdfBytes, 0, $ltPos + 1) . $paddedHex . substr($pdfBytes, $gtPos - 1);
+
+    return array(
+        'ok'           => true,
+        'signed_pdf'   => $signedPdf,
+        'cert_meta'    => $certMeta,
+        'p12_raw'      => $generatedP12Raw,
+        'byte_range'   => array(0, $len1, $off2, $len2),
+        'sig_der_size' => strlen($derBinary)
+    );
+}
+
+/**
+ * Decode a PDF literal or UTF-16BE string value from a /Sig dictionary
+ */
+function pdfstudio_decode_pdf_sig_string($str)
+{
+    $str = (string)$str;
+    $str = str_replace(array('\\(', '\\)', '\\\\', '\\r', '\\n'), array('(', ')', '\\', "\r", "\n"), $str);
+    if (strncmp($str, "\xFE\xFF", 2) === 0 && function_exists('mb_convert_encoding')) {
+        return @mb_convert_encoding(substr($str, 2), 'UTF-8', 'UTF-16BE');
+    }
+    return $str;
+}
+
+/**
+ * Inspect and cryptographically verify all digital PKCS#7 / CMS / PAdES signatures inside a PDF binary
+ */
+function pdfstudio_verify_pdf_signatures($pdfBytes)
+{
+    $pdfLen = strlen($pdfBytes);
+    if ($pdfLen < 64 || strncmp($pdfBytes, '%PDF-', 5) !== 0) {
+        return array('ok' => false, 'error' => 'Keine gültige PDF-Datei übergeben.');
+    }
+
+    $signatures = array();
+    if (!preg_match_all('/\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/', $pdfBytes, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+        return array(
+            'ok'         => true,
+            'signed'     => false,
+            'count'      => 0,
+            'signatures' => array()
+        );
+    }
+
+    foreach ($matches as $idx => $m) {
+        $brPos = (int)$m[0][1];
+        $o1 = (int)$m[1][0];
+        $l1 = (int)$m[2][0];
+        $o2 = (int)$m[3][0];
+        $l2 = (int)$m[4][0];
+
+        // Extract surrounding dictionary context for /Name, /Reason, /Location, /M, /SubFilter
+        $ctxStart = max(0, $brPos - 1500);
+        $ctxSnippet = substr($pdfBytes, $ctxStart, 3000);
+
+        $sigName = '';
+        $sigReason = '';
+        $sigLocation = '';
+        $sigDate = '';
+        $subFilter = 'adbe.pkcs7.detached';
+
+        if (preg_match('/\/Name\s*\(([^\)\\\\]*(?:\\\\.[^\)\\\\]*)*)\)/s', $ctxSnippet, $nm)) {
+            $sigName = pdfstudio_decode_pdf_sig_string($nm[1]);
+        }
+        if (preg_match('/\/Reason\s*\(([^\)\\\\]*(?:\\\\.[^\)\\\\]*)*)\)/s', $ctxSnippet, $rm)) {
+            $sigReason = pdfstudio_decode_pdf_sig_string($rm[1]);
+        }
+        if (preg_match('/\/Location\s*\(([^\)\\\\]*(?:\\\\.[^\)\\\\]*)*)\)/s', $ctxSnippet, $lm)) {
+            $sigLocation = pdfstudio_decode_pdf_sig_string($lm[1]);
+        }
+        if (preg_match('/\/SubFilter\s*\/([A-Za-z0-9\._\-]+)/', $ctxSnippet, $sfm)) {
+            $subFilter = $sfm[1];
+        }
+        if (preg_match('/\/M\s*\(D:(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/', $ctxSnippet, $dm)) {
+            $sigDate = $dm[3] . '.' . $dm[2] . '.' . $dm[1] . ' ' . $dm[4] . ':' . $dm[5] . ':' . $dm[6];
+        }
+
+        // Validate byte range boundaries
+        $rangeValid = ($o1 === 0 && $l1 > 0 && $o2 > $l1 && $l2 > 0 && ($o2 + $l2) <= $pdfLen);
+        $trailingBytes = $pdfLen - ($o2 + $l2);
+        $coversWholeDoc = $rangeValid && ($trailingBytes === 0 || trim(substr($pdfBytes, $o2 + $l2)) === '');
+
+        $hashValid = false;
+        $cryptoValid = false;
+        $hashAlgo = 'SHA-256';
+        $certMeta = array(
+            'cn'                 => $sigName !== '' ? $sigName : 'Unbekannt',
+            'org'                => '',
+            'ou'                 => '',
+            'email'              => '',
+            'country'            => '',
+            'issuer_cn'          => '',
+            'issuer_org'         => '',
+            'serial'             => '',
+            'valid_from'         => '',
+            'valid_to'           => '',
+            'is_expired'         => false,
+            'fingerprint_sha256' => ''
+        );
+
+        if ($rangeValid) {
+            $signedData = substr($pdfBytes, $o1, $l1) . substr($pdfBytes, $o2, $l2);
+            $rawBetween = substr($pdfBytes, $o1 + $l1, $o2 - ($o1 + $l1));
+            $hexClean = preg_replace('/[^0-9A-Fa-f]/', '', $rawBetween);
+            if (strlen($hexClean) % 2 !== 0) {
+                $hexClean = substr($hexClean, 0, -1);
+            }
+            $der = @pack('H*', $hexClean);
+
+            if ($der !== false && strlen($der) > 64 && ord($der[0]) === 0x30) {
+                $tmpOff = 1;
+                $seqBodyLen = pdfstudio_asn1_read_len($der, $tmpOff);
+                $totalDerLen = $tmpOff + $seqBodyLen;
+                if ($totalDerLen > 0 && $totalDerLen <= strlen($der)) {
+                    $der = substr($der, 0, $totalDerLen);
+                }
+
+                // 1. Verify messageDigest attribute (OID 1.2.840.113549.1.9.4 = 06 09 2a 86 48 86 f7 0d 01 09 04)
+                $oidMsgDigest = "\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x09\x04";
+                $posOid = strpos($der, $oidMsgDigest);
+                if ($posOid !== false) {
+                    $p = $posOid + strlen($oidMsgDigest);
+                    if ($p < strlen($der) && ord($der[$p]) === 0x31) {
+                        $p++;
+                        pdfstudio_asn1_read_len($der, $p);
+                        if ($p < strlen($der) && ord($der[$p]) === 0x04) {
+                            $p++;
+                            $hLen = pdfstudio_asn1_read_len($der, $p);
+                            $embeddedHash = substr($der, $p, $hLen);
+                            if ($hLen === 32) {
+                                $hashAlgo = 'SHA-256';
+                                $calcHash = hash('sha256', $signedData, true);
+                                $hashValid = pdfstudio_safe_equals($embeddedHash, $calcHash);
+                            } elseif ($hLen === 20) {
+                                $hashAlgo = 'SHA-1';
+                                $calcHash = sha1($signedData, true);
+                                $hashValid = pdfstudio_safe_equals($embeddedHash, $calcHash);
+                            } elseif ($hLen === 48) {
+                                $hashAlgo = 'SHA-384';
+                                $calcHash = hash('sha384', $signedData, true);
+                                $hashValid = pdfstudio_safe_equals($embeddedHash, $calcHash);
+                            } elseif ($hLen === 64) {
+                                $hashAlgo = 'SHA-512';
+                                $calcHash = hash('sha512', $signedData, true);
+                                $hashValid = pdfstudio_safe_equals($embeddedHash, $calcHash);
+                            }
+                        }
+                    }
+                }
+
+                // 2. Walk PKCS#7 SignedData ASN.1 structure to extract X.509 Certificate & verify RSA signature
+                $off = 0;
+                $pemCert = '';
+                if (ord($der[$off++]) === 0x30) {
+                    pdfstudio_asn1_read_len($der, $off);
+                    if ($off < strlen($der) && ord($der[$off++]) === 0x06) {
+                        $l = pdfstudio_asn1_read_len($der, $off);
+                        $off += $l;
+                    }
+                    if ($off < strlen($der) && ord($der[$off++]) === 0xA0) {
+                        pdfstudio_asn1_read_len($der, $off);
+                        if ($off < strlen($der) && ord($der[$off++]) === 0x30) {
+                            pdfstudio_asn1_read_len($der, $off);
+                            // version INTEGER
+                            if ($off < strlen($der) && ord($der[$off++]) === 0x02) {
+                                $l = pdfstudio_asn1_read_len($der, $off);
+                                $off += $l;
+                            }
+                            // digestAlgorithms SET
+                            if ($off < strlen($der) && ord($der[$off++]) === 0x31) {
+                                $l = pdfstudio_asn1_read_len($der, $off);
+                                $off += $l;
+                            }
+                            // encapContentInfo SEQUENCE
+                            if ($off < strlen($der) && ord($der[$off++]) === 0x30) {
+                                $l = pdfstudio_asn1_read_len($der, $off);
+                                $off += $l;
+                            }
+                            // [0] IMPLICIT Certificates (0xA0)
+                            if ($off < strlen($der) && ord($der[$off]) === 0xA0) {
+                                $off++;
+                                $certsLen = pdfstudio_asn1_read_len($der, $off);
+                                $certStart = $off;
+                                if ($off < strlen($der) && ord($der[$off]) === 0x30) {
+                                    $off++;
+                                    $cLen = pdfstudio_asn1_read_len($der, $off);
+                                    $certDer = substr($der, $certStart, ($off - $certStart) + $cLen);
+                                    $pemCert = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($certDer), 64, "\n") . "-----END CERTIFICATE-----\n";
+                                    $certMeta = pdfstudio_extract_x509_meta($pemCert);
+                                }
+                                $off = $certStart + $certsLen;
+                            }
+                            // Optional [1] CRLs
+                            if ($off < strlen($der) && ord($der[$off]) === 0xA1) {
+                                $off++;
+                                $l = pdfstudio_asn1_read_len($der, $off);
+                                $off += $l;
+                            }
+                            // SignerInfos SET (0x31) -> SignerInfo SEQUENCE (0x30)
+                            if ($off < strlen($der) && ord($der[$off++]) === 0x31) {
+                                pdfstudio_asn1_read_len($der, $off);
+                                if ($off < strlen($der) && ord($der[$off++]) === 0x30) {
+                                    pdfstudio_asn1_read_len($der, $off);
+                                    // version
+                                    if ($off < strlen($der) && ord($der[$off++]) === 0x02) {
+                                        $l = pdfstudio_asn1_read_len($der, $off);
+                                        $off += $l;
+                                    }
+                                    // sid
+                                    if ($off < strlen($der)) {
+                                        $off++;
+                                        $l = pdfstudio_asn1_read_len($der, $off);
+                                        $off += $l;
+                                    }
+                                    // digestAlgorithm
+                                    if ($off < strlen($der) && ord($der[$off++]) === 0x30) {
+                                        $l = pdfstudio_asn1_read_len($der, $off);
+                                        $off += $l;
+                                    }
+                                    // signedAttrs [0] IMPLICIT (0xA0)
+                                    $signedAttrsSet = '';
+                                    if ($off < strlen($der) && ord($der[$off]) === 0xA0) {
+                                        $saStart = $off;
+                                        $off++;
+                                        $saLen = pdfstudio_asn1_read_len($der, $off);
+                                        $signedAttrsSet = "\x31" . substr($der, $saStart + 1, ($off - ($saStart + 1)) + $saLen);
+                                        $off += $saLen;
+                                    }
+                                    // signatureAlgorithm
+                                    if ($off < strlen($der) && ord($der[$off++]) === 0x30) {
+                                        $l = pdfstudio_asn1_read_len($der, $off);
+                                        $off += $l;
+                                    }
+                                    // signature OCTET STRING (0x04)
+                                    if ($off < strlen($der) && ord($der[$off++]) === 0x04) {
+                                        $sigLen = pdfstudio_asn1_read_len($der, $off);
+                                        $rsaSig = substr($der, $off, $sigLen);
+                                        if ($pemCert !== '' && $signedAttrsSet !== '' && function_exists('openssl_verify')) {
+                                            $pubKey = @openssl_pkey_get_public($pemCert);
+                                            if ($pubKey) {
+                                                $algoConst = defined('OPENSSL_ALGO_SHA256') ? OPENSSL_ALGO_SHA256 : 'sha256';
+                                                if ($hashAlgo === 'SHA-1') {
+                                                    $algoConst = defined('OPENSSL_ALGO_SHA1') ? OPENSSL_ALGO_SHA1 : 'sha1';
+                                                } elseif ($hashAlgo === 'SHA-384' && defined('OPENSSL_ALGO_SHA384')) {
+                                                    $algoConst = OPENSSL_ALGO_SHA384;
+                                                } elseif ($hashAlgo === 'SHA-512' && defined('OPENSSL_ALGO_SHA512')) {
+                                                    $algoConst = OPENSSL_ALGO_SHA512;
+                                                }
+                                                $vRes = @openssl_verify($signedAttrsSet, $rsaSig, $pubKey, $algoConst);
+                                                if ($vRes === 1) {
+                                                    $cryptoValid = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $isIntact = ($rangeValid && $hashValid && $cryptoValid && $coversWholeDoc);
+        $selfSigned = ($certMeta['cn'] !== '' && $certMeta['cn'] === $certMeta['issuer_cn']);
+
+        $signatures[] = array(
+            'index'            => $idx + 1,
+            'intact'           => $isIntact,
+            'hash_valid'       => $hashValid,
+            'crypto_valid'     => $cryptoValid,
+            'covers_whole_doc' => $coversWholeDoc,
+            'subfilter'        => $subFilter,
+            'hash_algo'        => $hashAlgo,
+            'signer_name'      => $certMeta['cn'] !== 'Unbekannt' ? $certMeta['cn'] : ($sigName !== '' ? $sigName : 'Unbekannt'),
+            'signer_org'       => $certMeta['org'],
+            'signer_ou'        => $certMeta['ou'],
+            'signer_email'     => $certMeta['email'],
+            'signer_country'   => $certMeta['country'],
+            'issuer_cn'        => $certMeta['issuer_cn'],
+            'issuer_org'       => $certMeta['issuer_org'],
+            'self_signed'      => $selfSigned,
+            'serial'           => $certMeta['serial'],
+            'valid_from'       => $certMeta['valid_from'],
+            'valid_to'         => $certMeta['valid_to'],
+            'is_expired'       => $certMeta['is_expired'],
+            'fingerprint'      => $certMeta['fingerprint_sha256'],
+            'signing_time'     => $sigDate,
+            'reason'           => $sigReason,
+            'location'         => $sigLocation,
+            'byte_range'       => array($o1, $l1, $o2, $l2)
+        );
+    }
+
+    return array(
+        'ok'         => true,
+        'signed'     => count($signatures) > 0,
+        'count'      => count($signatures),
+        'signatures' => $signatures
+    );
+}
+
 

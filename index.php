@@ -179,9 +179,13 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">I✎</span>
                         <span class="rb-label">Text ändern</span>
                     </button>
-                    <button type="button" class="ribbon-btn" data-cmd="open-signature-modal">
+                    <button type="button" class="ribbon-btn" data-cmd="open-signature-modal" title="Optische Unterschrift zeichnen oder als Schriftzug einfügen">
                         <span class="rb-icon">✍️</span>
                         <span class="rb-label">Signatur</span>
+                    </button>
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-cert-sign-modal" title="Echte kryptografische Zertifikats-Signatur (PKCS#7 / SHA-256 / Adobe Acrobat kompatibel) mit Manipulationsschutz">
+                        <span class="rb-icon">🔏</span>
+                        <span class="rb-label">Zertifikat-Sign.</span>
                     </button>
                     <button type="button" class="ribbon-btn" data-cmd="open-a11y-modal">
                         <span class="rb-icon">♿</span>
@@ -288,9 +292,13 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🏷️</span>
                         <span class="rb-label">Stempel</span>
                     </button>
-                    <button type="button" class="ribbon-btn" data-cmd="open-signature-modal">
+                    <button type="button" class="ribbon-btn" data-cmd="open-signature-modal" title="Optische Unterschrift zeichnen oder als Schriftzug einfügen">
                         <span class="rb-icon">✍️</span>
                         <span class="rb-label">Signatur</span>
+                    </button>
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-cert-sign-modal" title="Echte kryptografische Zertifikats-Signatur (PKCS#7 / SHA-256 / Adobe Acrobat kompatibel) mit Manipulationsschutz">
+                        <span class="rb-icon">🔏</span>
+                        <span class="rb-label">Zertifikat-Sign.</span>
                     </button>
                     <button type="button" class="ribbon-btn" data-cmd="insert-image-overlay">
                         <span class="rb-icon">🖼️</span>
@@ -507,7 +515,11 @@ $serverInfo = pdfstudio_get_server_info();
 
             <div class="ribbon-section">
                 <div class="ribbon-section-body">
-                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-compress-modal" title="PDF komprimieren &amp; Dateigröße verkleinern">
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-cert-sign-modal" title="PDF mit digitalem Zertifikat (.p12 / PKCS#7 / SHA-256) Adobe-Acrobat-kompatibel unterschreiben oder vorhandene Signaturen prüfen">
+                        <span class="rb-icon">🔏</span>
+                        <span class="rb-label">Digital signieren</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-compress-modal" title="PDF komprimieren &amp; Dateigröße verkleinern">
                         <span class="rb-icon">📉</span>
                         <span class="rb-label">PDF komprimieren</span>
                     </button>
@@ -2166,8 +2178,205 @@ $serverInfo = pdfstudio_get_server_info();
                 </button>
             </div>
         </div>
-        <div class="modal-footer">
+            <div class=" modal-footer">
             <button type="button" class="tool-btn" data-close-modal="modalMailMerge">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 8: DIGITALE ZERTIFIKATS-SIGNATUR (ADOBE ACROBAT / PKCS#7 / PAdES)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalDigitalCertSign">
+    <div class="modal-window" style="max-width:740px;">
+        <div class="modal-header">
+            <span>🔏 Digitale Zertifikats-Signatur (Adobe Acrobat kompatibel • PKCS#7 / SHA-256)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalDigitalCertSign">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:78vh;overflow-y:auto;">
+            <!-- Navigation Tabs -->
+            <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid var(--border-subtle);padding-bottom:10px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn btn-primary" data-cert-tab="sign" id="btnCertTabSign">
+                    🔏 1. PDF digital unterschreiben
+                </button>
+                <button type="button" class="tool-btn" data-cert-tab="verify" id="btnCertTabVerify">
+                    🔍 2. Signaturen im PDF prüfen
+                </button>
+                <button type="button" class="tool-btn" data-cert-tab="create" id="btnCertTabCreate">
+                    🪪 3. Eigenes .p12-Zertifikat erzeugen
+                </button>
+            </div>
+
+            <!-- TAB 1: SIGN PDF WITH CERTIFICATE -->
+            <div id="certPaneSign">
+                <div style="background:rgba(37,99,235,0.1);border:1px solid rgba(59,130,246,0.35);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;line-height:1.5;color:var(--text-primary);">
+                    🛡️ <strong>Echtes kryptografisches Siegel (`adbe.pkcs7.detached` / SHA-256):</strong> Versiegelt das gesamte PDF-Dokument mathematisch über <code>/ByteRange</code>. Beim Öffnen in <strong>Adobe Acrobat Reader</strong> erscheint die Unterschrift im offiziellen Unterschriften-Fenster und warnt sofort, falls nachträglich auch nur ein einziges Zeichen im Dokument verändert wird.
+                </div>
+
+                <!-- Step 1: Certificate Source -->
+                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-bottom:12px;">
+                    <div style="font-size:12.5px;font-weight:700;margin-bottom:8px;">1. Zertifikats-Quelle wählen:</div>
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:12.5px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+                            <input type="radio" name="certSignSourceMode" id="certModeQuickRadio" value="quick" checked>
+                            <span>⚡ Sofort-Zertifikat automatisch erstellen &amp; direkt signieren</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+                            <input type="radio" name="certSignSourceMode" id="certModeP12Radio" value="p12">
+                            <span>📂 Vorhandene <code>.p12</code> / <code>.pfx</code>-Zertifikatsdatei laden</span>
+                        </label>
+                    </div>
+
+                    <!-- Quick Certificate Inputs -->
+                    <div id="certQuickInputsBox">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+                            <div class="form-row" style="margin-bottom:4px;">
+                                <label for="certQuickCn">Name des Unterzeichners (CN) *</label>
+                                <input type="text" id="certQuickCn" class="form-control" placeholder="z. B. Max Mustermann" value="<?php echo isset($gatekeeperUser['display_name']) ? htmlspecialchars($gatekeeperUser['display_name'], ENT_QUOTES, 'UTF-8') : ''; ?>">
+                            </div>
+                            <div class="form-row" style="margin-bottom:4px;">
+                                <label for="certQuickOrg">Organisation / Behörde / Firma</label>
+                                <input type="text" id="certQuickOrg" class="form-control" placeholder="z. B. Musterbehörde / Kanzlei">
+                            </div>
+                            <div class="form-row" style="margin-bottom:4px;">
+                                <label for="certQuickOu">Abteilung / Funktion (optional)</label>
+                                <input type="text" id="certQuickOu" class="form-control" placeholder="z. B. Sachgebietsleitung">
+                            </div>
+                            <div class="form-row" style="margin-bottom:4px;">
+                                <label for="certQuickEmail">E-Mail-Adresse (optional)</label>
+                                <input type="email" id="certQuickEmail" class="form-control" placeholder="z. B. name@behoerde.de">
+                            </div>
+                        </div>
+                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" id="certQuickExportP12">
+                                <span>Erzeugtes persönliches Zertifikat gleichzeitig als <code>.p12</code>-Datei herunterladen</span>
+                            </label>
+                            <input type="password" id="certQuickP12Pass" class="form-control" placeholder="Passwort für .p12 (optional)" style="width:210px;height:28px;font-size:12px;">
+                        </div>
+                    </div>
+
+                    <!-- Existing P12 File Inputs -->
+                    <div id="certP12InputsBox" class="hidden">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;">
+                            <div class="form-row" style="margin-bottom:0;">
+                                <label for="certP12FileInput">Zertifikatsdatei (<code>.p12</code> oder <code>.pfx</code>) auswählen *</label>
+                                <input type="file" id="certP12FileInput" accept=".p12,.pfx,application/x-pkcs12" class="form-control">
+                            </div>
+                            <div class="form-row" style="margin-bottom:0;">
+                                <label for="certP12PasswordInput">Zertifikats-Passwort *</label>
+                                <input type="password" id="certP12PasswordInput" class="form-control" placeholder="Passwort Ihrer .p12/.pfx-Datei">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Visual Stamp & Reason/Location -->
+                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+                    <div style="font-size:12.5px;font-weight:700;margin-bottom:8px;">2. Sichtbarer Signaturstempel &amp; Prüfvermerk auf der PDF-Seite:</div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;">
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="certStampPageMode">Seite für den Signaturstempel:</label>
+                            <select id="certStampPageMode" class="form-control">
+                                <option value="current">Aktuell geöffnete Seite</option>
+                                <option value="last">Letzte Seite des Dokuments</option>
+                                <option value="first">Erste Seite des Dokuments</option>
+                            </select>
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="certStampPosition">Position auf der Seite:</label>
+                            <select id="certStampPosition" class="form-control">
+                                <option value="bottom-right">Unten rechts (Standard)</option>
+                                <option value="bottom-left">Unten links</option>
+                                <option value="top-right">Oben rechts</option>
+                                <option value="top-left">Oben links</option>
+                                <option value="invisible">Unsichtbare Signatur (nur im Unterschriften-Fenster)</option>
+                            </select>
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="certSignReason">Grund der Unterzeichnung:</label>
+                            <input type="text" id="certSignReason" class="form-control" value="Dokument geprüft und freigegeben" placeholder="z. B. Dokument geprüft und freigegeben">
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="certSignLocation">Ort der Unterzeichnung:</label>
+                            <input type="text" id="certSignLocation" class="form-control" value="Deutschland" placeholder="z. B. Stuttgart / Berlin">
+                        </div>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:8px;cursor:pointer;">
+                        <input type="checkbox" id="certIncludeHandSig" checked>
+                        <span>Falls im Editor eine gezeichnete Unterschrift (<code>✍️ Signatur</code>) vorhanden ist, links in den Zertifikats-Stempel integrieren</span>
+                    </label>
+                </div>
+
+                <div id="certSignStatusBox" class="hidden" style="margin-top:12px;padding:10px 12px;border-radius:8px;font-size:12.5px;line-height:1.5;"></div>
+            </div>
+
+            <!-- TAB 2: VERIFY EXISTING PDF SIGNATURES -->
+            <div id="certPaneVerify" class="hidden">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                    <span style="font-size:12.5px;color:var(--text-secondary);">
+                        Prüft alle im aktuellen PDF eingebetteten kryptografischen Signaturen (<code>/Type /Sig</code>, <code>/ByteRange</code>, <code>PKCS#7 / CMS</code>) auf Echtheit und nachträgliche Dokumenten-Manipulation:
+                    </span>
+                    <button type="button" class="tool-btn btn-primary" id="btnRunVerifyPdfCert">
+                        🔍 Aktuelles PDF jetzt prüfen
+                    </button>
+                </div>
+                <div id="certVerifyResultsBox" style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;font-size:12.5px;line-height:1.55;">
+                    Klicken Sie auf „🔍 Aktuelles PDF jetzt prüfen“, um alle digitalen Zertifikats-Signaturen auszulesen und mathematisch zu verifizieren.
+                </div>
+            </div>
+
+            <!-- TAB 3: GENERATE STANDALONE .P12 CERTIFICATE -->
+            <div id="certPaneCreate" class="hidden">
+                <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.5;">
+                    Erzeugen Sie hier Ihre persönliche, passwortgeschützte <strong><code>.p12</code>-Zertifikatsdatei (RSA-2048 / X.509 / SHA-256)</strong>. Diese Datei können Sie lokal auf Ihrem PC speichern und sowohl in der <strong>PDF-Werkstatt Pro</strong> als auch direkt in <strong>Adobe Acrobat</strong> zum digitalen Unterschreiben verwenden.
+                </p>
+                <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="genP12Cn">Vollständiger Name (CN) *</label>
+                            <input type="text" id="genP12Cn" class="form-control" placeholder="z. B. Max Mustermann" value="<?php echo isset($gatekeeperUser['display_name']) ? htmlspecialchars($gatekeeperUser['display_name'], ENT_QUOTES, 'UTF-8') : ''; ?>">
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="genP12Org">Organisation / Behörde / Firma</label>
+                            <input type="text" id="genP12Org" class="form-control" placeholder="z. B. Musterbehörde">
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="genP12Ou">Abteilung / Rolle</label>
+                            <input type="text" id="genP12Ou" class="form-control" placeholder="z. B. Referat 12">
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="genP12Email">E-Mail-Adresse</label>
+                            <input type="email" id="genP12Email" class="form-control" placeholder="z. B. max@musterbehoerde.de">
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="genP12Days">Gültigkeitsdauer:</label>
+                            <select id="genP12Days" class="form-control">
+                                <option value="365">1 Jahr (365 Tage)</option>
+                                <option value="1095" selected>3 Jahre (1.095 Tage)</option>
+                                <option value="1825">5 Jahre (1.825 Tage)</option>
+                                <option value="3650">10 Jahre (3.650 Tage)</option>
+                            </select>
+                        </div>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <label for="genP12Pass">Schutz-Passwort für die .p12-Datei (mind. 4 Zeichen) *</label>
+                            <input type="password" id="genP12Pass" class="form-control" placeholder="Passwort festlegen">
+                        </div>
+                    </div>
+                    <div id="genP12StatusBox" class="hidden" style="margin-top:10px;padding:10px 12px;border-radius:6px;font-size:12px;"></div>
+                    <div style="margin-top:12px;">
+                        <button type="button" class="tool-btn btn-primary" id="btnGenerateDownloadP12">
+                            🪪 Persönliches .p12-Zertifikat jetzt erstellen &amp; herunterladen
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;">
+            <button type="button" class="tool-btn" data-close-modal="modalDigitalCertSign">Schließen</button>
+            <button type="button" class="tool-btn btn-primary" id="btnExecuteCertSignPdf">
+                🔏 PDF jetzt kryptografisch signieren &amp; herunterladen
+            </button>
         </div>
     </div>
 </div>

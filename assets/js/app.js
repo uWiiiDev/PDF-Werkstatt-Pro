@@ -7289,6 +7289,9 @@
             case 'open-mailmerge-modal':
                 await openMailMergeModal();
                 break;
+            case 'open-cert-sign-modal':
+                await openDigitalCertSignModal('sign');
+                break;
         }
     }
 
@@ -9168,6 +9171,562 @@
     }
 
     // =========================================================================
+    // 8. Cryptographic Digital PDF Signatures (PKCS#7 / SHA-256 / PAdES & .p12)
+    // =========================================================================
+    function switchDigitalCertTab(tabName) {
+        var panes = {
+            sign: document.getElementById('certPaneSign'),
+            verify: document.getElementById('certPaneVerify'),
+            create: document.getElementById('certPaneCreate')
+        };
+        var btns = {
+            sign: document.getElementById('btnCertTabSign'),
+            verify: document.getElementById('btnCertTabVerify'),
+            create: document.getElementById('btnCertTabCreate')
+        };
+        Object.keys(panes).forEach(function (k) {
+            if (panes[k]) {
+                if (k === tabName) panes[k].classList.remove('hidden');
+                else panes[k].classList.add('hidden');
+            }
+            if (btns[k]) {
+                if (k === tabName) btns[k].classList.add('btn-primary');
+                else btns[k].classList.remove('btn-primary');
+            }
+        });
+        var signBtnFooter = document.getElementById('btnExecuteCertSignPdf');
+        if (signBtnFooter) {
+            signBtnFooter.style.display = (tabName === 'sign') ? 'inline-flex' : 'none';
+        }
+        if (tabName === 'verify') {
+            verifyActivePdfDigitalSignatures();
+        }
+    }
+
+    async function openDigitalCertSignModal(initialTab) {
+        var doc = getActiveDoc();
+        if (!doc) {
+            await createNewBlankPdfTab();
+            doc = getActiveDoc();
+        }
+        if (state.user) {
+            var qCn = document.getElementById('certQuickCn');
+            var qOrg = document.getElementById('certQuickOrg');
+            var gCn = document.getElementById('genP12Cn');
+            var gOrg = document.getElementById('genP12Org');
+            if (qCn && !qCn.value.trim()) qCn.value = state.user.display_name || state.user.username || '';
+            if (gCn && !gCn.value.trim()) gCn.value = state.user.display_name || state.user.username || '';
+            if (state.user.profile && state.user.profile.organization) {
+                if (qOrg && !qOrg.value.trim()) qOrg.value = state.user.profile.organization;
+                if (gOrg && !gOrg.value.trim()) gOrg.value = state.user.profile.organization;
+            }
+        }
+        var stBox = document.getElementById('certSignStatusBox');
+        if (stBox) stBox.classList.add('hidden');
+
+        openModal('modalDigitalCertSign');
+        switchDigitalCertTab(initialTab || 'sign');
+    }
+
+    function sanitizeWinAnsiText(str) {
+        return String(str || '')
+            .replace(/[\r\n\t]+/g, ' ')
+            .replace(/[„“”]/g, '"')
+            .replace(/[–—]/g, '-')
+            .replace(/€/g, 'EUR')
+            .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+    }
+
+    function formatPdfDateNow() {
+        var d = new Date();
+        function pad2(n) { return String(n).padStart(2, '0'); }
+        var tzMin = -d.getTimezoneOffset();
+        var sign = tzMin >= 0 ? '+' : '-';
+        var absMin = Math.abs(tzMin);
+        var tzH = pad2(Math.floor(absMin / 60));
+        var tzM = pad2(absMin % 60);
+        return 'D:' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
+            pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()) +
+            sign + tzH + "'" + tzM + "'";
+    }
+
+    function formatGermanDateTimeNow() {
+        var d = new Date();
+        function pad2(n) { return String(n).padStart(2, '0'); }
+        return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' +
+            pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+    }
+
+    function base64ToUint8Array(b64) {
+        var binStr = window.atob(b64);
+        var len = binStr.length;
+        var bytes = new Uint8Array(len);
+        for (var i = 0; i < len; i++) {
+            bytes[i] = binStr.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    async function executeCryptographicPdfSigning() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+
+        var isP12Mode = document.getElementById('certModeP12Radio') && document.getElementById('certModeP12Radio').checked;
+        var certMode = isP12Mode ? 'p12' : 'quick';
+        var stBox = document.getElementById('certSignStatusBox');
+        var btnSign = document.getElementById('btnExecuteCertSignPdf');
+
+        function setCertSignStatus(html, type) {
+            if (!stBox) return;
+            stBox.classList.remove('hidden');
+            if (type === 'error') {
+                stBox.style.background = 'rgba(239,68,68,0.14)';
+                stBox.style.border = '1px solid rgba(239,68,68,0.4)';
+                stBox.style.color = '#fca5a5';
+            } else if (type === 'success') {
+                stBox.style.background = 'rgba(16,185,129,0.14)';
+                stBox.style.border = '1px solid rgba(16,185,129,0.4)';
+                stBox.style.color = '#6ee7b7';
+            } else {
+                stBox.style.background = 'rgba(59,130,246,0.14)';
+                stBox.style.border = '1px solid rgba(59,130,246,0.4)';
+                stBox.style.color = '#93c5fd';
+            }
+            stBox.innerHTML = html;
+        }
+
+        var quickCn = (document.getElementById('certQuickCn') && document.getElementById('certQuickCn').value.trim()) || '';
+        var quickOrg = (document.getElementById('certQuickOrg') && document.getElementById('certQuickOrg').value.trim()) || '';
+        var quickOu = (document.getElementById('certQuickOu') && document.getElementById('certQuickOu').value.trim()) || '';
+        var quickEmail = (document.getElementById('certQuickEmail') && document.getElementById('certQuickEmail').value.trim()) || '';
+        var exportP12 = document.getElementById('certQuickExportP12') && document.getElementById('certQuickExportP12').checked;
+        var quickP12Pass = (document.getElementById('certQuickP12Pass') && document.getElementById('certQuickP12Pass').value) || '';
+
+        var p12FileInp = document.getElementById('certP12FileInput');
+        var p12PassInp = document.getElementById('certP12PasswordInput');
+
+        if (certMode === 'quick') {
+            if (!quickCn) {
+                setCertSignStatus('✕ Bitte geben Sie den <strong>Namen des Unterzeichners (CN)</strong> ein.', 'error');
+                return;
+            }
+        } else {
+            if (!p12FileInp || !p12FileInp.files || p12FileInp.files.length === 0) {
+                setCertSignStatus('✕ Bitte wählen Sie Ihre <strong><code>.p12</code>- oder <code>.pfx</code>-Zertifikatsdatei</strong> aus.', 'error');
+                return;
+            }
+        }
+
+        var pageMode = (document.getElementById('certStampPageMode') && document.getElementById('certStampPageMode').value) || 'current';
+        var posMode = (document.getElementById('certStampPosition') && document.getElementById('certStampPosition').value) || 'bottom-right';
+        var reasonStr = (document.getElementById('certSignReason') && document.getElementById('certSignReason').value.trim()) || 'Dokument geprüft und freigegeben';
+        var locationStr = (document.getElementById('certSignLocation') && document.getElementById('certSignLocation').value.trim()) || 'Deutschland';
+        var includeHandSig = document.getElementById('certIncludeHandSig') && document.getElementById('certIncludeHandSig').checked;
+
+        if (btnSign) btnSign.disabled = true;
+        setCertSignStatus('⏳ <strong>Schritt 1/2:</strong> Bereite offiziellen Signaturstempel &amp; PDF-Signaturfeld (<code>/Type /Sig</code>, <code>/AcroForm /SigFlags 3</code>) vor…', 'info');
+
+        try {
+            await bakeAnnotationsIntoDocument(doc);
+            pushUndoState(doc);
+
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+            var pages = pdfDoc.getPages();
+            var targetIdx = doc.currentPage || 0;
+            if (pageMode === 'first') targetIdx = 0;
+            else if (pageMode === 'last') targetIdx = Math.max(0, pages.length - 1);
+            targetIdx = Math.max(0, Math.min(pages.length - 1, targetIdx));
+
+            var targetPage = pages[targetIdx];
+            var sz = targetPage.getSize();
+            var stampW = 240;
+            var stampH = 78;
+            var margin = 28;
+            var rectX1 = sz.width - stampW - margin;
+            var rectY1 = margin;
+
+            if (posMode === 'bottom-left') {
+                rectX1 = margin;
+                rectY1 = margin;
+            } else if (posMode === 'top-right') {
+                rectX1 = sz.width - stampW - margin;
+                rectY1 = sz.height - stampH - margin;
+            } else if (posMode === 'top-left') {
+                rectX1 = margin;
+                rectY1 = sz.height - stampH - margin;
+            }
+            var rectX2 = rectX1 + stampW;
+            var rectY2 = rectY1 + stampH;
+
+            var signerDisplay = certMode === 'quick'
+                ? quickCn
+                : ((p12FileInp && p12FileInp.files[0]) ? p12FileInp.files[0].name.replace(/\.(p12|pfx)$/i, '') : 'Zertifikats-Inhaber');
+            var nowFormatted = formatGermanDateTimeNow();
+
+            if (posMode !== 'invisible') {
+                var fontReg = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+                var fontBold = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+
+                // Card background & crisp border
+                targetPage.drawRectangle({
+                    x: rectX1,
+                    y: rectY1,
+                    width: stampW,
+                    height: stampH,
+                    color: PDFLib.rgb(0.95, 0.975, 1.0),
+                    borderColor: PDFLib.rgb(0.15, 0.39, 0.92),
+                    borderWidth: 1.2
+                });
+
+                // Top seal banner inside the stamp box
+                targetPage.drawRectangle({
+                    x: rectX1,
+                    y: rectY2 - 15,
+                    width: stampW,
+                    height: 15,
+                    color: PDFLib.rgb(0.15, 0.39, 0.92)
+                });
+                targetPage.drawText('DIGITAL SIGNIERT  |  PKCS#7 / SHA-256 SIEGEL', {
+                    x: rectX1 + 7,
+                    y: rectY2 - 10.5,
+                    size: 7.2,
+                    font: fontBold,
+                    color: PDFLib.rgb(1, 1, 1)
+                });
+
+                var textLeftX = rectX1 + 8;
+                if (includeHandSig && state.lastSignatureDataUrl && state.lastSignatureDataUrl.indexOf('data:image/png') === 0) {
+                    try {
+                        var sigImg = await pdfDoc.embedPng(state.lastSignatureDataUrl);
+                        targetPage.drawImage(sigImg, {
+                            x: rectX1 + 6,
+                            y: rectY1 + 10,
+                            width: 66,
+                            height: 44
+                        });
+                        textLeftX = rectX1 + 76;
+                    } catch (eImg) {}
+                }
+
+                var maxChars = textLeftX > (rectX1 + 20) ? 28 : 38;
+                var lineY = rectY2 - 26;
+
+                var l1 = sanitizeWinAnsiText('Unterzeichner: ' + signerDisplay).substring(0, maxChars);
+                targetPage.drawText(l1, {
+                    x: textLeftX,
+                    y: lineY,
+                    size: 7.8,
+                    font: fontBold,
+                    color: PDFLib.rgb(0.06, 0.12, 0.26)
+                });
+                lineY -= 11;
+
+                if (quickOrg && certMode === 'quick') {
+                    var lOrg = sanitizeWinAnsiText('Organisation: ' + quickOrg).substring(0, maxChars);
+                    targetPage.drawText(lOrg, {
+                        x: textLeftX,
+                        y: lineY,
+                        size: 7.2,
+                        font: fontReg,
+                        color: PDFLib.rgb(0.15, 0.22, 0.34)
+                    });
+                    lineY -= 10.5;
+                }
+
+                var lReason = sanitizeWinAnsiText('Grund: ' + reasonStr).substring(0, maxChars);
+                targetPage.drawText(lReason, {
+                    x: textLeftX,
+                    y: lineY,
+                    size: 7.0,
+                    font: fontReg,
+                    color: PDFLib.rgb(0.18, 0.25, 0.36)
+                });
+                lineY -= 10.5;
+
+                var lDateLoc = sanitizeWinAnsiText('Datum: ' + nowFormatted + ' (' + locationStr + ')').substring(0, maxChars + 4);
+                targetPage.drawText(lDateLoc, {
+                    x: textLeftX,
+                    y: lineY,
+                    size: 6.8,
+                    font: fontReg,
+                    color: PDFLib.rgb(0.25, 0.32, 0.45)
+                });
+            }
+
+            // Build cryptographic /Sig dictionary & /Widget annotation with /ByteRange & /Contents placeholders
+            var context = pdfDoc.context;
+            var sigDictRef = context.nextRef();
+            var placeholderHex = new Array(16384 + 1).join('0');
+
+            var sigDictMap = {
+                Type: PDFLib.PDFName.of('Sig'),
+                Filter: PDFLib.PDFName.of('Adobe.PPKLite'),
+                SubFilter: PDFLib.PDFName.of('adbe.pkcs7.detached'),
+                Name: PDFLib.PDFString.of(sanitizeWinAnsiText(signerDisplay || 'Unterzeichner')),
+                Reason: PDFLib.PDFString.of(sanitizeWinAnsiText(reasonStr)),
+                Location: PDFLib.PDFString.of(sanitizeWinAnsiText(locationStr)),
+                M: PDFLib.PDFString.of(formatPdfDateNow()),
+                ByteRange: context.obj([0, 1000000000, 1000000000, 1000000000]),
+                Contents: PDFLib.PDFHexString.of(placeholderHex)
+            };
+            context.assign(sigDictRef, context.obj(sigDictMap));
+
+            // Create valid Form XObject appearance stream (/AP /N) so Adobe Acrobat validates widget appearance
+            var apXObj = context.flateStream('', {
+                Type: PDFLib.PDFName.of('XObject'),
+                Subtype: PDFLib.PDFName.of('Form'),
+                FormType: PDFLib.PDFNumber.of(1),
+                BBox: context.obj([0, 0, posMode === 'invisible' ? 0 : stampW, posMode === 'invisible' ? 0 : stampH]),
+                Matrix: context.obj([1, 0, 0, 1, 0, 0]),
+                Resources: context.obj({})
+            });
+            var apRef = context.register(apXObj);
+
+            var widgetRef = context.nextRef();
+            var widgetRect = posMode === 'invisible' ? [0, 0, 0, 0] : [rectX1, rectY1, rectX2, rectY2];
+            var widgetDict = context.obj({
+                Type: PDFLib.PDFName.of('Annot'),
+                Subtype: PDFLib.PDFName.of('Widget'),
+                FT: PDFLib.PDFName.of('Sig'),
+                Rect: context.obj(widgetRect),
+                T: PDFLib.PDFString.of('SigField_' + Math.floor(Date.now() / 1000)),
+                F: PDFLib.PDFNumber.of(132),
+                P: targetPage.ref,
+                V: sigDictRef,
+                AP: context.obj({ N: apRef })
+            });
+            context.assign(widgetRef, widgetDict);
+
+            // Attach widgetRef to target page /Annots
+            var pageAnnots = targetPage.node.lookup(PDFLib.PDFName.of('Annots'));
+            if (pageAnnots && typeof pageAnnots.push === 'function') {
+                pageAnnots.push(widgetRef);
+            } else {
+                targetPage.node.set(PDFLib.PDFName.of('Annots'), context.obj([widgetRef]));
+            }
+
+            // Attach widgetRef to Catalog /AcroForm with /SigFlags 3 (SignaturesExist | AppendOnly)
+            var acroForm = pdfDoc.catalog.lookup(PDFLib.PDFName.of('AcroForm'));
+            if (acroForm && typeof acroForm.set === 'function') {
+                var fieldsArr = acroForm.lookup(PDFLib.PDFName.of('Fields'));
+                if (fieldsArr && typeof fieldsArr.push === 'function') {
+                    fieldsArr.push(widgetRef);
+                } else {
+                    acroForm.set(PDFLib.PDFName.of('Fields'), context.obj([widgetRef]));
+                }
+                acroForm.set(PDFLib.PDFName.of('SigFlags'), PDFLib.PDFNumber.of(3));
+            } else {
+                pdfDoc.catalog.set(PDFLib.PDFName.of('AcroForm'), context.obj({
+                    Fields: context.obj([widgetRef]),
+                    SigFlags: PDFLib.PDFNumber.of(3)
+                }));
+            }
+
+            // Save without object streams so /ByteRange and /Contents are written as plain ASCII
+            var preparedBytes = await pdfDoc.save({ useObjectStreams: false });
+
+            setCertSignStatus('⏳ <strong>Schritt 2/2:</strong> Berechne kryptografische RSA-2048 / SHA-256 Signatur (<code>PKCS#7 / CMS detached</code>) über <code>/ByteRange</code>…', 'info');
+
+            var fd = new FormData();
+            fd.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+            fd.append('pdf_file', new Blob([preparedBytes], { type: 'application/pdf' }), doc.name || 'dokument.pdf');
+            fd.append('cert_mode', certMode);
+
+            if (certMode === 'p12') {
+                fd.append('p12_file', p12FileInp.files[0]);
+                fd.append('p12_password', p12PassInp ? p12PassInp.value : '');
+            } else {
+                fd.append('cn', quickCn);
+                fd.append('org', quickOrg);
+                fd.append('ou', quickOu);
+                fd.append('email', quickEmail);
+                fd.append('export_p12', exportP12 ? '1' : '0');
+                fd.append('p12_password', quickP12Pass);
+            }
+
+            var resp = await fetch('api.php?action=sign_pdf_cert', {
+                method: 'POST',
+                body: fd
+            });
+            var data = await resp.json();
+
+            if (!data || !data.ok || !data.signed_pdf_base64) {
+                setCertSignStatus('✕ <strong>Fehler beim Signieren:</strong> ' + escapeHtml((data && data.error) ? data.error : 'Unbekannter Fehler.'), 'error');
+                return;
+            }
+
+            var signedBytes = base64ToUint8Array(data.signed_pdf_base64);
+            doc.bytes = signedBytes;
+            doc.annotations = {};
+            doc.modified = false;
+
+            await refreshDocumentViews();
+            renderTabsBar();
+
+            var signedName = doc.name.replace(/\.pdf$/i, '') + '_signiert.pdf';
+            downloadBlob(signedBytes, signedName, 'application/pdf');
+
+            if (data.p12_base64) {
+                var p12Bytes = base64ToUint8Array(data.p12_base64);
+                var safeCertName = (quickCn || 'Zertifikat').replace(/[^a-zA-Z0-9_\-]/g, '_') + '.p12';
+                downloadBlob(p12Bytes, safeCertName, 'application/x-pkcs12');
+            }
+
+            var cm = data.cert_meta || {};
+            setCertSignStatus(
+                '✔ <strong>PDF erfolgreich kryptografisch signiert &amp; heruntergeladen!</strong><br>' +
+                '• <strong>Unterzeichner (CN):</strong> ' + escapeHtml(cm.cn || signerDisplay) + (cm.org ? ' (' + escapeHtml(cm.org) + ')' : '') + '<br>' +
+                '• <strong>Algorithmus:</strong> RSA-2048 / SHA-256 (<code>adbe.pkcs7.detached</code>)<br>' +
+                '• <strong>SHA-256 Zertifikats-Fingerabdruck:</strong> <code style="font-size:10.5px;word-break:break-all;">' + escapeHtml(cm.fingerprint_sha256 || '') + '</code><br>' +
+                '• <strong>Hinweis für Adobe Acrobat:</strong> Das Dokument ist nun kryptografisch versiegelt. Jede nachträgliche Änderung am PDF bricht das Siegel sofort sichtbar.',
+                'success'
+            );
+            showToast('PDF erfolgreich mit Zertifikat signiert (' + signedName + ')!', 'success');
+        } catch (err) {
+            setCertSignStatus('✕ <strong>Technischer Fehler:</strong> ' + escapeHtml(err.message || String(err)), 'error');
+        } finally {
+            if (btnSign) btnSign.disabled = false;
+        }
+    }
+
+    async function verifyActivePdfDigitalSignatures() {
+        var box = document.getElementById('certVerifyResultsBox');
+        var doc = getActiveDoc();
+        if (!box) return;
+        if (!doc) {
+            box.innerHTML = '<span style="color:var(--text-muted);">Bitte öffnen Sie zuerst ein PDF-Dokument.</span>';
+            return;
+        }
+
+        box.innerHTML = '<span style="color:#93c5fd;">⏳ Prüfe PDF-Struktur auf eingebettete PKCS#7 / CMS / PAdES-Zertifikatssignaturen…</span>';
+        try {
+            var fd = new FormData();
+            fd.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+            fd.append('pdf_file', new Blob([doc.bytes], { type: 'application/pdf' }), doc.name || 'dokument.pdf');
+
+            var resp = await fetch('api.php?action=verify_pdf_cert', {
+                method: 'POST',
+                body: fd
+            });
+            var data = await resp.json();
+
+            if (!data || !data.ok) {
+                box.innerHTML = '<span style="color:#fca5a5;">✕ Fehler bei der Signaturprüfung: ' + escapeHtml((data && data.error) ? data.error : 'Unbekannter Fehler') + '</span>';
+                return;
+            }
+
+            if (!data.signed || !data.signatures || data.signatures.length === 0) {
+                box.innerHTML =
+                    '<div style="padding:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);border-radius:6px;color:#fcd34d;">' +
+                    'ℹ️ <strong>Keine digitale Zertifikats-Signatur gefunden:</strong><br>' +
+                    'Dieses PDF-Dokument enthält aktuell noch keine kryptografische Signatur (<code>/Type /Sig</code>). Wechseln Sie oben auf den Reiter <strong>„🔏 1. PDF digital unterschreiben“</strong>, um das Dokument jetzt mit einem Zertifikat zu versiegeln.' +
+                    '</div>';
+                return;
+            }
+
+            var html = '<div style="margin-bottom:10px;font-weight:700;color:var(--text-primary);">Gefundene digitale Zertifikats-Signaturen (' + data.signatures.length + '):</div>';
+            data.signatures.forEach(function (sig) {
+                var statusColor = sig.intact ? '#10b981' : '#ef4444';
+                var statusBg = sig.intact ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
+                var statusTitle = sig.intact
+                    ? '✔ KRYPTOGRAFISCHE SIGNATUR GÜLTIG — DOKUMENT UNVERÄNDERT'
+                    : '✕ WARNUNG: SIGNATUR UNGÜLTIG ODER DOKUMENT WURDE NACHTRÄGLICH VERÄNDERT!';
+
+                html += '<div style="border:1px solid ' + statusColor + ';background:' + statusBg + ';border-radius:8px;padding:12px;margin-bottom:10px;">' +
+                    '<div style="font-weight:800;font-size:13px;color:' + statusColor + ';margin-bottom:8px;">' + statusTitle + '</div>' +
+                    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:6px;font-size:12px;color:var(--text-primary);">' +
+                    '<div><strong>Unterzeichner (CN):</strong> ' + escapeHtml(sig.signer_name || '—') + '</div>' +
+                    '<div><strong>Organisation:</strong> ' + escapeHtml(sig.signer_org || '—') + (sig.signer_ou ? ' (' + escapeHtml(sig.signer_ou) + ')' : '') + '</div>' +
+                    '<div><strong>E-Mail:</strong> ' + escapeHtml(sig.signer_email || '—') + '</div>' +
+                    '<div><strong>Signatur-Zeitpunkt:</strong> ' + escapeHtml(sig.signing_time || '—') + '</div>' +
+                    '<div><strong>Grund:</strong> ' + escapeHtml(sig.reason || '—') + '</div>' +
+                    '<div><strong>Ort:</strong> ' + escapeHtml(sig.location || '—') + '</div>' +
+                    '<div><strong>Aussteller:</strong> ' + escapeHtml(sig.issuer_cn || '—') + (sig.self_signed ? ' <em>(Selbstsigniertes Zertifikat)</em>' : '') + '</div>' +
+                    '<div><strong>Zertifikat gültig:</strong> ' + escapeHtml(sig.valid_from || '?') + ' bis ' + escapeHtml(sig.valid_to || '?') + '</div>' +
+                    '<div><strong>Hash- &amp; Signaturverfahren:</strong> <code>' + escapeHtml(sig.hash_algo) + ' / ' + escapeHtml(sig.subfilter) + '</code></div>' +
+                    '<div><strong>Dokumenten-Abdeckung:</strong> ' + (sig.covers_whole_doc ? '<span style="color:#10b981;font-weight:700;">✔ Gesamtes PDF versiegelt</span>' : '<span style="color:#f59e0b;">⚠️ Nachträgliche Daten angehängt</span>') + '</div>' +
+                    '</div>' +
+                    (sig.fingerprint ? '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);"><strong>SHA-256 Fingerabdruck:</strong> <code style="word-break:break-all;">' + escapeHtml(sig.fingerprint) + '</code></div>' : '') +
+                    '</div>';
+            });
+            box.innerHTML = html;
+        } catch (err) {
+            box.innerHTML = '<span style="color:#fca5a5;">✕ Verbindungsfehler bei der Signaturprüfung: ' + escapeHtml(err.message || String(err)) + '</span>';
+        }
+    }
+
+    async function generateStandaloneP12Certificate() {
+        var cn = (document.getElementById('genP12Cn') && document.getElementById('genP12Cn').value.trim()) || '';
+        var org = (document.getElementById('genP12Org') && document.getElementById('genP12Org').value.trim()) || '';
+        var ou = (document.getElementById('genP12Ou') && document.getElementById('genP12Ou').value.trim()) || '';
+        var email = (document.getElementById('genP12Email') && document.getElementById('genP12Email').value.trim()) || '';
+        var days = (document.getElementById('genP12Days') && document.getElementById('genP12Days').value) || '1095';
+        var pass = (document.getElementById('genP12Pass') && document.getElementById('genP12Pass').value) || '';
+        var stBox = document.getElementById('genP12StatusBox');
+        var btn = document.getElementById('btnGenerateDownloadP12');
+
+        function setGenStatus(html, isOk) {
+            if (!stBox) return;
+            stBox.classList.remove('hidden');
+            stBox.style.background = isOk ? 'rgba(16,185,129,0.14)' : 'rgba(239,68,68,0.14)';
+            stBox.style.border = isOk ? '1px solid rgba(16,185,129,0.4)' : '1px solid rgba(239,68,68,0.4)';
+            stBox.style.color = isOk ? '#6ee7b7' : '#fca5a5';
+            stBox.innerHTML = html;
+        }
+
+        if (!cn) {
+            setGenStatus('✕ Bitte geben Sie Ihren vollständigen Namen (Common Name / CN) ein.', false);
+            return;
+        }
+        if (pass.length < 4) {
+            setGenStatus('✕ Bitte vergeben Sie ein Schutz-Passwort mit mindestens 4 Zeichen für Ihre .p12-Datei.', false);
+            return;
+        }
+
+        if (btn) btn.disabled = true;
+        try {
+            var fd = new FormData();
+            fd.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+            fd.append('cn', cn);
+            fd.append('org', org);
+            fd.append('ou', ou);
+            fd.append('email', email);
+            fd.append('days', days);
+            fd.append('password', pass);
+
+            var resp = await fetch('api.php?action=generate_p12_cert', {
+                method: 'POST',
+                body: fd
+            });
+            var data = await resp.json();
+            if (!data || !data.ok || !data.p12_base64) {
+                setGenStatus('✕ ' + escapeHtml((data && data.error) ? data.error : 'Zertifikat konnte nicht erzeugt werden.'), false);
+                return;
+            }
+
+            var p12Bytes = base64ToUint8Array(data.p12_base64);
+            downloadBlob(p12Bytes, data.filename || 'Signatur_Zertifikat.p12', 'application/x-pkcs12');
+
+            var m = data.meta || {};
+            setGenStatus(
+                '✔ <strong>Persönliches Signatur-Zertifikat (<code>' + escapeHtml(data.filename || 'Zertifikat.p12') + '</code>) erfolgreich erstellt &amp; heruntergeladen!</strong><br>' +
+                '• <strong>Gültigkeit:</strong> ' + escapeHtml(m.valid_from || '') + ' bis ' + escapeHtml(m.valid_to || '') + '<br>' +
+                '• <strong>SHA-256 Fingerabdruck:</strong> <code style="font-size:10.5px;word-break:break-all;">' + escapeHtml(m.fingerprint_sha256 || '') + '</code><br>' +
+                'Sie können diese <code>.p12</code>-Datei jederzeit unter „1. PDF digital unterschreiben“ oder in Adobe Acrobat verwenden.',
+                true
+            );
+            showToast('Zertifikat ' + (data.filename || '.p12') + ' erfolgreich heruntergeladen!', 'success');
+        } catch (err) {
+            setGenStatus('✕ Verbindungsfehler beim Erstellen des Zertifikats.', false);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // =========================================================================
     // Event Listeners Setup
     // =========================================================================
     function initEventListeners() {
@@ -9844,6 +10403,47 @@
             btnRunMailMerge.addEventListener('click', runMailMergeFromUploadedTable);
         }
 
+        // v1.4.6: Digital Certificate Signature (.p12 / PKCS#7 / PAdES) Listeners
+        ['btnCertTabSign', 'btnCertTabVerify', 'btnCertTabCreate'].forEach(function (btnId) {
+            var b = document.getElementById(btnId);
+            if (b) {
+                b.addEventListener('click', function () {
+                    switchDigitalCertTab(b.getAttribute('data-cert-tab'));
+                });
+            }
+        });
+
+        var certModeQuickRadio = document.getElementById('certModeQuickRadio');
+        var certModeP12Radio = document.getElementById('certModeP12Radio');
+        function updateCertSourceModeVisibility() {
+            var qBox = document.getElementById('certQuickInputsBox');
+            var pBox = document.getElementById('certP12InputsBox');
+            var isP12 = certModeP12Radio && certModeP12Radio.checked;
+            if (qBox) {
+                if (isP12) qBox.classList.add('hidden');
+                else qBox.classList.remove('hidden');
+            }
+            if (pBox) {
+                if (isP12) pBox.classList.remove('hidden');
+                else pBox.classList.add('hidden');
+            }
+        }
+        if (certModeQuickRadio) certModeQuickRadio.addEventListener('change', updateCertSourceModeVisibility);
+        if (certModeP12Radio) certModeP12Radio.addEventListener('change', updateCertSourceModeVisibility);
+
+        var btnExecuteCertSignPdf = document.getElementById('btnExecuteCertSignPdf');
+        if (btnExecuteCertSignPdf) {
+            btnExecuteCertSignPdf.addEventListener('click', executeCryptographicPdfSigning);
+        }
+        var btnRunVerifyPdfCert = document.getElementById('btnRunVerifyPdfCert');
+        if (btnRunVerifyPdfCert) {
+            btnRunVerifyPdfCert.addEventListener('click', verifyActivePdfDigitalSignatures);
+        }
+        var btnGenerateDownloadP12 = document.getElementById('btnGenerateDownloadP12');
+        if (btnGenerateDownloadP12) {
+            btnGenerateDownloadP12.addEventListener('click', generateStandaloneP12Certificate);
+        }
+
         // Keyboard shortcuts (Desktop feel)
         window.addEventListener('keydown', function (e) {
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
@@ -9910,13 +10510,14 @@
             cmdLabel: '▶️ Seiten-Studio öffnen'
         },
         'sign-stamp': {
-            title: '✍️ Unterschrift & Stempel',
-            keywords: ['unterschrift', 'signatur', 'unterschreiben', 'signieren', 'stempel', 'bezahlt', 'genehmigt', 'bild', 'logo'],
-            html: '<strong>Unterschreiben &amp; Stempeln:</strong><br>' +
-                  '• <strong>Unterschrift:</strong> Klicken Sie auf <em>✍️ Signatur</em>. Zeichnen Sie mit der Maus oder tippen Sie Ihren Namen als Schreibschrift ein.<br>' +
-                  '• <strong>Stempel:</strong> Wählen Sie unter <em>✎ Bearbeiten → 🏷️ Stempel</em> und im rechten Inspektor (Button <code>◨</code> oben rechts) den gewünschten Stempeltext.',
-            cmd: 'open-signature-modal',
-            cmdLabel: '▶️ Unterschriften-Fenster öffnen'
+            title: '🔏 Digitale Zertifikats-Signatur, Unterschrift & Stempel',
+            keywords: ['unterschrift', 'signatur', 'unterschreiben', 'signieren', 'zertifikat', 'p12', 'pfx', 'pkcs7', 'adobe', 'stempel', 'bezahlt', 'genehmigt', 'bild', 'logo'],
+            html: '<strong>Unterschreiben, Zertifikats-Signatur &amp; Stempeln:</strong><br>' +
+                  '• <strong>🔏 Digitale Zertifikats-Signatur (Adobe Acrobat kompatibel):</strong> Klicken Sie auf <em>🔏 Digital signieren</em> (unter <em>Bearbeiten</em> oder <em>Layout &amp; Schutz</em>), um das PDF mit einem kryptografischen Zertifikat (<code>.p12</code> / RSA-2048 / SHA-256) manipulationssicher zu versiegeln oder vorhandene Signaturen zu prüfen.<br>' +
+                  '• <strong>✍️ Optische Unterschrift:</strong> Klicken Sie auf <em>✍️ Signatur</em>, um mit der Maus zu unterschreiben oder Ihren Namen als Schreibschrift einzufügen.<br>' +
+                  '• <strong>🏷️ Stempel:</strong> Wählen Sie unter <em>✎ Bearbeiten → 🏷️ Stempel</em> den gewünschten Stempeltext.',
+            cmd: 'open-cert-sign-modal',
+            cmdLabel: '▶️ Digitale Zertifikats-Signatur öffnen'
         },
         'redact': {
             title: '🛡️ Sicheres Schwärzen (Sanitize)',
