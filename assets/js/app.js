@@ -394,7 +394,13 @@
                 '<button type="button" class="doc-tab-close" title="Tab schließen">×</button>';
 
             btn.addEventListener('click', function (e) {
-                if (e.target.classList.contains('doc-tab-close')) {
+                if (e.target && e.target.closest && e.target.closest('.doc-tab-close')) {
+                    e.stopPropagation();
+                    closeDocumentTab(tab.id);
+                    return;
+                }
+                if (e.target && e.target.classList && e.target.classList.contains('doc-tab-close')) {
+                    e.stopPropagation();
                     closeDocumentTab(tab.id);
                     return;
                 }
@@ -418,6 +424,7 @@
                 await renderCurrentEditorPage();
             }
             updateStatusBarInfo();
+            setStatus('Dokument geladen: ' + doc.name + ' (' + doc.pageCount + (doc.pageCount === 1 ? ' Seite' : ' Seiten') + ')');
         }
     }
 
@@ -428,12 +435,32 @@
 
         if (state.tabs.length === 0) {
             state.activeTabId = null;
+            state.selectedAnnotationIndex = -1;
+            state.currentPageTextBlocks = [];
             el.thumbList.innerHTML = '';
             el.organizerGrid.innerHTML = '';
             el.leftPageSummary.textContent = 'Keine Datei geladen';
+            if (el.pdfCanvas) {
+                var ctx = el.pdfCanvas.getContext('2d');
+                if (ctx) ctx.clearRect(0, 0, el.pdfCanvas.width, el.pdfCanvas.height);
+                el.pdfCanvas.width = 0;
+                el.pdfCanvas.height = 0;
+            }
+            if (el.overlayLayer) {
+                el.overlayLayer.innerHTML = '';
+            }
+            var mTitle = document.getElementById('metaTitle');
+            var mAuthor = document.getElementById('metaAuthor');
+            var mSubject = document.getElementById('metaSubject');
+            if (mTitle) mTitle.value = '';
+            if (mAuthor) mAuthor.value = '';
+            if (mSubject) mSubject.value = '';
+            clearPdfFullTextSearch();
+            updateAccessibilityUI(false);
             renderTabsBar();
             switchView('launcher');
             updateStatusBarInfo();
+            setStatus('Bereit — Kein Dokument geladen');
         } else {
             var nextTab = state.tabs[Math.max(0, idx - 1)];
             activateDocumentTab(nextTab.id);
@@ -655,18 +682,25 @@
 
     function setupDragAndDropPageItem(element, pageIndex) {
         element.addEventListener('dragstart', function (e) {
+            state.isInternalDrag = true;
             element.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', String(pageIndex));
         });
         element.addEventListener('dragend', function () {
+            state.isInternalDrag = false;
             element.classList.remove('dragging');
+            var dropOverlay = document.getElementById('dropOverlay');
+            if (dropOverlay) dropOverlay.classList.remove('visible');
         });
         element.addEventListener('dragover', function (e) {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
         });
         element.addEventListener('drop', function (e) {
+            state.isInternalDrag = false;
+            var dropOverlay = document.getElementById('dropOverlay');
+            if (dropOverlay) dropOverlay.classList.remove('visible');
             e.preventDefault();
             var fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
             var toIndex = pageIndex;
@@ -10163,31 +10197,92 @@
 
         // Global Drag & Drop of files into the window
         var dropOverlay = document.getElementById('dropOverlay');
+        var dropOverlayTimer = null;
+        function hideDropOverlay() {
+            if (dropOverlayTimer) {
+                clearTimeout(dropOverlayTimer);
+                dropOverlayTimer = null;
+            }
+            if (dropOverlay && dropOverlay.classList.contains('visible')) {
+                dropOverlay.classList.remove('visible');
+            }
+        }
+        window.addEventListener('dragstart', function () {
+            state.isInternalDrag = true;
+            hideDropOverlay();
+        }, true);
+        window.addEventListener('dragend', function () {
+            state.isInternalDrag = false;
+            hideDropOverlay();
+        }, true);
         window.addEventListener('dragover', function (e) {
+            if (state.isInternalDrag) {
+                hideDropOverlay();
+                return;
+            }
+            if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
+                hideDropOverlay();
+                return;
+            }
+            if (document.querySelector('.modal-backdrop.open')) {
+                hideDropOverlay();
+                return;
+            }
             if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).indexOf('Files') !== -1) {
                 e.preventDefault();
-                dropOverlay.classList.add('visible');
+                if (dropOverlay) {
+                    dropOverlay.classList.add('visible');
+                }
+                if (dropOverlayTimer) clearTimeout(dropOverlayTimer);
+                dropOverlayTimer = setTimeout(hideDropOverlay, 250);
             }
         });
         window.addEventListener('dragleave', function (e) {
-            if (e.target === document.documentElement || e.target === document.body) {
-                dropOverlay.classList.remove('visible');
+            if (
+                !e.relatedTarget ||
+                e.relatedTarget.nodeName === 'HTML' ||
+                e.target === document.documentElement ||
+                e.target === document.body ||
+                e.clientX <= 0 ||
+                e.clientY <= 0 ||
+                e.clientX >= window.innerWidth ||
+                e.clientY >= window.innerHeight
+            ) {
+                hideDropOverlay();
             }
         });
+        // Immediately hide any lingering overlay on normal mouse/keyboard/window events
+        window.addEventListener('mousemove', hideDropOverlay, { passive: true });
+        window.addEventListener('mousedown', hideDropOverlay, { passive: true });
+        window.addEventListener('pointerdown', hideDropOverlay, { passive: true });
+        window.addEventListener('blur', hideDropOverlay);
+        document.addEventListener('visibilitychange', hideDropOverlay);
+        window.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') hideDropOverlay();
+        });
+        window.addEventListener('drop', function () {
+            state.isInternalDrag = false;
+            hideDropOverlay();
+        }, true);
         window.addEventListener('drop', async function (e) {
-            dropOverlay.classList.remove('visible');
+            state.isInternalDrag = false;
+            hideDropOverlay();
+            if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') return;
             if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
             e.preventDefault();
 
             var files = e.dataTransfer.files;
             var pdfs = [];
             var images = [];
+            var docs = [];
             for (var i = 0; i < files.length; i++) {
                 var f = files[i];
                 if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
                     pdfs.push(f);
                 } else if (/^image\//i.test(f.type)) {
                     images.push(f);
+                } else if (/\.(docx|xlsx|xls|csv|txt|md|html|htm)$/i.test(f.name)) {
+                    docs.push(f);
                 }
             }
             for (var p = 0; p < pdfs.length; p++) {
@@ -10196,6 +10291,36 @@
             }
             if (images.length > 0) {
                 await convertImagesToPdf(images);
+            }
+            for (var d = 0; d < docs.length; d++) {
+                var df = docs[d];
+                var ext = df.name.split('.').pop().toLowerCase();
+                var titleName = df.name.replace(/\.[^.]+$/, '') + '.pdf';
+                var extractedText = '';
+                if (ext === 'docx' && window.mammoth) {
+                    var dbuf = await df.arrayBuffer();
+                    var dres = await window.mammoth.extractRawText({ arrayBuffer: dbuf });
+                    extractedText = dres.value || '';
+                } else if ((ext === 'xlsx' || ext === 'xls' || ext === 'csv') && window.XLSX) {
+                    var xbuf = await df.arrayBuffer();
+                    var wb = window.XLSX.read(xbuf, { type: 'array' });
+                    var sLines = [];
+                    wb.SheetNames.forEach(function (sheetName) {
+                        sLines.push('=== Tabelle: ' + sheetName + ' ===');
+                        sLines.push(window.XLSX.utils.sheet_to_csv(wb.Sheets[sheetName]));
+                    });
+                    extractedText = sLines.join('\n\n');
+                } else {
+                    extractedText = await df.text();
+                    if (ext === 'html' || ext === 'htm') {
+                        var tmpDiv = document.createElement('div');
+                        tmpDiv.innerHTML = extractedText;
+                        extractedText = tmpDiv.textContent || tmpDiv.innerText || '';
+                    }
+                }
+                if (extractedText) {
+                    await convertTextContentToPdf(extractedText, titleName);
+                }
             }
         });
 
