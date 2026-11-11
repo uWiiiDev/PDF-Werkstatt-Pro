@@ -3404,27 +3404,51 @@
         var totalChars = 0;
         var unlinkedEmailsAndUrlsCount = 0;
         var detectedEmailsAndUrlsTotal = 0;
-        var emailOrUrlPattern = /\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}|https?:\/\/[^\s<>()"']+|www\.[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}[^\s<>()"']*)/g;
+        var emailOrUrlPattern = /((?:mailto:\s*)?[a-zA-Z0-9äöüÄÖÜß._%+\-]+\s*@\s*[a-zA-Z0-9äöüÄÖÜß.\-]+\.[a-zA-Z]{2,24}|https?:\/\/[^\s<>()"']+|www\.[a-zA-Z0-9äöüÄÖÜß.\-]+\.[a-zA-Z]{2,24}[^\s<>()"']*)/gi;
 
         for (var p = 1; p <= pagesToScan; p++) {
             var page = await pdfJsDoc.getPage(p);
-            var tc = await page.getTextContent();
-            var pageText = tc.items.map(function (it) { return it.str; }).join(' ').trim();
+            var tc = await page.getTextContent({ includeMarkedContent: true });
+            var tagStack = [];
+            var plainItems = [];
+            for (var tci = 0; tci < tc.items.length; tci++) {
+                var tcIt = tc.items[tci];
+                if (!tcIt) continue;
+                if (tcIt.type === 'beginMarkedContentProps' || tcIt.type === 'beginMarkedContent') {
+                    tagStack.push(tcIt.tag || '');
+                    continue;
+                }
+                if (tcIt.type === 'endMarkedContent') {
+                    if (tagStack.length > 0) tagStack.pop();
+                    continue;
+                }
+                if (typeof tcIt.str === 'string' && tcIt.str.length > 0) {
+                    var activeTag = tagStack.length > 0 ? tagStack[tagStack.length - 1] : '';
+                    plainItems.push({ str: tcIt.str, tag: activeTag });
+                }
+            }
+            var pageText = plainItems.map(function (it) { return it.str; }).join(' ').trim();
             if (pageText.length > 0) {
                 pagesWithText++;
                 totalChars += pageText.length;
-                var mArr = pageText.match(emailOrUrlPattern);
-                if (mArr) {
-                    for (var mi = 0; mi < mArr.length; mi++) {
-                        var tok = mArr[mi].replace(/[.,;:!?)\]]+$/, '');
-                        if (tok.length < 5) continue;
-                        detectedEmailsAndUrlsTotal++;
-                        var normTok = tok.toLowerCase().replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-                        var fullMailto = 'mailto:' + normTok;
-                        var fullHttp = 'http://' + normTok;
-                        var fullHttps = 'https://' + normTok;
-                        if (!linkedUrisLower[normTok] && !linkedUrisLower[fullMailto] && !linkedUrisLower[fullHttp] && !linkedUrisLower[fullHttps]) {
-                            unlinkedEmailsAndUrlsCount++;
+                for (var piIdx = 0; piIdx < plainItems.length; piIdx++) {
+                    var pItem = plainItems[piIdx];
+                    var mArr = pItem.str.match(emailOrUrlPattern);
+                    if (mArr) {
+                        for (var mi = 0; mi < mArr.length; mi++) {
+                            var tok = mArr[mi].replace(/[\u00AD\u200B]/g, '').replace(/[.,;:!?)\]>]+$/, '').replace(/^[([<]+/, '').trim();
+                            if (tok.length < 5) continue;
+                            detectedEmailsAndUrlsTotal++;
+                            var isEm = tok.indexOf('@') !== -1 && !/^https?:\/\//i.test(tok);
+                            var compactTok = isEm ? tok.replace(/\s+/g, '') : tok;
+                            var normTok = compactTok.toLowerCase().replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+                            var fullMailto = 'mailto:' + normTok;
+                            var fullHttp = 'http://' + normTok;
+                            var fullHttps = 'https://' + normTok;
+                            var hasAnnotUri = Boolean(linkedUrisLower[normTok] || linkedUrisLower[fullMailto] || linkedUrisLower[fullHttp] || linkedUrisLower[fullHttps]);
+                            if (!hasAnnotUri || pItem.tag !== 'Link') {
+                                unlinkedEmailsAndUrlsCount++;
+                            }
                         }
                     }
                 }
@@ -4226,9 +4250,66 @@
         return lines.join('\n');
     }
 
+    function extractAsciiFromPdfTextOperand(rawOpnd) {
+        if (!rawOpnd) return '';
+        var out = [];
+        var s = String(rawOpnd);
+        var i = 0;
+        var len = s.length;
+        while (i < len) {
+            var ch = s.charCodeAt(i);
+            if (ch === 40) { // '('
+                i++;
+                var depth = 1;
+                while (i < len && depth > 0) {
+                    var c = s.charCodeAt(i);
+                    if (c === 92 && i + 1 < len) { // '\'
+                        var nextC = s.charAt(i + 1);
+                        if (nextC >= '0' && nextC <= '7') {
+                            var oct = s.slice(i + 1, i + 4).match(/^[0-7]{1,3}/)[0];
+                            out.push(String.fromCharCode(parseInt(oct, 8)));
+                            i += 1 + oct.length;
+                            continue;
+                        }
+                        out.push(nextC);
+                        i += 2;
+                        continue;
+                    }
+                    if (c === 40) { depth++; out.push('('); i++; continue; }
+                    if (c === 41) { depth--; if (depth > 0) out.push(')'); i++; continue; }
+                    out.push(s.charAt(i));
+                    i++;
+                }
+                continue;
+            }
+            if (ch === 60 && (i + 1 >= len || s.charCodeAt(i + 1) !== 60)) { // '<hex>'
+                var endHex = s.indexOf('>', i + 1);
+                if (endHex !== -1) {
+                    var hex = s.slice(i + 1, endHex).replace(/\s+/g, '');
+                    if (hex.length >= 4 && hex.length % 4 === 0 && /^00[2-7][0-9A-Fa-f]/.test(hex)) {
+                        for (var h4 = 0; h4 < hex.length; h4 += 4) {
+                            var code4 = parseInt(hex.slice(h4, h4 + 4), 16);
+                            if (code4 >= 32 && code4 <= 255) out.push(String.fromCharCode(code4));
+                        }
+                    } else {
+                        for (var h2 = 0; h2 < hex.length; h2 += 2) {
+                            var code2 = parseInt(hex.slice(h2, h2 + 2), 16);
+                            if (code2 >= 32 && code2 <= 255) out.push(String.fromCharCode(code2));
+                        }
+                    }
+                    i = endHex + 1;
+                    continue;
+                }
+            }
+            i++;
+        }
+        return out.join('');
+    }
+
     function tagContentStreamStatementsForPdfUa(stmts, startMcid, forceInvisibleTextMode3, pageIndex) {
         var nextMcid = startMcid || 0;
         var mcidTags = [];
+        var mcidRawTexts = [];
         var outLines = [];
         var idx = 0;
         var total = stmts.length;
@@ -4298,13 +4379,14 @@
                 continue;
             }
 
-            // 2. Text Object (BT ... ET) — never contains q or Q per ISO 32000-1 Figure 9
+            // 2. Text Object (BT ... ET) — never contains q or Q per ISO 32000-1 Figure 9.
+            //    Split multi-line / multi-column / link segments inside BT...ET into individual MCIDs
+            //    so any email address or URL in text can be wrapped in its own <Link> structure element.
             if (op === 'BT') {
-                var btBlock = [st.raw];
-                if (forceInvisibleTextMode3) {
-                    btBlock.push('3 Tr');
-                }
-                var hasNonEmptyText = false;
+                var segments = [];
+                var curSeg = { stmts: [], hasText: false, rawTexts: [], hasLinkLikeToken: false };
+                var lastTmX = null;
+                var lastTmY = null;
                 idx++;
                 while (idx < total) {
                     var tst = stmts[idx];
@@ -4313,27 +4395,109 @@
                         idx++;
                         continue;
                     }
-                    btBlock.push(enhanceTextColorStmtForWcagContrast(tst));
-                    if (top === 'Tj' || top === 'TJ' || top === "'" || top === '"') {
-                        var opndStr = tst.operands.join('').replace(/\s+/g, '');
-                        if (opndStr !== '()' && opndStr !== '<>' && opndStr !== '[]') {
-                            hasNonEmptyText = true;
+                    if (top === 'ET') {
+                        idx++;
+                        break;
+                    }
+                    var enhancedLine = enhanceTextColorStmtForWcagContrast(tst);
+                    if (top === 'T*' && curSeg.hasText) {
+                        segments.push(curSeg);
+                        curSeg = { stmts: [], hasText: false, rawTexts: [], hasLinkLikeToken: false };
+                    } else if ((top === 'Td' || top === 'TD') && tst.operands.length >= 2) {
+                        var tdx = parseFloat(tst.operands[0]) || 0;
+                        var tdy = parseFloat(tst.operands[1]) || 0;
+                        if (curSeg.hasText && (Math.abs(tdy) > 1.0 || Math.abs(tdx) >= 14)) {
+                            segments.push(curSeg);
+                            curSeg = { stmts: [], hasText: false, rawTexts: [], hasLinkLikeToken: false };
                         }
+                    } else if (top === 'Tm' && tst.operands.length >= 6) {
+                        var tmx = parseFloat(tst.operands[4]) || 0;
+                        var tmy = parseFloat(tst.operands[5]) || 0;
+                        if (curSeg.hasText && lastTmY !== null && (Math.abs(tmy - lastTmY) > 1.5 || Math.abs(tmx - lastTmX) >= 24)) {
+                            segments.push(curSeg);
+                            curSeg = { stmts: [], hasText: false, rawTexts: [], hasLinkLikeToken: false };
+                        }
+                        lastTmX = tmx;
+                        lastTmY = tmy;
+                    }
+
+                    if (top === 'Tj' || top === 'TJ' || top === "'" || top === '"') {
+                        var opndJoined = tst.operands.join(' ');
+                        var opndStr = opndJoined.replace(/\s+/g, '');
+                        if (opndStr !== '()' && opndStr !== '<>' && opndStr !== '[]') {
+                            var extractedAscii = extractAsciiFromPdfTextOperand(opndJoined);
+                            var looksLikeLink = /(@|https?:\/\/|www\.|mailto:)/i.test(extractedAscii);
+                            if (curSeg.hasText && (looksLikeLink || curSeg.hasLinkLikeToken)) {
+                                segments.push(curSeg);
+                                curSeg = { stmts: [], hasText: false, rawTexts: [], hasLinkLikeToken: false };
+                            }
+                            curSeg.hasText = true;
+                            if (extractedAscii) curSeg.rawTexts.push(extractedAscii);
+                            if (looksLikeLink) curSeg.hasLinkLikeToken = true;
+                        }
+                        curSeg.stmts.push(enhancedLine);
+                        if (top === "'" || top === '"') {
+                            segments.push(curSeg);
+                            curSeg = { stmts: [], hasText: false, rawTexts: [], hasLinkLikeToken: false };
+                        }
+                    } else {
+                        curSeg.stmts.push(enhancedLine);
                     }
                     idx++;
-                    if (top === 'ET') break;
                 }
-                if (hasNonEmptyText) {
-                    var mcid = nextMcid++;
-                    var tagType = (pageIndex === 0 && mcid === 0) ? 'H1' : ((pageIndex > 0 && mcid === 0) ? 'H2' : 'P');
-                    mcidTags.push(tagType);
-                    outLines.push('/' + tagType + ' <</MCID ' + mcid + '>> BDC');
-                    outLines.push(btBlock.join('\n'));
+                if (curSeg.stmts.length > 0) {
+                    if (!curSeg.hasText && segments.length > 0) {
+                        for (var tsIdx = 0; tsIdx < curSeg.stmts.length; tsIdx++) {
+                            segments[segments.length - 1].stmts.push(curSeg.stmts[tsIdx]);
+                        }
+                    } else {
+                        segments.push(curSeg);
+                    }
+                }
+                var textSegmentsCount = 0;
+                for (var sc = 0; sc < segments.length; sc++) {
+                    if (segments[sc].hasText) textSegmentsCount++;
+                }
+                if (textSegmentsCount === 0) {
+                    outLines.push('/Artifact BMC');
+                    outLines.push('BT');
+                    if (forceInvisibleTextMode3) outLines.push('3 Tr');
+                    for (var ns = 0; ns < segments.length; ns++) {
+                        if (segments[ns].stmts.length > 0) {
+                            outLines.push(segments[ns].stmts.join('\n'));
+                        }
+                    }
+                    outLines.push('ET');
+                    outLines.push('EMC');
+                } else if (textSegmentsCount === 1 && segments.length === 1) {
+                    var singleMcid = nextMcid++;
+                    var singleTag = (pageIndex === 0 && singleMcid === 0) ? 'H1' : ((pageIndex > 0 && singleMcid === 0) ? 'H2' : 'P');
+                    mcidTags.push(singleTag);
+                    mcidRawTexts.push(segments[0].rawTexts.join(''));
+                    outLines.push('/' + singleTag + ' <</MCID ' + singleMcid + '>> BDC');
+                    outLines.push('BT');
+                    if (forceInvisibleTextMode3) outLines.push('3 Tr');
+                    outLines.push(segments[0].stmts.join('\n'));
+                    outLines.push('ET');
                     outLines.push('EMC');
                 } else {
-                    outLines.push('/Artifact BMC');
-                    outLines.push(btBlock.join('\n'));
-                    outLines.push('EMC');
+                    outLines.push('BT');
+                    if (forceInvisibleTextMode3) outLines.push('3 Tr');
+                    for (var sg = 0; sg < segments.length; sg++) {
+                        var segObj = segments[sg];
+                        if (segObj.hasText) {
+                            var segMcid = nextMcid++;
+                            var segTag = (pageIndex === 0 && segMcid === 0) ? 'H1' : ((pageIndex > 0 && segMcid === 0) ? 'H2' : 'P');
+                            mcidTags.push(segTag);
+                            mcidRawTexts.push(segObj.rawTexts.join(''));
+                            outLines.push('/' + segTag + ' <</MCID ' + segMcid + '>> BDC');
+                            outLines.push(segObj.stmts.join('\n'));
+                            outLines.push('EMC');
+                        } else if (segObj.stmts.length > 0) {
+                            outLines.push(segObj.stmts.join('\n'));
+                        }
+                    }
+                    outLines.push('ET');
                 }
                 continue;
             }
@@ -4385,7 +4549,8 @@
         return {
             contentString: outLines.join('\n') + '\n',
             nextMcid: nextMcid,
-            mcidTags: mcidTags
+            mcidTags: mcidTags,
+            mcidRawTexts: mcidRawTexts
         };
     }
 
@@ -4747,75 +4912,11 @@
         // 3. Embed TrueType Fonts (/FontFile2 + /Widths + /ToUnicode) for all unembedded Fonts
         var sharedFontInfo = await embedPdfUaFontsIntoDocument(pdfDoc);
 
-        // 3b. Extract Email Addresses, Web URLs & Page Headings via PDF.js for PAC Quality Auto-Linking & Semantic Bookmarks
-        var autoLinkItemsByPage = {};
-        var extractedPageHeadings = {};
-        try {
-            var linkScanJsDoc = await loadPdfJsDocument(doc.bytes);
-            var linkTokenRegex = /\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}|https?:\/\/[^\s<>()"']+|www\.[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,24}[^\s<>()"']*)/g;
-            for (var lp = 1; lp <= linkScanJsDoc.numPages; lp++) {
-                var jsPage = await linkScanJsDoc.getPage(lp);
-                var jsTc = await jsPage.getTextContent();
-                var pLinks = [];
-                var firstLineCandidate = '';
-                for (var ti = 0; ti < jsTc.items.length; ti++) {
-                    var tItem = jsTc.items[ti];
-                    var tStr = (tItem && tItem.str) ? String(tItem.str) : '';
-                    if (!tStr) continue;
-                    var rawTr = tItem.transform || [10, 0, 0, 10, 72, 700];
-                    var rawFontH = Math.abs(rawTr[3]) || Math.abs(rawTr[0]) || (tItem.height || 11);
-                    if (rawFontH < 1 || tStr.indexOf('Verknuepfung:') === 0) continue;
-                    if (!firstLineCandidate && tStr.trim().length >= 3) {
-                        firstLineCandidate = tStr.trim().slice(0, 80);
-                    }
-                    linkTokenRegex.lastIndex = 0;
-                    var mToken;
-                    while ((mToken = linkTokenRegex.exec(tStr)) !== null) {
-                        var rawMatch = mToken[0].replace(/[.,;:!?)\]]+$/, '');
-                        if (rawMatch.length < 5) continue;
-                        var isEmail = rawMatch.indexOf('@') !== -1 && !/^https?:\/\//i.test(rawMatch);
-                        var targetUri = isEmail
-                            ? ('mailto:' + rawMatch.replace(/^mailto:/i, ''))
-                            : (/^https?:\/\//i.test(rawMatch) ? rawMatch : ('https://' + rawMatch));
-                        var tr = tItem.transform || [10, 0, 0, 10, 72, 700];
-                        var fontH = Math.max(8, Math.abs(tr[3]) || Math.abs(tr[0]) || (tItem.height || 11));
-                        var itemW = Math.max(24, tItem.width || (tStr.length * fontH * 0.52));
-                        var startRatio = tStr.length > 0 ? (mToken.index / tStr.length) : 0;
-                        var lenRatio = tStr.length > 0 ? Math.min(1, rawMatch.length / tStr.length) : 1;
-                        var x1 = tr[4] + itemW * startRatio;
-                        var y1 = tr[5] - fontH * 0.22;
-                        var x2 = x1 + Math.max(20, itemW * lenRatio);
-                        var y2 = tr[5] + fontH * 0.92;
-                        pLinks.push({
-                            rawText: rawMatch,
-                            uri: targetUri,
-                            normKey: rawMatch.toLowerCase().replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, ''),
-                            isEmail: isEmail,
-                            rect: [
-                                Math.round(x1 * 100) / 100,
-                                Math.round(y1 * 100) / 100,
-                                Math.round(x2 * 100) / 100,
-                                Math.round(y2 * 100) / 100
-                            ]
-                        });
-                    }
-                }
-                autoLinkItemsByPage[lp - 1] = pLinks;
-                if (firstLineCandidate) {
-                    extractedPageHeadings[lp - 1] = firstLineCandidate;
-                }
-            }
-        } catch (linkScanErr) {
-            console.warn('Auto-link text scan warning:', linkScanErr);
-        }
+        // 4. Tag all Page Content Streams (<H1>/<H2>/<P>/<Link> MCID, non-text -> /Artifact),
+        //    match every email/URL in text to its exact MCID(s), and build /StructTreeRoot + /ParentTree
+        var pageTagStates = [];
 
-        // 4. Tag all Page Content Streams (<H1>/<H2>/<P> MCID, non-text -> /Artifact) & build /StructTreeRoot + /ParentTree
-        var structTreeRootRef = context.nextRef();
-        var docElemRef = context.nextRef();
-        var sectRefs = [];
-        var parentTreeEntries = [];
-        var nextStructParentKey = pages.length;
-
+        // 4a. Pass 1: Tokenize & tag all page content streams with sequential MCIDs (0 .. pageMcidCount - 1)
         for (var i = 0; i < pages.length; i++) {
             var page = pages[i];
             var pageNode = page.node;
@@ -4855,6 +4956,7 @@
 
             var pageMcidCount = 0;
             var pageMcidTags = [];
+            var pageMcidRawTexts = [];
             var taggedContentStr = '';
             if (streamRefs.length > 0 && PDFLib.decodePDFRawStream) {
                 var decodedParts = [];
@@ -4865,16 +4967,18 @@
                 }
 
                 if (decodedParts.length > 0) {
-                    var combinedSrc = decodedParts.join('\n').replace(/\/(?:Link|Form|Annot)\s*<<\/MCID\s+\d+>>\s*BDC\s+q\s+BT\s+\/F_PDFUA\s+0\.01\s+Tf[\s\S]*?EMC\s*/g, '');
+                    var combinedSrc = decodedParts.join('\n')
+                        .replace(/(?:\/(?:Link|Form|Annot)\s*<<\/MCID\s+\d+>>\s*BDC\s*)?q\s+BT\s+\/F_PDFUA\s+0\.01\s+Tf[\s\S]*?ET\s+Q(?:\s*EMC)?\s*/g, '');
                     var stmts = parsePdfContentStreamStatements(combinedSrc);
                     var taggedResult = tagContentStreamStatementsForPdfUa(stmts, 0, hadLowOpacityOcrGState, i);
                     pageMcidCount = taggedResult.nextMcid;
                     pageMcidTags = taggedResult.mcidTags;
+                    pageMcidRawTexts = taggedResult.mcidRawTexts || [];
                     taggedContentStr = taggedResult.contentString;
                 }
             }
 
-            // Ensure embedded TrueType font /F_PDFUA is always registered in page /Resources /Font for fallback or <Link> MCID text
+            // Ensure embedded TrueType font /F_PDFUA is always registered in page /Resources /Font
             if (sharedFontInfo && sharedFontInfo.fontDictRef) {
                 if (!resDict) {
                     resDict = context.obj({});
@@ -4903,122 +5007,440 @@
                     'EMC\n';
                 pageMcidCount = 1;
                 pageMcidTags = [fallbackTag];
+                pageMcidRawTexts = [''];
             }
+
+            var contentStreamRef = null;
+            if (taggedContentStr.length > 0) {
+                var prelimStreamBytes = stringToLatin1Bytes(taggedContentStr);
+                var prelimFlateStream = context.flateStream(prelimStreamBytes);
+                contentStreamRef = context.register(prelimFlateStream);
+                pageNode.set(PDFLib.PDFName.of('Contents'), contentStreamRef);
+            }
+
+            pageTagStates.push({
+                pageMcidCount: pageMcidCount,
+                pageMcidTags: pageMcidTags,
+                pageMcidRawTexts: pageMcidRawTexts,
+                taggedContentStr: taggedContentStr,
+                contentStreamRef: contentStreamRef
+            });
+        }
+
+        // 4b. Pass 2: Extract decoded Unicode text, coordinates & exact MCIDs via PDF.js (includeMarkedContent: true)
+        var autoLinkItemsByPage = {};
+        var pageTextRunsByPage = {};
+        var extractedPageHeadings = {};
+        var linkTokenRegex = /((?:mailto:\s*)?[a-zA-Z0-9äöüÄÖÜß._%+\-]+\s*@\s*[a-zA-Z0-9äöüÄÖÜß.\-]+\.[a-zA-Z]{2,24}|https?:\/\/[^\s<>()"']+|www\.[a-zA-Z0-9äöüÄÖÜß.\-]+\.[a-zA-Z]{2,24}[^\s<>()"']*)/gi;
+
+        function parseLinkTokenMatch(rawCandidate) {
+            var cleaned = String(rawCandidate || '').replace(/[\u00AD\u200B]/g, '').replace(/[.,;:!?)\]>]+$/, '').replace(/^[([<]+/, '').trim();
+            if (cleaned.length < 5) return null;
+            var isEmail = cleaned.indexOf('@') !== -1 && !/^https?:\/\//i.test(cleaned);
+            var compact = isEmail ? cleaned.replace(/\s+/g, '') : cleaned;
+            var targetUri = isEmail
+                ? ('mailto:' + compact.replace(/^mailto:/i, ''))
+                : (/^https?:\/\//i.test(compact) ? compact : ('https://' + compact));
+            var normKey = compact.toLowerCase().replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+            return {
+                rawText: compact,
+                uri: targetUri,
+                normKey: normKey,
+                isEmail: isEmail
+            };
+        }
+
+        function rectsOverlapOrClose(rA, rB) {
+            if (!rA || !rB || rA.length < 4 || rB.length < 4) return false;
+            var ax1 = Math.min(rA[0], rA[2]), ax2 = Math.max(rA[0], rA[2]);
+            var ay1 = Math.min(rA[1], rA[3]), ay2 = Math.max(rA[1], rA[3]);
+            var bx1 = Math.min(rB[0], rB[2]), bx2 = Math.max(rB[0], rB[2]);
+            var by1 = Math.min(rB[1], rB[3]), by2 = Math.max(rB[1], rB[3]);
+            var overlapX = Math.min(ax2, bx2) - Math.max(ax1, bx1);
+            var overlapY = Math.min(ay2, by2) - Math.max(ay1, by1);
+            return overlapX >= -8 && overlapY >= -6;
+        }
+
+        try {
+            var prelimPdfBytes = await pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false, addDefaultPage: false });
+            var linkScanJsDoc = await loadPdfJsDocument(prelimPdfBytes);
+            for (var lp = 1; lp <= linkScanJsDoc.numPages; lp++) {
+                var pIdx0 = lp - 1;
+                var jsPage = await linkScanJsDoc.getPage(lp);
+                var jsTc = await jsPage.getTextContent({ includeMarkedContent: true });
+                var mcidStack = [];
+                var bdcSeqCounter = 0;
+                var textRuns = [];
+                var mcidRunsMap = {};
+                var firstLineCandidate = '';
+
+                for (var ti = 0; ti < jsTc.items.length; ti++) {
+                    var tItem = jsTc.items[ti];
+                    if (!tItem) continue;
+                    if (tItem.type === 'beginMarkedContentProps') {
+                        var idMatch = tItem.id ? String(tItem.id).match(/_mc(\d+)$/) : null;
+                        var parsedMcid = idMatch ? parseInt(idMatch[1], 10) : bdcSeqCounter;
+                        bdcSeqCounter++;
+                        mcidStack.push(parsedMcid);
+                        continue;
+                    }
+                    if (tItem.type === 'beginMarkedContent') {
+                        mcidStack.push(null);
+                        continue;
+                    }
+                    if (tItem.type === 'endMarkedContent') {
+                        if (mcidStack.length > 0) mcidStack.pop();
+                        continue;
+                    }
+                    var tStr = (typeof tItem.str === 'string') ? tItem.str : '';
+                    if (!tStr) continue;
+                    var rawTr = tItem.transform || [10, 0, 0, 10, 72, 700];
+                    var rawFontH = Math.abs(rawTr[3]) || Math.abs(rawTr[0]) || (tItem.height || 11);
+                    if (rawFontH < 0.5 || tStr.indexOf('Verknuepfung:') === 0) continue;
+                    if (!firstLineCandidate && tStr.trim().length >= 3) {
+                        firstLineCandidate = tStr.trim().slice(0, 80);
+                    }
+                    var curMcid = null;
+                    for (var ms = mcidStack.length - 1; ms >= 0; ms--) {
+                        if (mcidStack[ms] !== null && mcidStack[ms] !== undefined) {
+                            curMcid = mcidStack[ms];
+                            break;
+                        }
+                    }
+                    var fontH = Math.max(8, rawFontH);
+                    var itemW = Math.max(4, tItem.width || (tStr.length * fontH * 0.52));
+                    var rx1 = rawTr[4];
+                    var ry1 = rawTr[5] - fontH * 0.22;
+                    var rx2 = rx1 + itemW;
+                    var ry2 = rawTr[5] + fontH * 0.92;
+                    var runObj = {
+                        mcid: curMcid,
+                        str: tStr,
+                        x1: rx1,
+                        y1: ry1,
+                        x2: rx2,
+                        y2: ry2,
+                        baseY: rawTr[5],
+                        fontH: fontH
+                    };
+                    textRuns.push(runObj);
+                    if (curMcid !== null) {
+                        if (!mcidRunsMap[curMcid]) mcidRunsMap[curMcid] = [];
+                        mcidRunsMap[curMcid].push(runObj);
+                    }
+                }
+
+                pageTextRunsByPage[pIdx0] = textRuns;
+                if (firstLineCandidate) {
+                    extractedPageHeadings[pIdx0] = firstLineCandidate;
+                }
+
+                var pLinks = [];
+                var mcidAlreadyLinked = {};
+
+                // Pass A: Reconstruct horizontal text lines across adjacent runs to catch split email addresses/URLs
+                var lines = [];
+                for (var rIdx = 0; rIdx < textRuns.length; rIdx++) {
+                    var r = textRuns[rIdx];
+                    if (lines.length > 0) {
+                        var prevL = lines[lines.length - 1];
+                        var tolY = Math.max(prevL.fontH, r.fontH) * 0.45;
+                        if (Math.abs(r.baseY - prevL.baseY) <= tolY && r.x1 >= prevL.minX - prevL.fontH * 2) {
+                            prevL.runs.push(r);
+                            prevL.minX = Math.min(prevL.minX, r.x1);
+                            prevL.maxX = Math.max(prevL.maxX, r.x2);
+                            continue;
+                        }
+                    }
+                    lines.push({
+                        baseY: r.baseY,
+                        fontH: r.fontH,
+                        minX: r.x1,
+                        maxX: r.x2,
+                        runs: [r]
+                    });
+                }
+
+                for (var lIdx = 0; lIdx < lines.length; lIdx++) {
+                    var lnRuns = lines[lIdx].runs;
+                    var lineChars = [];
+                    var charToRunIdx = [];
+                    var charToRelRatio = [];
+                    for (var kr = 0; kr < lnRuns.length; kr++) {
+                        var curR = lnRuns[kr];
+                        if (kr > 0) {
+                            var prevR = lnRuns[kr - 1];
+                            var gapX = curR.x1 - prevR.x2;
+                            var prevEndsConnector = /[\s@/:.\-_]$/.test(prevR.str);
+                            var curStartsConnector = /^[\s@/:.\-_]/.test(curR.str);
+                            if (gapX > curR.fontH * 0.28 && !prevEndsConnector && !curStartsConnector) {
+                                lineChars.push(' ');
+                                charToRunIdx.push(kr - 1);
+                                charToRelRatio.push(1);
+                            }
+                        }
+                        var rLen = curR.str.length;
+                        for (var chIdx = 0; chIdx < rLen; chIdx++) {
+                            lineChars.push(curR.str.charAt(chIdx));
+                            charToRunIdx.push(kr);
+                            charToRelRatio.push(rLen > 0 ? (chIdx / rLen) : 0);
+                        }
+                    }
+                    var lineStr = lineChars.join('');
+                    linkTokenRegex.lastIndex = 0;
+                    var mTok;
+                    while ((mTok = linkTokenRegex.exec(lineStr)) !== null) {
+                        var parsed = parseLinkTokenMatch(mTok[0]);
+                        if (!parsed) continue;
+                        var mStart = mTok.index;
+                        var mEnd = mStart + mTok[0].replace(/[.,;:!?)\]>]+$/, '').length;
+                        var matchedMcids = [];
+                        var seenM = {};
+                        var minX1 = Infinity, minY1 = Infinity, maxX2 = -Infinity, maxY2 = -Infinity;
+                        for (var ci = mStart; ci < mEnd && ci < charToRunIdx.length; ci++) {
+                            var rIndex = charToRunIdx[ci];
+                            var runRef = lnRuns[rIndex];
+                            if (!runRef) continue;
+                            if (runRef.mcid !== null && runRef.mcid !== undefined && !seenM[runRef.mcid]) {
+                                seenM[runRef.mcid] = true;
+                                matchedMcids.push(runRef.mcid);
+                                mcidAlreadyLinked[runRef.mcid] = true;
+                            }
+                            var cRatio = charToRelRatio[ci] || 0;
+                            var rW = Math.max(4, runRef.x2 - runRef.x1);
+                            var charW = rW / Math.max(1, runRef.str.length);
+                            var cx1 = runRef.x1 + rW * cRatio;
+                            var cx2 = cx1 + charW;
+                            if (cx1 < minX1) minX1 = cx1;
+                            if (runRef.y1 < minY1) minY1 = runRef.y1;
+                            if (cx2 > maxX2) maxX2 = cx2;
+                            if (runRef.y2 > maxY2) maxY2 = runRef.y2;
+                        }
+                        if (!isFinite(minX1)) {
+                            minX1 = lnRuns[0].x1;
+                            minY1 = lnRuns[0].y1;
+                            maxX2 = lnRuns[lnRuns.length - 1].x2;
+                            maxY2 = lnRuns[lnRuns.length - 1].y2;
+                        }
+                        pLinks.push({
+                            rawText: parsed.rawText,
+                            uri: parsed.uri,
+                            normKey: parsed.normKey,
+                            isEmail: parsed.isEmail,
+                            mcids: matchedMcids,
+                            rect: [
+                                Math.round(minX1 * 100) / 100,
+                                Math.round(minY1 * 100) / 100,
+                                Math.round(Math.max(minX1 + 18, maxX2) * 100) / 100,
+                                Math.round(maxY2 * 100) / 100
+                            ]
+                        });
+                    }
+                }
+
+                // Pass B & C: Scan per-MCID combined decoded text & raw content stream text for any remaining links
+                var pState = pageTagStates[pIdx0];
+                var totalM = pState ? pState.pageMcidCount : 0;
+                for (var mCheck = 0; mCheck < totalM; mCheck++) {
+                    var mRuns = mcidRunsMap[mCheck] || [];
+                    var combinedDecoded = mRuns.map(function (rn) { return rn.str; }).join('');
+                    var rawFallback = (pState && pState.pageMcidRawTexts && pState.pageMcidRawTexts[mCheck]) ? pState.pageMcidRawTexts[mCheck] : '';
+                    var testStrings = [combinedDecoded, rawFallback];
+                    for (var tsI = 0; tsI < testStrings.length; tsI++) {
+                        var candidateStr = testStrings[tsI];
+                        if (!candidateStr) continue;
+                        linkTokenRegex.lastIndex = 0;
+                        var mSub;
+                        while ((mSub = linkTokenRegex.exec(candidateStr)) !== null) {
+                            var parsedSub = parseLinkTokenMatch(mSub[0]);
+                            if (!parsedSub) continue;
+                            var mcidKey = mCheck + '|' + parsedSub.normKey;
+                            if (mcidAlreadyLinked[mcidKey] || mcidAlreadyLinked[mCheck]) continue;
+                            var bx1 = 72, by1 = 700, bx2 = 180, by2 = 712;
+                            if (mRuns.length > 0) {
+                                bx1 = mRuns[0].x1;
+                                by1 = mRuns[0].y1;
+                                bx2 = mRuns[mRuns.length - 1].x2;
+                                by2 = mRuns[mRuns.length - 1].y2;
+                            }
+                            pLinks.push({
+                                rawText: parsedSub.rawText,
+                                uri: parsedSub.uri,
+                                normKey: parsedSub.normKey,
+                                isEmail: parsedSub.isEmail,
+                                mcids: [mCheck],
+                                rect: [
+                                    Math.round(bx1 * 100) / 100,
+                                    Math.round(by1 * 100) / 100,
+                                    Math.round(Math.max(bx1 + 20, bx2) * 100) / 100,
+                                    Math.round(by2 * 100) / 100
+                                ]
+                            });
+                            mcidAlreadyLinked[mcidKey] = true;
+                        }
+                    }
+                }
+
+                autoLinkItemsByPage[pIdx0] = pLinks;
+            }
+        } catch (linkScanErr) {
+            console.warn('Auto-link MCID scan warning:', linkScanErr);
+        }
+
+        // 4c. Pass 3: Bind every /Link annotation to its exact content stream MCID(s), update /Link BDC tags,
+        //             and construct /StructTreeRoot (<Sect> -> <P> -> <Link> [MCID, OBJR]) + /ParentTree
+        var structTreeRootRef = context.nextRef();
+        var docElemRef = context.nextRef();
+        var sectRefs = [];
+        var parentTreeEntries = [];
+        var nextStructParentKey = pages.length;
+
+        for (var i = 0; i < pages.length; i++) {
+            var page = pages[i];
+            var pageNode = page.node;
+            var pState = pageTagStates[i];
+            var initialPageMcidCount = pState.pageMcidCount;
+            var pageMcidCount = initialPageMcidCount;
+            var pageMcidTags = pState.pageMcidTags;
+            var taggedContentStr = pState.taggedContentStr;
+            var pageRuns = pageTextRunsByPage[i] || [];
 
             pageNode.set(PDFLib.PDFName.of('Tabs'), PDFLib.PDFName.of('S'));
             pageNode.set(PDFLib.PDFName.of('StructParents'), PDFLib.PDFNumber.of(i));
 
-            var sectElemRef = context.nextRef();
-            var mcidElemRefsForParentTree = [];
-            var sectChildrenRefs = [];
-            var lastParagraphRef = null;
-            var lastParagraphElem = null;
-            var lastParagraphKItems = null;
-
-            for (var m = 0; m < pageMcidCount; m++) {
-                var sTag = pageMcidTags[m] || 'P';
-                var kItems = [PDFLib.PDFNumber.of(m)];
-                var pElem = context.obj({
-                    Type: 'StructElem',
-                    S: PDFLib.PDFName.of(sTag),
-                    P: sectElemRef,
-                    Pg: page.ref,
-                    K: PDFLib.PDFNumber.of(m)
-                });
-                var pRef = context.register(pElem);
-                mcidElemRefsForParentTree.push(pRef);
-                sectChildrenRefs.push(pRef);
-                if (sTag === 'P') {
-                    lastParagraphRef = pRef;
-                    lastParagraphElem = pElem;
-                    lastParagraphKItems = kItems;
-                }
-            }
-
-            // Include any user-placed visual PDF/UA Tags (e.g. <Figure> with /Alt and /BBox) on this page
-            if (doc.savedA11yTags && doc.savedA11yTags.length > 0) {
-                for (var ct = 0; ct < doc.savedA11yTags.length; ct++) {
-                    var cTag = doc.savedA11yTags[ct];
-                    if ((cTag.pageIndex || 0) !== i) continue;
-                    var cTagAlt = cTag.altText || ('Element (' + (cTag.tagType || 'Figure') + ') auf Seite ' + (i + 1));
-                    var cTagElem = context.obj({
-                        Type: 'StructElem',
-                        S: PDFLib.PDFName.of(cTag.tagType || 'Figure'),
-                        P: sectElemRef,
-                        Pg: page.ref,
-                        Alt: PDFLib.PDFString.of(cTagAlt),
-                        ActualText: PDFLib.PDFString.of(cTagAlt),
-                        A: context.obj({
-                            O: PDFLib.PDFName.of('Layout'),
-                            BBox: cTag.bbox || [0, 0, 100, 100]
-                        })
-                    });
-                    sectChildrenRefs.push(context.register(cTagElem));
-                }
-            }
-
-            // Auto-create clickable /Subtype /Link annotations for any unlinked email addresses & URLs on this page (PAC Quality)
-            var existingPageUris = {};
+            // Collect existing annotations on this page and match them geometrically to detected links
             var existingAnnotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
             var pageAnnotRefs = [];
+            var existingLinkRecords = [];
+            var annotBoundMcidsMap = {};
+
             if (existingAnnotsLookup && typeof existingAnnotsLookup.asArray === 'function') {
                 var exArr = existingAnnotsLookup.asArray();
                 for (var exIdx = 0; exIdx < exArr.length; exIdx++) {
-                    pageAnnotRefs.push(exArr[exIdx]);
-                    var exDict = context.lookup(exArr[exIdx]);
+                    var exRef = exArr[exIdx];
+                    pageAnnotRefs.push(exRef);
+                    var exDict = context.lookup(exRef);
                     if (exDict && typeof exDict.get === 'function') {
-                        var exAct = exDict.lookup ? exDict.lookup(PDFLib.PDFName.of('A')) : null;
-                        if (exAct && typeof exAct.get === 'function') {
-                            var exUriObj = exAct.get(PDFLib.PDFName.of('URI'));
-                            if (exUriObj) {
-                                var exClean = String(exUriObj).replace(/^[(\s]+|[)\s]+$/g, '').toLowerCase();
-                                if (exClean) {
-                                    existingPageUris[exClean] = true;
-                                    existingPageUris[exClean.replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '')] = true;
+                        var exSubtype = String(exDict.get(PDFLib.PDFName.of('Subtype')) || '');
+                        if (exSubtype === '/Link') {
+                            var exRectObj = exDict.get(PDFLib.PDFName.of('Rect'));
+                            var exRect = [0, 0, 0, 0];
+                            if (exRectObj && typeof exRectObj.asArray === 'function' && exRectObj.asArray().length >= 4) {
+                                var ra = exRectObj.asArray();
+                                exRect = [
+                                    parseFloat(String(ra[0])) || 0,
+                                    parseFloat(String(ra[1])) || 0,
+                                    parseFloat(String(ra[2])) || 0,
+                                    parseFloat(String(ra[3])) || 0
+                                ];
+                            }
+                            var exNormUri = '';
+                            var exAct = exDict.lookup ? exDict.lookup(PDFLib.PDFName.of('A')) : null;
+                            if (exAct && typeof exAct.get === 'function') {
+                                var exUriObj = exAct.get(PDFLib.PDFName.of('URI'));
+                                if (exUriObj) {
+                                    exNormUri = String(exUriObj).replace(/^[(\s]+|[)\s]+$/g, '').toLowerCase()
+                                        .replace(/^mailto:/, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
                                 }
                             }
+                            existingLinkRecords.push({
+                                refKey: String(exRef),
+                                dict: exDict,
+                                rect: exRect,
+                                normUri: exNormUri,
+                                matched: false
+                            });
                         }
                     }
                 }
             }
 
             var pageDetectedLinks = autoLinkItemsByPage[i] || [];
-            if (pageDetectedLinks.length > 0) {
-                var addedAutoLinks = false;
-                for (var dlIdx = 0; dlIdx < pageDetectedLinks.length; dlIdx++) {
-                    var dlItem = pageDetectedLinks[dlIdx];
-                    if (existingPageUris[dlItem.normKey] || existingPageUris[dlItem.uri.toLowerCase()]) {
-                        continue;
+            var addedAutoLinks = false;
+            for (var dlIdx = 0; dlIdx < pageDetectedLinks.length; dlIdx++) {
+                var dlItem = pageDetectedLinks[dlIdx];
+                var matchedExRec = null;
+                for (var erIdx = 0; erIdx < existingLinkRecords.length; erIdx++) {
+                    var candRec = existingLinkRecords[erIdx];
+                    if (rectsOverlapOrClose(candRec.rect, dlItem.rect)) {
+                        matchedExRec = candRec;
+                        break;
                     }
-                    existingPageUris[dlItem.normKey] = true;
-                    existingPageUris[dlItem.uri.toLowerCase()] = true;
-                    var linkAltLabel = dlItem.isEmail
-                        ? ('E-Mail senden an ' + dlItem.rawText)
-                        : ('Webseite öffnen: ' + dlItem.uri);
-                    var newLinkAnnot = context.obj({
-                        Type: 'Annot',
-                        Subtype: 'Link',
-                        Rect: dlItem.rect,
-                        Border: [0, 0, 0],
-                        F: PDFLib.PDFNumber.of(4),
-                        P: page.ref,
-                        Contents: PDFLib.PDFString.of(linkAltLabel),
-                        A: context.obj({
-                            Type: 'Action',
-                            S: PDFLib.PDFName.of('URI'),
-                            URI: PDFLib.PDFString.of(dlItem.uri)
-                        })
-                    });
-                    var newLinkAnnotRef = context.register(newLinkAnnot);
-                    pageAnnotRefs.push(newLinkAnnotRef);
-                    addedAutoLinks = true;
                 }
-                if (addedAutoLinks) {
-                    pageNode.set(PDFLib.PDFName.of('Annots'), context.obj(pageAnnotRefs));
+                if (!matchedExRec) {
+                    for (var erIdx2 = 0; erIdx2 < existingLinkRecords.length; erIdx2++) {
+                        var candRec2 = existingLinkRecords[erIdx2];
+                        if (!candRec2.matched && candRec2.normUri && candRec2.normUri === dlItem.normKey) {
+                            matchedExRec = candRec2;
+                            break;
+                        }
+                    }
+                }
+                if (matchedExRec) {
+                    matchedExRec.matched = true;
+                    if (!annotBoundMcidsMap[matchedExRec.refKey]) {
+                        annotBoundMcidsMap[matchedExRec.refKey] = [];
+                    }
+                    for (var dm = 0; dm < (dlItem.mcids || []).length; dm++) {
+                        annotBoundMcidsMap[matchedExRec.refKey].push(dlItem.mcids[dm]);
+                    }
+                    continue;
+                }
+
+                var linkAltLabel = dlItem.isEmail
+                    ? ('E-Mail senden an ' + dlItem.rawText)
+                    : ('Webseite öffnen: ' + dlItem.uri);
+                var newLinkAnnot = context.obj({
+                    Type: 'Annot',
+                    Subtype: 'Link',
+                    Rect: dlItem.rect,
+                    Border: [0, 0, 0],
+                    F: PDFLib.PDFNumber.of(4),
+                    P: page.ref,
+                    Contents: PDFLib.PDFString.of(linkAltLabel),
+                    A: context.obj({
+                        Type: 'Action',
+                        S: PDFLib.PDFName.of('URI'),
+                        URI: PDFLib.PDFString.of(dlItem.uri)
+                    })
+                });
+                var newLinkAnnotRef = context.register(newLinkAnnot);
+                pageAnnotRefs.push(newLinkAnnotRef);
+                annotBoundMcidsMap[String(newLinkAnnotRef)] = (dlItem.mcids || []).slice();
+                existingLinkRecords.push({
+                    refKey: String(newLinkAnnotRef),
+                    dict: newLinkAnnot,
+                    rect: dlItem.rect,
+                    normUri: dlItem.normKey,
+                    matched: true
+                });
+                addedAutoLinks = true;
+            }
+            if (addedAutoLinks) {
+                pageNode.set(PDFLib.PDFName.of('Annots'), context.obj(pageAnnotRefs));
+            }
+
+            // For any pre-existing /Link annotation that has not yet bound to an MCID, match overlapping textRuns by /Rect
+            for (var erIdx3 = 0; erIdx3 < existingLinkRecords.length; erIdx3++) {
+                var rec3 = existingLinkRecords[erIdx3];
+                var existingBound = annotBoundMcidsMap[rec3.refKey] || [];
+                if (existingBound.length === 0 && pageRuns.length > 0) {
+                    for (var prI = 0; prI < pageRuns.length; prI++) {
+                        var pRun = pageRuns[prI];
+                        if (pRun.mcid !== null && pRun.mcid !== undefined && rectsOverlapOrClose(rec3.rect, [pRun.x1, pRun.y1, pRun.x2, pRun.y2])) {
+                            existingBound.push(pRun.mcid);
+                        }
+                    }
+                    if (existingBound.length > 0) {
+                        annotBoundMcidsMap[rec3.refKey] = existingBound;
+                    }
                 }
             }
 
-            // Tag all /Annots on this page with /Contents, /TU, /StructParent & complete <Link>/<Form> (MCID + /OBJR) inside <P>
+            var claimedMcids = {};
+            var mcidToAnnotInfo = {};
+            var fallbackAnnotInfos = [];
+
             var annotsLookup = pageNode.lookup(PDFLib.PDFName.of('Annots'));
             if (annotsLookup && typeof annotsLookup.asArray === 'function') {
                 var annArr = annotsLookup.asArray();
@@ -5057,21 +5479,6 @@
                     var spKey = nextStructParentKey++;
                     annotDict.set(PDFLib.PDFName.of('StructParent'), PDFLib.PDFNumber.of(spKey));
 
-                    // Ensure <Link> / <Form> / <Annot> is nested inside a <P> block element (never directly under <Sect>)
-                    if (!lastParagraphRef) {
-                        lastParagraphRef = context.nextRef();
-                        lastParagraphKItems = [];
-                        lastParagraphElem = context.obj({
-                            Type: 'StructElem',
-                            S: PDFLib.PDFName.of('P'),
-                            P: sectElemRef,
-                            Pg: page.ref,
-                            K: []
-                        });
-                        context.assign(lastParagraphRef, lastParagraphElem);
-                        sectChildrenRefs.push(lastParagraphRef);
-                    }
-
                     var objrDict = context.obj({
                         Type: 'OBJR',
                         Obj: annotRef,
@@ -5079,40 +5486,71 @@
                     });
                     var annotElemTag = aSubtype === '/Link' ? 'Link' : (aSubtype === '/Widget' ? 'Form' : 'Annot');
 
-                    // Allocate a dedicated MCID for this <Link>/<Form>/<Annot> in the page content stream
-                    // so PAC 2026 Quality "Completeness of 'Link' elements" (requires both MCID content + /OBJR in /K) passes 100%!
-                    var annotMcid = pageMcidCount++;
-                    var safeLinkAscii = annotDesc.replace(/[()\\]/g, ' ').replace(/[^\x20-\x7E]/g, ' ').trim() || 'Link';
-                    var aRect = annotDict.get(PDFLib.PDFName.of('Rect'));
-                    var lx = 0, ly = 0;
-                    if (aRect && typeof aRect.asArray === 'function' && aRect.asArray().length >= 2) {
-                        lx = parseFloat(String(aRect.asArray()[0])) || 0;
-                        ly = parseFloat(String(aRect.asArray()[1])) || 0;
+                    var candidateMcids = annotBoundMcidsMap[String(annotRef)] || [];
+                    var myMcids = [];
+                    for (var cmI = 0; cmI < candidateMcids.length; cmI++) {
+                        var cMcid = candidateMcids[cmI];
+                        if (cMcid >= 0 && cMcid < initialPageMcidCount && !claimedMcids[cMcid] && myMcids.indexOf(cMcid) === -1) {
+                            claimedMcids[cMcid] = true;
+                            myMcids.push(cMcid);
+                        }
                     }
-                    taggedContentStr +=
-                        '/' + annotElemTag + ' <</MCID ' + annotMcid + '>> BDC\n' +
-                        'q\n' +
-                        'BT\n' +
-                        '/F_PDFUA 0.01 Tf\n' +
-                        '3 Tr\n' +
-                        lx.toFixed(2) + ' ' + ly.toFixed(2) + ' Td\n' +
-                        '(' + safeLinkAscii + ') Tj\n' +
-                        'ET\n' +
-                        'Q\n' +
-                        'EMC\n';
+
+                    if (myMcids.length > 0) {
+                        for (var umI = 0; umI < myMcids.length; umI++) {
+                            var targetM = myMcids[umI];
+                            var bdcTagRegex = new RegExp('\\/(?:H[1-6]|P|Span|Link|Form|Annot)\\s*<<\\/MCID\\s+' + targetM + '>>\\s*BDC');
+                            taggedContentStr = taggedContentStr.replace(bdcTagRegex, '/' + annotElemTag + ' <</MCID ' + targetM + '>> BDC');
+                        }
+                    } else {
+                        // Fallback MCID only for graphical/widget annotations without underlying text MCID
+                        var extraMcid = pageMcidCount++;
+                        var aRect = annotDict.get(PDFLib.PDFName.of('Rect'));
+                        var lx = 0, ly = 0;
+                        if (aRect && typeof aRect.asArray === 'function' && aRect.asArray().length >= 2) {
+                            lx = parseFloat(String(aRect.asArray()[0])) || 0;
+                            ly = parseFloat(String(aRect.asArray()[1])) || 0;
+                        }
+                        taggedContentStr +=
+                            '/' + annotElemTag + ' <</MCID ' + extraMcid + '>> BDC\n' +
+                            'q\n' +
+                            'BT\n' +
+                            '/F_PDFUA 0.01 Tf\n' +
+                            '3 Tr\n' +
+                            lx.toFixed(2) + ' ' + ly.toFixed(2) + ' Td\n' +
+                            '(Link) Tj\n' +
+                            'ET\n' +
+                            'Q\n' +
+                            'EMC\n';
+                        myMcids.push(extraMcid);
+                    }
+
+                    var kItemsForAnnot = [];
+                    for (var kmI = 0; kmI < myMcids.length; kmI++) {
+                        kItemsForAnnot.push(PDFLib.PDFNumber.of(myMcids[kmI]));
+                    }
+                    kItemsForAnnot.push(objrDict);
 
                     var annotStructElem = context.obj({
                         Type: 'StructElem',
                         S: PDFLib.PDFName.of(annotElemTag),
-                        P: lastParagraphRef,
                         Pg: page.ref,
                         Alt: PDFLib.PDFString.of(annotDesc),
-                        K: [PDFLib.PDFNumber.of(annotMcid), objrDict]
+                        K: kItemsForAnnot
                     });
                     var annotStructRef = context.register(annotStructElem);
-                    mcidElemRefsForParentTree.push(annotStructRef);
-                    lastParagraphKItems.push(annotStructRef);
-                    lastParagraphElem.set(PDFLib.PDFName.of('K'), context.obj(lastParagraphKItems));
+                    var aInfoObj = {
+                        structElem: annotStructElem,
+                        structRef: annotStructRef,
+                        mcids: myMcids,
+                        attachedToParent: false
+                    };
+                    for (var mapI = 0; mapI < myMcids.length; mapI++) {
+                        mcidToAnnotInfo[myMcids[mapI]] = aInfoObj;
+                        if (myMcids[mapI] >= initialPageMcidCount) {
+                            fallbackAnnotInfos.push(aInfoObj);
+                        }
+                    }
 
                     parentTreeEntries.push({
                         key: spKey,
@@ -5121,11 +5559,111 @@
                 }
             }
 
+            // Ensure page still has its primary heading (<H1> on page 0, <H2> on page > 0) if MCID 0 was claimed by a <Link>
+            var hasUnclaimedHeading = false;
+            for (var hm = 0; hm < initialPageMcidCount; hm++) {
+                if (!mcidToAnnotInfo[hm] && (pageMcidTags[hm] === 'H1' || pageMcidTags[hm] === 'H2')) {
+                    hasUnclaimedHeading = true;
+                    break;
+                }
+            }
+            if (!hasUnclaimedHeading) {
+                for (var hm2 = 0; hm2 < initialPageMcidCount; hm2++) {
+                    if (!mcidToAnnotInfo[hm2]) {
+                        var promotedTag = i === 0 ? 'H1' : 'H2';
+                        pageMcidTags[hm2] = promotedTag;
+                        var promoteRegex = new RegExp('\\/(?:P|Span)\\s*<<\\/MCID\\s+' + hm2 + '>>\\s*BDC');
+                        taggedContentStr = taggedContentStr.replace(promoteRegex, '/' + promotedTag + ' <</MCID ' + hm2 + '>> BDC');
+                        hasUnclaimedHeading = true;
+                        break;
+                    }
+                }
+            }
+
+            var sectElemRef = context.nextRef();
+            var mcidElemRefsForParentTree = [];
+            var sectChildrenRefs = [];
+            var lastParagraphRef = null;
+            var lastParagraphElem = null;
+            var lastParagraphKItems = null;
+
+            for (var m = 0; m < pageMcidCount; m++) {
+                var boundAnnotInfo = mcidToAnnotInfo[m];
+                if (boundAnnotInfo) {
+                    mcidElemRefsForParentTree[m] = boundAnnotInfo.structRef;
+                    if (!boundAnnotInfo.attachedToParent) {
+                        var wrapperTag = (!hasUnclaimedHeading && sectChildrenRefs.length === 0) ? (i === 0 ? 'H1' : 'H2') : 'P';
+                        var pWrapK = [boundAnnotInfo.structRef];
+                        var pWrapElem = context.obj({
+                            Type: 'StructElem',
+                            S: PDFLib.PDFName.of(wrapperTag),
+                            P: sectElemRef,
+                            Pg: page.ref,
+                            K: pWrapK
+                        });
+                        var pWrapRef = context.register(pWrapElem);
+                        boundAnnotInfo.structElem.set(PDFLib.PDFName.of('P'), pWrapRef);
+                        boundAnnotInfo.attachedToParent = true;
+                        sectChildrenRefs.push(pWrapRef);
+                        if (wrapperTag === 'P') {
+                            lastParagraphRef = pWrapRef;
+                            lastParagraphElem = pWrapElem;
+                            lastParagraphKItems = pWrapK;
+                        }
+                    }
+                } else {
+                    var sTag = pageMcidTags[m] || 'P';
+                    var kItems = [PDFLib.PDFNumber.of(m)];
+                    var pElem = context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of(sTag),
+                        P: sectElemRef,
+                        Pg: page.ref,
+                        K: PDFLib.PDFNumber.of(m)
+                    });
+                    var pRef = context.register(pElem);
+                    mcidElemRefsForParentTree[m] = pRef;
+                    sectChildrenRefs.push(pRef);
+                    if (sTag === 'P') {
+                        lastParagraphRef = pRef;
+                        lastParagraphElem = pElem;
+                        lastParagraphKItems = kItems;
+                    }
+                }
+            }
+
+            // Include any user-placed visual PDF/UA Tags (e.g. <Figure> with /Alt and /BBox) on this page
+            if (doc.savedA11yTags && doc.savedA11yTags.length > 0) {
+                for (var ct = 0; ct < doc.savedA11yTags.length; ct++) {
+                    var cTag = doc.savedA11yTags[ct];
+                    if ((cTag.pageIndex || 0) !== i) continue;
+                    var cTagAlt = cTag.altText || ('Element (' + (cTag.tagType || 'Figure') + ') auf Seite ' + (i + 1));
+                    var cTagElem = context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of(cTag.tagType || 'Figure'),
+                        P: sectElemRef,
+                        Pg: page.ref,
+                        Alt: PDFLib.PDFString.of(cTagAlt),
+                        ActualText: PDFLib.PDFString.of(cTagAlt),
+                        A: context.obj({
+                            O: PDFLib.PDFName.of('Layout'),
+                            BBox: cTag.bbox || [0, 0, 100, 100]
+                        })
+                    });
+                    sectChildrenRefs.push(context.register(cTagElem));
+                }
+            }
+
             if (taggedContentStr.length > 0) {
                 var newStreamBytes = stringToLatin1Bytes(taggedContentStr);
                 var newFlateStream = context.flateStream(newStreamBytes);
-                var newStreamRef = context.register(newFlateStream);
-                pageNode.set(PDFLib.PDFName.of('Contents'), newStreamRef);
+                if (pState.contentStreamRef) {
+                    context.assign(pState.contentStreamRef, newFlateStream);
+                    pageNode.set(PDFLib.PDFName.of('Contents'), pState.contentStreamRef);
+                } else {
+                    var newStreamRef = context.register(newFlateStream);
+                    pageNode.set(PDFLib.PDFName.of('Contents'), newStreamRef);
+                }
             }
 
             parentTreeEntries.push({
