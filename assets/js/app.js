@@ -2811,6 +2811,10 @@
 
             doc.bytes = await pdfDoc.save();
             doc.modified = true;
+            doc.ocrApplied = true;
+            if (doc.name && !/-OCR\.pdf$/i.test(doc.name)) {
+                doc.name = doc.name.replace(/\.pdf$/i, '') + '-OCR.pdf';
+            }
 
             var outBox = document.getElementById('ocrOutputText');
             if (outBox) {
@@ -2818,7 +2822,7 @@
             }
 
             setProgress(null);
-            setStatus('Durchsuchbares Sandwich-PDF erstellt (' + totalEmbeddedItems + ' Wörter hinterlegt)');
+            setStatus('Durchsuchbares Sandwich-PDF erstellt: ' + doc.name + ' (' + totalEmbeddedItems + ' Wörter hinterlegt)');
             await refreshDocumentViews();
             await updateAccessibilityUI(false);
             trackUsageEvent('ocr_searchable_pdf');
@@ -2829,11 +2833,11 @@
                     'Es wurden <strong>' + totalEmbeddedItems + ' Wörter</strong> exakt unter dem Scanbild eingebettet.<br>' +
                     '• Nutzen Sie unten <strong>🔍 Im PDF suchen (<code>Strg+F</code>)</strong> zum Durchsuchen<br>' +
                     '• Oder klicken Sie auf <strong><code>I✎ Text ändern</code></strong> zum Umschreiben<br>' +
-                    '• Über <strong><code>💾 Speichern</code></strong> laden Sie das durchsuchbare PDF herunter.',
+                    '• Über <strong><code>💾 Speichern</code></strong> laden Sie das durchsuchbare PDF als <code>' + escapeHtml(doc.name) + '</code> herunter.',
                     'success'
                 );
                 showToast(
-                    'In durchsuchbares PDF umgewandelt! (' + totalEmbeddedItems + ' Wörter als durchsuchbare Textebene hinterlegt)',
+                    'In durchsuchbares PDF umgewandelt (' + doc.name + ', ' + totalEmbeddedItems + ' Wörter hinterlegt)',
                     'success'
                 );
             } else {
@@ -7802,6 +7806,9 @@
                 if (!doc) {
                     showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
                     return;
+                }
+                if (doc.ocrApplied && doc.name && !/-OCR\.pdf$/i.test(doc.name)) {
+                    doc.name = doc.name.replace(/\.pdf$/i, '') + '-OCR.pdf';
                 }
                 await bakeAnnotationsIntoDocument(doc);
                 downloadBlob(doc.bytes, doc.name, 'application/pdf');
