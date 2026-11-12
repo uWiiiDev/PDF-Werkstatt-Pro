@@ -851,6 +851,9 @@
             'a11y-tag': 'PDF/UA Tag: ' + (state.activeTagType || 'P')
         };
         el.activeToolBadge.textContent = labels[toolName] || toolName;
+        if (toolName === 'text' || toolName === 'pen' || toolName === 'highlight' || toolName === 'strikethrough' || toolName === 'rect' || toolName === 'stamp' || toolName === 'redact') {
+            revealRightDockSection('inspectorToolSection', toolName === 'stamp' ? 'propStampText' : null);
+        }
         el.annCanvas.style.cursor = toolName === 'select' ? 'default' : ((toolName === 'edit-text' || toolName === 'strikethrough') ? 'text' : 'crosshair');
         if (toolName === 'edit-text' && getActiveDoc()) {
             if (!state.currentPageTextBlocks || state.currentPageTextBlocks.length === 0) {
@@ -1171,6 +1174,8 @@
                     var selAnn = list[hitIdx];
                     if (selAnn.color && el.propColor) el.propColor.value = selAnn.color;
                     if (selAnn.fontSize && el.propFontSize) el.propFontSize.value = selAnn.fontSize;
+                    if (selAnn.strokeWidth && el.propStrokeWidth) el.propStrokeWidth.value = selAnn.strokeWidth;
+                    revealRightDockSection('inspectorToolSection');
                     state.isDrawing = true;
                     state.dragMode = 'move-ann';
                     state.dragOffset.x = pt.x - selAnn.x;
@@ -2247,6 +2252,7 @@
     async function applyWatermarkToAllPages() {
         var doc = getActiveDoc();
         if (!doc) return;
+        revealRightDockSection('inspectorWatermarkSection', 'wmText');
         var text = document.getElementById('wmText').value.trim() || 'VERTRAULICH';
         var opacity = parseFloat(document.getElementById('wmOpacity').value) || 0.22;
         var size = parseInt(document.getElementById('wmSize').value, 10) || 48;
@@ -2279,6 +2285,7 @@
     async function applyPageNumbersToAllPages() {
         var doc = getActiveDoc();
         if (!doc) return;
+        revealRightDockSection('inspectorWatermarkSection', 'pageNumPos');
         var pos = document.getElementById('pageNumPos').value;
 
         await bakeAnnotationsIntoDocument(doc);
@@ -2470,6 +2477,25 @@
         return href;
     }
 
+    function revealRightDockSection(sectionId, focusInputId) {
+        var rd = document.getElementById('rightDock');
+        if (rd && rd.classList.contains('collapsed')) {
+            rd.classList.remove('collapsed');
+        }
+        if (sectionId) {
+            var sec = document.getElementById(sectionId);
+            if (sec && sec.scrollIntoView) {
+                setTimeout(function () {
+                    sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    if (focusInputId) {
+                        var inp = document.getElementById(focusInputId);
+                        if (inp && inp.focus) inp.focus();
+                    }
+                }, 40);
+            }
+        }
+    }
+
     function setOcrStatusBox(msg, type) {
         var box = document.getElementById('ocrStatusBox');
         if (!box) return;
@@ -2478,6 +2504,7 @@
             box.innerHTML = '';
             return;
         }
+        revealRightDockSection('inspectorOcrSection');
         box.classList.remove('hidden');
         if (type === 'success') {
             box.style.background = 'rgba(16, 185, 129, 0.14)';
@@ -2496,10 +2523,7 @@
     }
 
     function scrollOcrSectionIntoView() {
-        var sec = document.getElementById('inspectorOcrSection');
-        if (sec && sec.scrollIntoView) {
-            sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+        revealRightDockSection('inspectorOcrSection');
     }
 
     async function createOfflineTesseractWorker(lang, labelPrefix) {
