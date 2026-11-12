@@ -260,9 +260,13 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">✒️</span>
                         <span class="rb-label">Stift</span>
                     </button>
-                    <button type="button" class="ribbon-btn tool-btn" data-tool="highlight">
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="highlight" title="Textpassagen farbig hervorheben">
                         <span class="rb-icon">🖍️</span>
                         <span class="rb-label">Marker</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="strikethrough" title="Text durchstreichen (auf eine Textzeile klicken oder mit der Maus über einzelne Wörter ziehen)">
+                        <span class="rb-icon"><b style="text-decoration:line-through;">S&#822;</b></span>
+                        <span class="rb-label">Durchstreichen</span>
                     </button>
                     <button type="button" class="ribbon-btn tool-btn" data-tool="rect">
                         <span class="rb-icon">▭</span>

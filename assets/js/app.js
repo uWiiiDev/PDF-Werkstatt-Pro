@@ -840,6 +840,7 @@
             text: 'Neuen Text einfügen',
             pen: 'Freihand-Stift',
             highlight: 'Textmarker',
+            strikethrough: 'Text durchstreichen',
             redact: 'Schwärzen',
             rect: 'Rechteck',
             stamp: 'Stempel',
@@ -850,13 +851,15 @@
             'a11y-tag': 'PDF/UA Tag: ' + (state.activeTagType || 'P')
         };
         el.activeToolBadge.textContent = labels[toolName] || toolName;
-        el.annCanvas.style.cursor = toolName === 'select' ? 'default' : (toolName === 'edit-text' ? 'text' : 'crosshair');
+        el.annCanvas.style.cursor = toolName === 'select' ? 'default' : ((toolName === 'edit-text' || toolName === 'strikethrough') ? 'text' : 'crosshair');
         if (toolName === 'edit-text' && getActiveDoc()) {
             if (!state.currentPageTextBlocks || state.currentPageTextBlocks.length === 0) {
                 showToast('Hinweis: Diese Seite enthält keinen eingebetteten Text (Scan). Nutzen Sie erst "Durchsuchbares PDF (OCR)" oder "T+ Neuer Text".');
             } else {
                 showToast('Klicken Sie direkt auf eine blau markierte Textzeile im PDF, um sie umzuschreiben.');
             }
+        } else if (toolName === 'strikethrough' && getActiveDoc()) {
+            showToast('Klicken Sie direkt auf eine Textzeile oder ziehen Sie mit gedrückter Maustaste über einzelne Wörter zum Durchstreichen.');
         }
         redrawAnnotationOverlay();
         updateAssistantContextBanner();
@@ -871,21 +874,24 @@
         var list = getPageAnnotations(doc, doc.currentPage);
         var scale = state.zoom;
 
-        // When in 'edit-text' mode, highlight all detected embedded PDF text blocks so user sees clickable lines
-        if (state.activeTool === 'edit-text' && state.currentPageTextBlocks && state.currentPageTextBlocks.length > 0) {
+        // When in 'edit-text' or 'strikethrough' mode, highlight all detected embedded PDF text blocks so user sees clickable lines
+        if ((state.activeTool === 'edit-text' || state.activeTool === 'strikethrough') && state.currentPageTextBlocks && state.currentPageTextBlocks.length > 0) {
             ctx.save();
+            var isStrikeMode = state.activeTool === 'strikethrough';
             for (var b = 0; b < state.currentPageTextBlocks.length; b++) {
                 var blk = state.currentPageTextBlocks[b];
-                var alreadyReplaced = false;
-                for (var k = 0; k < list.length; k++) {
-                    if (list[k].type === 'edit-text' && Math.abs((list[k].origX || 0) - blk.x) < 4 && Math.abs((list[k].origY || 0) - blk.y) < 4) {
-                        alreadyReplaced = true;
-                        break;
+                if (!isStrikeMode) {
+                    var alreadyReplaced = false;
+                    for (var k = 0; k < list.length; k++) {
+                        if (list[k].type === 'edit-text' && Math.abs((list[k].origX || 0) - blk.x) < 4 && Math.abs((list[k].origY || 0) - blk.y) < 4) {
+                            alreadyReplaced = true;
+                            break;
+                        }
                     }
+                    if (alreadyReplaced) continue;
                 }
-                if (alreadyReplaced) continue;
-                ctx.fillStyle = 'rgba(59, 130, 246, 0.08)';
-                ctx.strokeStyle = 'rgba(37, 99, 235, 0.55)';
+                ctx.fillStyle = isStrikeMode ? 'rgba(239, 68, 68, 0.05)' : 'rgba(59, 130, 246, 0.08)';
+                ctx.strokeStyle = isStrikeMode ? 'rgba(220, 38, 38, 0.40)' : 'rgba(37, 99, 235, 0.55)';
                 ctx.lineWidth = 1;
                 ctx.setLineDash([3, 2]);
                 ctx.fillRect(blk.x * scale, blk.y * scale, blk.w * scale, blk.h * scale);
@@ -974,6 +980,22 @@
             ctx.fillStyle = ann.color || '#eab308';
             ctx.globalAlpha = 0.36;
             ctx.fillRect(x, y, w, h);
+        } else if (ann.type === 'strikethrough') {
+            var stLineColor = ann.color || '#dc2626';
+            if (isSelected || state.activeTool === 'strikethrough') {
+                ctx.fillStyle = stLineColor;
+                ctx.globalAlpha = 0.10;
+                ctx.fillRect(x, y, w, h);
+                ctx.globalAlpha = 1;
+            }
+            ctx.strokeStyle = stLineColor;
+            ctx.lineWidth = Math.max(1.8, (ann.strokeWidth || 2.5)) * scale;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            var midStrikeY = y + (h > 0 ? h * 0.52 : 7 * scale);
+            ctx.moveTo(x, midStrikeY);
+            ctx.lineTo(x + w, midStrikeY);
+            ctx.stroke();
         } else if (ann.type === 'rect') {
             ctx.strokeStyle = ann.color || '#dc2626';
             ctx.lineWidth = (ann.strokeWidth || 3) * scale;
@@ -1425,9 +1447,43 @@
             var doc = getActiveDoc();
 
             if (state.dragMode === 'draw' && state.currentDraftAnnotation && doc) {
-                var list = getPageAnnotations(doc, doc.currentPage);
-                list.push(state.currentDraftAnnotation);
+                var draft = state.currentDraftAnnotation;
                 state.currentDraftAnnotation = null;
+                var list = getPageAnnotations(doc, doc.currentPage);
+
+                // For 'strikethrough': if user single-clicked (without dragging), snap to the clicked PDF text line!
+                if (draft.type === 'strikethrough' && (draft.w || 0) < 6 && (draft.h || 0) < 6) {
+                    var clickX = state.dragStart.x;
+                    var clickY = state.dragStart.y;
+                    var matchedBlk = null;
+                    var pageBlks = state.currentPageTextBlocks || [];
+                    for (var sb = 0; sb < pageBlks.length; sb++) {
+                        var candidateBlk = pageBlks[sb];
+                        if (clickX >= candidateBlk.x - 4 && clickX <= candidateBlk.x + candidateBlk.w + 8 &&
+                            clickY >= candidateBlk.y - 3 && clickY <= candidateBlk.y + candidateBlk.h + 3) {
+                            matchedBlk = candidateBlk;
+                            break;
+                        }
+                    }
+                    if (matchedBlk) {
+                        draft.x = matchedBlk.x;
+                        draft.y = matchedBlk.y;
+                        draft.w = matchedBlk.w;
+                        draft.h = matchedBlk.h;
+                    } else {
+                        draft.w = 80;
+                        draft.h = 16;
+                        draft.y = Math.max(0, clickY - 8);
+                    }
+                } else if (draft.type === 'strikethrough') {
+                    if ((draft.h || 0) < 10) {
+                        var centerY = draft.y + (draft.h || 0) * 0.5;
+                        draft.h = 14;
+                        draft.y = Math.max(0, centerY - 7);
+                    }
+                }
+
+                list.push(draft);
                 doc.modified = true;
                 renderTabsBar();
                 redrawAnnotationOverlay();
@@ -1569,6 +1625,18 @@
                         height: hlRect.height,
                         color: pdfColor,
                         opacity: 0.35
+                    });
+                } else if (ann.type === 'strikethrough') {
+                    var stH = ann.h || 14;
+                    var stW = ann.w || 60;
+                    var stMidY = ann.y + stH * 0.52;
+                    var stStartPt = baseVp.convertToPdfPoint(ann.x, stMidY);
+                    var stEndPt = baseVp.convertToPdfPoint(ann.x + stW, stMidY);
+                    page.drawLine({
+                        start: { x: stStartPt[0], y: stStartPt[1] },
+                        end: { x: stEndPt[0], y: stEndPt[1] },
+                        thickness: Math.max(1.5, ann.strokeWidth || 2.2),
+                        color: pdfColor
                     });
                 } else if (ann.type === 'rect') {
                     var rRect = visualRectToRawPdfRect(baseVp, ann.x, ann.y, ann.w, ann.h);
@@ -11525,6 +11593,7 @@
                 select: 'Werkzeug <strong>↖ Auswahl</strong> aktiv: Klicken Sie Elemente zum Verschieben an oder ändern Sie Texte per <strong>Doppelklick</strong>.',
                 'edit-text': 'Werkzeug <strong>I✎ Text ändern</strong> aktiv: Klicken Sie auf eine <strong>blau umrahmte Textzeile</strong> im PDF, um den Originaltext direkt umzuschreiben.',
                 text: 'Werkzeug <strong>T+ Neuer Text</strong> aktiv: Klicken Sie auf eine freie Stelle im PDF, um neuen Text einzufügen.',
+                strikethrough: 'Werkzeug <strong>S&#822; Durchstreichen</strong> aktiv: Klicken Sie direkt auf eine markierte Textzeile oder ziehen Sie mit der Maus über einzelne Wörter.',
                 redact: 'Werkzeug <strong>⬛ Schwärzen</strong> aktiv: Ziehen Sie Rahmen über sensible Stellen und klicken Sie danach auf <strong>🛡️ Sanitize</strong>.',
                 stamp: 'Werkzeug <strong>🏷️ Stempel</strong> aktiv: Blenden Sie bei Bedarf oben rechts mit <code>◨</code> die Werkzeug-Eigenschaften ein, um den Stempeltext zu wählen.'
             };
