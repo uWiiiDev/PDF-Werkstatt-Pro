@@ -3142,7 +3142,7 @@
                     if (aSub === '/Link') {
                         var actObj = aDict.lookup ? aDict.lookup(PDFLib.PDFName.of('A')) : null;
                         if (actObj && typeof actObj.get === 'function') {
-                            var uVal = actObj.get(PDFLib.PDFName.of('URI'));
+                            var uVal = actObj.lookup ? actObj.lookup(PDFLib.PDFName.of('URI')) : actObj.get(PDFLib.PDFName.of('URI'));
                             if (uVal) {
                                 var decodedU = (typeof uVal.decodeText === 'function') ? uVal.decodeText() : String(uVal);
                                 var rawU = decodedU.replace(/^[(\s]+|[)\s]+$/g, '').toLowerCase();
@@ -3521,6 +3521,7 @@
                 }
                 if (typeof tcIt.str === 'string' && tcIt.str.length > 0) {
                     var activeTag = tagStack.length > 0 ? tagStack[tagStack.length - 1] : '';
+                    if (activeTag === 'Artifact') continue;
                     plainItems.push({ str: tcIt.str, tag: activeTag });
                 }
             }
@@ -4408,11 +4409,9 @@
         var s = String(rawOpnd);
         var i = 0;
         var len = s.length;
-        var foundToken = false;
         while (i < len) {
             var ch = s.charCodeAt(i);
             if (ch === 40) { // '('
-                foundToken = true;
                 i++;
                 var depth = 1;
                 while (i < len && depth > 0) {
@@ -4452,11 +4451,13 @@
                 continue;
             }
             if (ch === 60 && (i + 1 >= len || s.charCodeAt(i + 1) !== 60)) { // '<hex>'
-                foundToken = true;
                 var endHex = s.indexOf('>', i + 1);
                 if (endHex !== -1) {
                     var hex = s.slice(i + 1, endHex).replace(/\s+/g, '');
-                    if (hex.length > 0 && !/^(?:00|20|A0|AD|09|0A|0D)+$/i.test(hex)) {
+                    // Never treat non-empty <hex> strings as whitespace in Pass 1 because in TrueType CID
+                    // Identity-H fonts, <0020>, <0009>, <000A>, <000D> are Glyph IDs (visible characters!).
+                    // Pass 2 decodes <hex> via the font's /ToUnicode CMap and demotes true whitespace MCIDs to /Artifact.
+                    if (hex.length > 0) {
                         return false;
                     }
                     i = endHex + 1;
@@ -5224,7 +5225,11 @@
                         var oStr = oItem.str.replace(/[\u00AD\u200B\uFEFF]/g, '');
                         if (!oStr) continue;
                         var oTr = oItem.transform || [10, 0, 0, 10, 72, 700];
-                        var oFontH = Math.abs(oTr[3]) || Math.abs(oTr[0]) || (oItem.height || 11);
+                        var oFontH = Math.max(
+                            Math.sqrt(oTr[0] * oTr[0] + oTr[1] * oTr[1]),
+                            Math.sqrt(oTr[2] * oTr[2] + oTr[3] * oTr[3]),
+                            oItem.height || 0
+                        ) || 11;
                         if (oFontH < 0.5 || oStr.indexOf('Verknuepfung:') === 0) continue;
                         var fh = Math.max(8, oFontH);
                         var iw = Math.max(4, oItem.width || (oStr.length * fh * 0.52));
@@ -5435,7 +5440,11 @@
                     }
                     if (!tStr) continue;
                     var rawTr = tItem.transform || [10, 0, 0, 10, 72, 700];
-                    var rawFontH = Math.abs(rawTr[3]) || Math.abs(rawTr[0]) || (tItem.height || 11);
+                    var rawFontH = Math.max(
+                        Math.sqrt(rawTr[0] * rawTr[0] + rawTr[1] * rawTr[1]),
+                        Math.sqrt(rawTr[2] * rawTr[2] + rawTr[3] * rawTr[3]),
+                        tItem.height || 0
+                    ) || 11;
                     if (rawFontH < 0.5 || tStr.indexOf('Verknuepfung:') === 0) continue;
                     if (!firstLineCandidate && tStr.trim().length >= 3) {
                         firstLineCandidate = tStr.trim().slice(0, 80);
@@ -5741,7 +5750,7 @@
                             var exNormUri = '';
                             var exAct = exDict.lookup ? exDict.lookup(PDFLib.PDFName.of('A')) : null;
                             if (exAct && typeof exAct.get === 'function') {
-                                var exUriObj = exAct.get(PDFLib.PDFName.of('URI'));
+                                var exUriObj = exAct.lookup ? exAct.lookup(PDFLib.PDFName.of('URI')) : exAct.get(PDFLib.PDFName.of('URI'));
                                 if (exUriObj) {
                                     var decodedExUri = (typeof exUriObj.decodeText === 'function') ? exUriObj.decodeText() : String(exUriObj);
                                     exNormUri = decodedExUri.replace(/^[(\s]+|[)\s]+$/g, '').toLowerCase()
@@ -5768,7 +5777,7 @@
                 var matchedExRec = null;
                 for (var erIdx = 0; erIdx < existingLinkRecords.length; erIdx++) {
                     var candRec = existingLinkRecords[erIdx];
-                    if (rectsOverlapOrClose(candRec.rect, dlItem.rect)) {
+                    if (!candRec.matched && candRec.normUri && candRec.normUri === dlItem.normKey && rectsOverlapOrClose(candRec.rect, dlItem.rect)) {
                         matchedExRec = candRec;
                         break;
                     }
@@ -5782,16 +5791,24 @@
                         }
                     }
                 }
+                if (!matchedExRec) {
+                    for (var erIdx3b = 0; erIdx3b < existingLinkRecords.length; erIdx3b++) {
+                        var candRec3b = existingLinkRecords[erIdx3b];
+                        if (!candRec3b.matched && !candRec3b.normUri && rectsOverlapOrClose(candRec3b.rect, dlItem.rect)) {
+                            matchedExRec = candRec3b;
+                            break;
+                        }
+                    }
+                }
                 if (matchedExRec) {
                     matchedExRec.matched = true;
-                    // Ensure existing /Link annotation has a valid /A URI action (e.g. mailto: / https://)
-                    if (!matchedExRec.dict.get(PDFLib.PDFName.of('A'))) {
-                        matchedExRec.dict.set(PDFLib.PDFName.of('A'), context.obj({
-                            Type: 'Action',
-                            S: PDFLib.PDFName.of('URI'),
-                            URI: PDFLib.PDFString.of(dlItem.uri)
-                        }));
-                    }
+                    // Always ensure existing /Link annotation has a valid /A URI action (e.g. mailto: / https://)
+                    matchedExRec.dict.set(PDFLib.PDFName.of('A'), context.obj({
+                        Type: 'Action',
+                        S: PDFLib.PDFName.of('URI'),
+                        URI: PDFLib.PDFString.of(dlItem.uri)
+                    }));
+                    matchedExRec.normUri = dlItem.normKey;
                     if (!annotBoundMcidsMap[matchedExRec.refKey]) {
                         annotBoundMcidsMap[matchedExRec.refKey] = [];
                     }
@@ -5934,6 +5951,11 @@
 
                     // If two links on the same line share the exact same MCID, attach this OBJR to that <Link> element
                     if (myMcids.length === 0 && sharedExistingAnnotInfo && sharedExistingAnnotInfo.kItems) {
+                        for (var shM = 0; shM < candidateMcids.length; shM++) {
+                            var shTarget = candidateMcids[shM];
+                            var shBdcRegex = new RegExp('\\/(?:H[1-6]|P|Span|Link|Form|Annot)\\s*<<\\/MCID\\s+' + shTarget + '>>\\s*BDC');
+                            taggedContentStr = taggedContentStr.replace(shBdcRegex, '/' + annotElemTag + ' <</MCID ' + shTarget + '>> BDC');
+                        }
                         sharedExistingAnnotInfo.kItems.push(objrDict);
                         sharedExistingAnnotInfo.structElem.set(PDFLib.PDFName.of('K'), context.obj(sharedExistingAnnotInfo.kItems));
                         parentTreeEntries.push({
