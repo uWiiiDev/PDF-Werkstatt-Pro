@@ -4403,6 +4403,71 @@
         return out.join('');
     }
 
+    function isPdfTextOperandLiterallyWhitespaceOnly(rawOpnd) {
+        if (!rawOpnd) return true;
+        var s = String(rawOpnd);
+        var i = 0;
+        var len = s.length;
+        var foundToken = false;
+        while (i < len) {
+            var ch = s.charCodeAt(i);
+            if (ch === 40) { // '('
+                foundToken = true;
+                i++;
+                var depth = 1;
+                while (i < len && depth > 0) {
+                    var c = s.charCodeAt(i);
+                    if (c === 92 && i + 1 < len) { // '\'
+                        var nextC = s.charAt(i + 1);
+                        if (nextC >= '0' && nextC <= '7') {
+                            var oct = s.slice(i + 1, i + 4).match(/^[0-7]{1,3}/)[0];
+                            var octCode = parseInt(oct, 8);
+                            if (octCode > 32 && octCode !== 127 && octCode !== 160 && octCode !== 173) {
+                                return false;
+                            }
+                            i += 1 + oct.length;
+                            continue;
+                        }
+                        if (nextC !== 'n' && nextC !== 'r' && nextC !== 't' && nextC !== 'b' && nextC !== 'f' && nextC !== '\n' && nextC !== '\r') {
+                            var escCode = nextC.charCodeAt(0);
+                            if (escCode > 32 && escCode !== 127 && escCode !== 160 && escCode !== 173) {
+                                return false;
+                            }
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    if (c === 40) { depth++; return false; }
+                    if (c === 41) {
+                        depth--;
+                        if (depth > 0) return false;
+                        i++;
+                        continue;
+                    }
+                    if (c > 32 && c !== 127 && c !== 160 && c !== 173) {
+                        return false;
+                    }
+                    i++;
+                }
+                continue;
+            }
+            if (ch === 60 && (i + 1 >= len || s.charCodeAt(i + 1) !== 60)) { // '<hex>'
+                foundToken = true;
+                var endHex = s.indexOf('>', i + 1);
+                if (endHex !== -1) {
+                    var hex = s.slice(i + 1, endHex).replace(/\s+/g, '');
+                    if (hex.length > 0 && !/^(?:00|20|A0|AD|09|0A|0D)+$/i.test(hex)) {
+                        return false;
+                    }
+                    i = endHex + 1;
+                    continue;
+                }
+            }
+            i++;
+        }
+        return true;
+    }
+
     function tagContentStreamStatementsForPdfUa(stmts, startMcid, forceInvisibleTextMode3, pageIndex) {
         var nextMcid = startMcid || 0;
         var mcidTags = [];
@@ -4481,7 +4546,7 @@
             //    while keeping each horizontal text line intact so email addresses and URLs are never split mid-token.
             if (op === 'BT') {
                 var segments = [];
-                var curSeg = { stmts: [], hasText: false, rawTexts: [] };
+                var curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
                 var lastTmY = null;
                 idx++;
                 while (idx < total) {
@@ -4496,28 +4561,28 @@
                         break;
                     }
                     var enhancedLine = enhanceTextColorStmtForWcagContrast(tst);
-                    if (top === 'T*' && curSeg.hasText) {
+                    if (top === 'T*' && (curSeg.hasText || curSeg.hasTextOp)) {
                         segments.push(curSeg);
-                        curSeg = { stmts: [], hasText: false, rawTexts: [] };
+                        curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
                     } else if ((top === 'Td' || top === 'TD') && tst.operands.length >= 2) {
                         var tdy = parseFloat(tst.operands[1]) || 0;
-                        if (curSeg.hasText && Math.abs(tdy) > 1.0) {
+                        if ((curSeg.hasText || curSeg.hasTextOp) && Math.abs(tdy) > 1.0) {
                             segments.push(curSeg);
-                            curSeg = { stmts: [], hasText: false, rawTexts: [] };
+                            curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
                         }
                     } else if (top === 'Tm' && tst.operands.length >= 6) {
                         var tmy = parseFloat(tst.operands[5]) || 0;
-                        if (curSeg.hasText && lastTmY !== null && Math.abs(tmy - lastTmY) > 1.5) {
+                        if ((curSeg.hasText || curSeg.hasTextOp) && lastTmY !== null && Math.abs(tmy - lastTmY) > 1.5) {
                             segments.push(curSeg);
-                            curSeg = { stmts: [], hasText: false, rawTexts: [] };
+                            curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
                         }
                         lastTmY = tmy;
                     }
 
                     if (top === 'Tj' || top === 'TJ' || top === "'" || top === '"') {
                         var opndJoined = tst.operands.join(' ');
-                        var opndStr = opndJoined.replace(/\s+/g, '');
-                        if (opndStr !== '()' && opndStr !== '<>' && opndStr !== '[]') {
+                        curSeg.hasTextOp = true;
+                        if (!isPdfTextOperandLiterallyWhitespaceOnly(opndJoined)) {
                             var extractedAscii = extractAsciiFromPdfTextOperand(opndJoined);
                             curSeg.hasText = true;
                             if (extractedAscii) curSeg.rawTexts.push(extractedAscii);
@@ -4525,7 +4590,7 @@
                         curSeg.stmts.push(enhancedLine);
                         if (top === "'" || top === '"') {
                             segments.push(curSeg);
-                            curSeg = { stmts: [], hasText: false, rawTexts: [] };
+                            curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
                         }
                     } else {
                         curSeg.stmts.push(enhancedLine);
@@ -4533,7 +4598,7 @@
                     idx++;
                 }
                 if (curSeg.stmts.length > 0) {
-                    if (!curSeg.hasText && segments.length > 0) {
+                    if (!curSeg.hasText && !curSeg.hasTextOp && segments.length > 0) {
                         for (var tsIdx = 0; tsIdx < curSeg.stmts.length; tsIdx++) {
                             segments[segments.length - 1].stmts.push(curSeg.stmts[tsIdx]);
                         }
@@ -4581,7 +4646,13 @@
                             outLines.push(segObj.stmts.join('\n'));
                             outLines.push('EMC');
                         } else if (segObj.stmts.length > 0) {
-                            outLines.push(segObj.stmts.join('\n'));
+                            if (segObj.hasTextOp) {
+                                outLines.push('/Artifact BMC');
+                                outLines.push(segObj.stmts.join('\n'));
+                                outLines.push('EMC');
+                            } else {
+                                outLines.push(segObj.stmts.join('\n'));
+                            }
                         }
                     }
                     outLines.push('ET');
@@ -5328,6 +5399,8 @@
                 var bdcSeqCounter = 0;
                 var textRuns = [];
                 var mcidRunsMap = {};
+                var mcidHasNonWs = {};
+                var anyMcidDecoded = false;
                 var firstLineCandidate = '';
 
                 for (var ti = 0; ti < jsTc.items.length; ti++) {
@@ -5348,20 +5421,24 @@
                         if (mcidStack.length > 0) mcidStack.pop();
                         continue;
                     }
-                    var tStr = (typeof tItem.str === 'string') ? tItem.str.replace(/[\u00AD\u200B\uFEFF]/g, '') : '';
-                    if (!tStr) continue;
-                    var rawTr = tItem.transform || [10, 0, 0, 10, 72, 700];
-                    var rawFontH = Math.abs(rawTr[3]) || Math.abs(rawTr[0]) || (tItem.height || 11);
-                    if (rawFontH < 0.5 || tStr.indexOf('Verknuepfung:') === 0) continue;
-                    if (!firstLineCandidate && tStr.trim().length >= 3) {
-                        firstLineCandidate = tStr.trim().slice(0, 80);
-                    }
                     var curMcid = null;
                     for (var ms = mcidStack.length - 1; ms >= 0; ms--) {
                         if (mcidStack[ms] !== null && mcidStack[ms] !== undefined) {
                             curMcid = mcidStack[ms];
                             break;
                         }
+                    }
+                    var tStr = (typeof tItem.str === 'string') ? tItem.str.replace(/[\u00AD\u200B\uFEFF]/g, '') : '';
+                    if (curMcid !== null && tStr.replace(/[\s\u00A0\u2000-\u200F\u2028-\u202F\x00-\x20\x7F]+/g, '').length > 0) {
+                        mcidHasNonWs[curMcid] = true;
+                        anyMcidDecoded = true;
+                    }
+                    if (!tStr) continue;
+                    var rawTr = tItem.transform || [10, 0, 0, 10, 72, 700];
+                    var rawFontH = Math.abs(rawTr[3]) || Math.abs(rawTr[0]) || (tItem.height || 11);
+                    if (rawFontH < 0.5 || tStr.indexOf('Verknuepfung:') === 0) continue;
+                    if (!firstLineCandidate && tStr.trim().length >= 3) {
+                        firstLineCandidate = tStr.trim().slice(0, 80);
                     }
                     var fontH = Math.max(8, rawFontH);
                     var itemW = Math.max(4, tItem.width || (tStr.length * fontH * 0.52));
@@ -5383,6 +5460,82 @@
                     if (curMcid !== null) {
                         if (!mcidRunsMap[curMcid]) mcidRunsMap[curMcid] = [];
                         mcidRunsMap[curMcid].push(runObj);
+                    }
+                }
+
+                // Demote any MCID that consists of ONLY whitespace (e.g. CID <0003> space on blank lines)
+                // to /Artifact BMC and compact remaining MCIDs (0 .. nextCleanMcid - 1) so PAC never flags
+                // "Tagged text consists of only whitespace"
+                var pStateForClean = pageTagStates[pIdx0];
+                if (pStateForClean && pStateForClean.pageMcidCount > 0 && anyMcidDecoded) {
+                    var oldToNewMcid = {};
+                    var newMcidTags = [];
+                    var newMcidRawTexts = [];
+                    var nextCleanMcid = 0;
+                    var hadWhitespaceMcid = false;
+                    for (var om = 0; om < pStateForClean.pageMcidCount; om++) {
+                        if (mcidHasNonWs[om]) {
+                            var newM = nextCleanMcid++;
+                            oldToNewMcid[om] = newM;
+                            var origTag = (pStateForClean.pageMcidTags && pStateForClean.pageMcidTags[om]) || 'P';
+                            if (newM === 0 && origTag === 'P') {
+                                origTag = pIdx0 === 0 ? 'H1' : 'H2';
+                            }
+                            newMcidTags.push(origTag);
+                            newMcidRawTexts.push((pStateForClean.pageMcidRawTexts && pStateForClean.pageMcidRawTexts[om]) || '');
+                        } else {
+                            oldToNewMcid[om] = null;
+                            hadWhitespaceMcid = true;
+                        }
+                    }
+                    if (hadWhitespaceMcid) {
+                        pStateForClean.taggedContentStr = pStateForClean.taggedContentStr.replace(
+                            /\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC/g,
+                            function (fullMatch, oldTag, oldMcidStr) {
+                                var oldIdx = parseInt(oldMcidStr, 10);
+                                var mappedIdx = oldToNewMcid[oldIdx];
+                                if (mappedIdx === null || mappedIdx === undefined) {
+                                    return '/Artifact BMC';
+                                }
+                                var updatedTag = newMcidTags[mappedIdx] || oldTag;
+                                return '/' + updatedTag + ' <</MCID ' + mappedIdx + '>> BDC';
+                            }
+                        );
+                        if (nextCleanMcid === 0 && sharedFontInfo && sharedFontInfo.fontDictRef) {
+                            var fbTag = pIdx0 === 0 ? 'H1' : 'H2';
+                            var safeFbText = (pIdx0 === 0 ? fixTitle.replace(/[()\\]/g, ' ').trim() : '') || ('Abschnitt Seite ' + (pIdx0 + 1));
+                            pStateForClean.taggedContentStr +=
+                                '\n/' + fbTag + ' <</MCID 0>> BDC\n' +
+                                'BT\n' +
+                                '/F_PDFUA 1 Tf\n' +
+                                '3 Tr\n' +
+                                '0 0 Td\n' +
+                                '(' + safeFbText + ') Tj\n' +
+                                'ET\n' +
+                                'EMC\n';
+                            nextCleanMcid = 1;
+                            newMcidTags = [fbTag];
+                            newMcidRawTexts = [safeFbText];
+                        }
+                        pStateForClean.pageMcidCount = nextCleanMcid;
+                        pStateForClean.pageMcidTags = newMcidTags;
+                        pStateForClean.pageMcidRawTexts = newMcidRawTexts;
+
+                        var cleanedRuns = [];
+                        var cleanedRunsMap = {};
+                        for (var cr = 0; cr < textRuns.length; cr++) {
+                            var rObj = textRuns[cr];
+                            if (rObj.mcid !== null && rObj.mcid !== undefined) {
+                                var mappedM = oldToNewMcid[rObj.mcid];
+                                if (mappedM === null || mappedM === undefined) continue;
+                                rObj.mcid = mappedM;
+                                if (!cleanedRunsMap[mappedM]) cleanedRunsMap[mappedM] = [];
+                                cleanedRunsMap[mappedM].push(rObj);
+                            }
+                            cleanedRuns.push(rObj);
+                        }
+                        textRuns = cleanedRuns;
+                        mcidRunsMap = cleanedRunsMap;
                     }
                 }
 
