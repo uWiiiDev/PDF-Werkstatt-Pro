@@ -506,6 +506,10 @@ $serverInfo = pdfstudio_get_server_info();
             </p>
             <h3>4. Offiziellen Prüfbericht als PDF exportieren (<code>📄 Prüfbericht PDF</code>)</h3>
             <p>Erzeugt ein druckfertiges Prüfprotokoll mit Prüfergebnis in Prozent, Zeitstempel und Einzelbewertung aller 14 PDF/UA-1-, WCAG- &amp; PAC-Quality-Prüfpunkte zur Ablage in der Akte.</p>
+            <h3>5. Offline-Vorlesefunktion / Text-to-Speech &amp; Screenreader-Hörtest (<code>🔊 Vorlesen</code> &amp; <code>🔊👆 Klick-Vorlesen</code>)</h3>
+            <p>
+                Über die Schaltflächen <strong><code>🔊 Vorlesen</code></strong> (im Reiter <em>Konverter &amp; OCR</em> bzw. <em>Barrierefreiheit</em>) liest <strong>PDF-Werkstatt Pro</strong> die aktuelle PDF-Seite komplett offline über die integrierte Sprachsynthese Ihres Browsers Zeile für Zeile in der logischen Lesereihenfolge vor. Die gerade gesprochene Textzeile wird dabei live im PDF-Dokument <strong>grün hervorgehoben</strong>. Mit dem Werkzeug <strong><code>🔊👆 Klick-Vorlesen</code></strong> können Sie außerdem gezielt auf jede beliebige Textzeile im PDF klicken, um das Vorlesen genau ab dieser Stelle zu starten. Im rechten Seitenfenster (<em>🔊 Vorlese-Player</em>) lassen sich Wiedergabe, Pause/Weiter, Lesetempo (<code>0,85×</code> bis <code>1,5×</code>) und die gewünschte Systemstimme steuern.
+            </p>
         </section>
 
         <!-- KAPITEL 11 -->

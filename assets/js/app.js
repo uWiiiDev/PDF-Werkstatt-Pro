@@ -25,6 +25,10 @@
         pdfSearchQuery: '',
         pdfSearchMatches: [],      // Array of { pageIndex, x, y, w, h, text }
         pdfSearchActiveIdx: -1,
+        ttsSpeaking: false,        // Text-to-Speech active flag
+        ttsPaused: false,          // Text-to-Speech paused flag
+        ttsActiveBlockIndex: -1,   // Index in currentPageTextBlocks currently being spoken
+        ttsSessionId: 0,           // Monotonic counter to cancel stale TTS callbacks
         isDrawing: false,
         dragMode: null,        // 'draw' | 'move-ann'
         dragStart: { x: 0, y: 0 },
@@ -848,13 +852,16 @@
             'form-check': 'Formular: Checkbox',
             'form-select': 'Formular: Dropdown',
             link: 'Hyperlink / Sprungmarke',
-            'a11y-tag': 'PDF/UA Tag: ' + (state.activeTagType || 'P')
+            'a11y-tag': 'PDF/UA Tag: ' + (state.activeTagType || 'P'),
+            'tts-click': 'Vorlesen: Textzeile anklicken'
         };
         el.activeToolBadge.textContent = labels[toolName] || toolName;
         if (toolName === 'text' || toolName === 'pen' || toolName === 'highlight' || toolName === 'strikethrough' || toolName === 'rect' || toolName === 'stamp' || toolName === 'redact') {
             revealRightDockSection('inspectorToolSection', toolName === 'stamp' ? 'propStampText' : null);
+        } else if (toolName === 'tts-click') {
+            revealRightDockSection('inspectorOcrSection');
         }
-        el.annCanvas.style.cursor = toolName === 'select' ? 'default' : ((toolName === 'edit-text' || toolName === 'strikethrough') ? 'text' : 'crosshair');
+        el.annCanvas.style.cursor = toolName === 'select' ? 'default' : (toolName === 'tts-click' ? 'pointer' : ((toolName === 'edit-text' || toolName === 'strikethrough') ? 'text' : 'crosshair'));
         if (toolName === 'edit-text' && getActiveDoc()) {
             if (!state.currentPageTextBlocks || state.currentPageTextBlocks.length === 0) {
                 showToast('Hinweis: Diese Seite enthält keinen eingebetteten Text (Scan). Nutzen Sie erst "Durchsuchbares PDF (OCR)" oder "T+ Neuer Text".');
@@ -863,6 +870,12 @@
             }
         } else if (toolName === 'strikethrough' && getActiveDoc()) {
             showToast('Klicken Sie direkt auf eine Textzeile oder ziehen Sie mit gedrückter Maustaste über einzelne Wörter zum Durchstreichen.');
+        } else if (toolName === 'tts-click' && getActiveDoc()) {
+            if (!state.currentPageTextBlocks || state.currentPageTextBlocks.length === 0) {
+                showToast('Hinweis: Diese Seite ist ein reiner Bild-Scan ohne Textebene. Starten Sie erst „🔎 Durchsuchbares PDF (OCR)“, um Zeilen anzuklicken.');
+            } else {
+                showToast('Klicken Sie direkt auf eine grün umrahmte Textzeile im PDF, um ab dieser Stelle laut vorzulesen.');
+            }
         }
         redrawAnnotationOverlay();
         updateAssistantContextBanner();
@@ -877,13 +890,14 @@
         var list = getPageAnnotations(doc, doc.currentPage);
         var scale = state.zoom;
 
-        // When in 'edit-text' or 'strikethrough' mode, highlight all detected embedded PDF text blocks so user sees clickable lines
-        if ((state.activeTool === 'edit-text' || state.activeTool === 'strikethrough') && state.currentPageTextBlocks && state.currentPageTextBlocks.length > 0) {
+        // When in 'edit-text', 'strikethrough', or 'tts-click' mode, highlight all detected embedded PDF text blocks so user sees clickable lines
+        if ((state.activeTool === 'edit-text' || state.activeTool === 'strikethrough' || state.activeTool === 'tts-click') && state.currentPageTextBlocks && state.currentPageTextBlocks.length > 0) {
             ctx.save();
             var isStrikeMode = state.activeTool === 'strikethrough';
+            var isTtsClickMode = state.activeTool === 'tts-click';
             for (var b = 0; b < state.currentPageTextBlocks.length; b++) {
                 var blk = state.currentPageTextBlocks[b];
-                if (!isStrikeMode) {
+                if (!isStrikeMode && !isTtsClickMode) {
                     var alreadyReplaced = false;
                     for (var k = 0; k < list.length; k++) {
                         if (list[k].type === 'edit-text' && Math.abs((list[k].origX || 0) - blk.x) < 4 && Math.abs((list[k].origY || 0) - blk.y) < 4) {
@@ -893,13 +907,41 @@
                     }
                     if (alreadyReplaced) continue;
                 }
-                ctx.fillStyle = isStrikeMode ? 'rgba(239, 68, 68, 0.05)' : 'rgba(59, 130, 246, 0.08)';
-                ctx.strokeStyle = isStrikeMode ? 'rgba(220, 38, 38, 0.40)' : 'rgba(37, 99, 235, 0.55)';
+                if (isTtsClickMode) {
+                    ctx.fillStyle = 'rgba(16, 185, 129, 0.07)';
+                    ctx.strokeStyle = 'rgba(16, 185, 129, 0.50)';
+                } else if (isStrikeMode) {
+                    ctx.fillStyle = 'rgba(239, 68, 68, 0.05)';
+                    ctx.strokeStyle = 'rgba(220, 38, 38, 0.40)';
+                } else {
+                    ctx.fillStyle = 'rgba(59, 130, 246, 0.08)';
+                    ctx.strokeStyle = 'rgba(37, 99, 235, 0.55)';
+                }
                 ctx.lineWidth = 1;
                 ctx.setLineDash([3, 2]);
                 ctx.fillRect(blk.x * scale, blk.y * scale, blk.w * scale, blk.h * scale);
                 ctx.strokeRect(blk.x * scale, blk.y * scale, blk.w * scale, blk.h * scale);
             }
+            ctx.restore();
+        }
+
+        // Highlight currently spoken Text-to-Speech (TTS) line in emerald green
+        if (state.ttsSpeaking && state.ttsActiveBlockIndex >= 0 && state.currentPageTextBlocks && state.currentPageTextBlocks[state.ttsActiveBlockIndex]) {
+            var ttsBlk = state.currentPageTextBlocks[state.ttsActiveBlockIndex];
+            ctx.save();
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.26)';
+            ctx.strokeStyle = '#10b981';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([]);
+            var tx = Math.max(0, (ttsBlk.x - 3) * scale);
+            var ty = Math.max(0, (ttsBlk.y - 2) * scale);
+            var tw = (ttsBlk.w + 6) * scale;
+            var th = (ttsBlk.h + 4) * scale;
+            ctx.fillRect(tx, ty, tw, th);
+            ctx.strokeRect(tx, ty, tw, th);
+            ctx.fillStyle = '#059669';
+            ctx.font = 'bold ' + Math.max(11, Math.round(12 * scale)) + 'px sans-serif';
+            ctx.fillText('🔊', Math.max(2, tx - 18 * scale), ty + th * 0.78);
             ctx.restore();
         }
 
@@ -1182,6 +1224,27 @@
                     state.dragOffset.y = pt.y - selAnn.y;
                 }
                 redrawAnnotationOverlay();
+                return;
+            }
+
+            if (state.activeTool === 'tts-click') {
+                var ttsBlocks = state.currentPageTextBlocks || [];
+                var hitTtsIdx = -1;
+                for (var tb = 0; tb < ttsBlocks.length; tb++) {
+                    var tblk = ttsBlocks[tb];
+                    if (pt.x >= tblk.x - 6 && pt.x <= tblk.x + tblk.w + 10 && pt.y >= tblk.y - 4 && pt.y <= tblk.y + tblk.h + 4) {
+                        hitTtsIdx = tb;
+                        break;
+                    }
+                }
+                if (hitTtsIdx !== -1) {
+                    startTtsReadingFromBlock(hitTtsIdx);
+                } else if (ttsBlocks.length === 0) {
+                    showToast('Diese Seite enthält noch keine Textebene (Scan). Klicken Sie auf „🔎 Durchsuchbares PDF (OCR)“.', 'error');
+                    revealRightDockSection('inspectorOcrSection');
+                } else {
+                    showToast('Bitte klicken Sie direkt auf eine grün umrahmte Textzeile im PDF, um ab dort vorzulesen.');
+                }
                 return;
             }
 
@@ -2590,6 +2653,300 @@
             showToast('Fehler beim Auslesen: ' + err.message, 'error');
             return '';
         }
+    }
+
+    // =========================================================================
+    // Offline Browser Text-to-Speech (Vorlese-Funktion & Live-Zeilenmarkierung)
+    // =========================================================================
+    function initTtsVoices() {
+        if (!('speechSynthesis' in window)) return;
+        var selectEl = document.getElementById('ttsVoiceSelect');
+        if (!selectEl) return;
+
+        function populateVoices() {
+            var voices = window.speechSynthesis.getVoices() || [];
+            if (!voices.length) return;
+            var prevVal = selectEl.value;
+            selectEl.innerHTML = '<option value="">Standard (Deutsch / System)</option>';
+
+            // Sort German voices first, then English, then others
+            var sorted = voices.slice().sort(function (a, b) {
+                var aDe = /^de/i.test(a.lang || '') ? 0 : (/^en/i.test(a.lang || '') ? 1 : 2);
+                var bDe = /^de/i.test(b.lang || '') ? 0 : (/^en/i.test(b.lang || '') ? 1 : 2);
+                if (aDe !== bDe) return aDe - bDe;
+                return String(a.name || '').localeCompare(String(b.name || ''));
+            });
+
+            var preferredUri = '';
+            for (var i = 0; i < sorted.length; i++) {
+                var v = sorted[i];
+                if (!/^de|^en/i.test(v.lang || '') && sorted.length > 12) continue;
+                var opt = document.createElement('option');
+                opt.value = v.voiceURI || v.name;
+                opt.textContent = v.name + ' (' + v.lang + ')';
+                selectEl.appendChild(opt);
+                if (!preferredUri && /^de/i.test(v.lang || '')) {
+                    preferredUri = opt.value;
+                }
+            }
+            if (prevVal) {
+                selectEl.value = prevVal;
+            } else if (preferredUri) {
+                selectEl.value = preferredUri;
+            }
+        }
+
+        populateVoices();
+        if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+            window.speechSynthesis.onvoiceschanged = populateVoices;
+        }
+    }
+
+    function getSelectedTtsVoice() {
+        if (!('speechSynthesis' in window)) return null;
+        var voices = window.speechSynthesis.getVoices() || [];
+        var selectEl = document.getElementById('ttsVoiceSelect');
+        var chosen = selectEl ? selectEl.value : '';
+        if (chosen) {
+            for (var i = 0; i < voices.length; i++) {
+                if ((voices[i].voiceURI || voices[i].name) === chosen) {
+                    return voices[i];
+                }
+            }
+        }
+        // Fallback: best German voice
+        for (var j = 0; j < voices.length; j++) {
+            if (/^de[-_]?DE/i.test(voices[j].lang || '')) return voices[j];
+        }
+        for (var k = 0; k < voices.length; k++) {
+            if (/^de/i.test(voices[k].lang || '')) return voices[k];
+        }
+        return null;
+    }
+
+    function updateTtsUiState(statusLabel, badgeTone) {
+        var badge = document.getElementById('ttsStatusBadge');
+        if (badge) {
+            badge.textContent = statusLabel || (state.ttsSpeaking ? (state.ttsPaused ? 'Pausiert' : 'Liest vor…') : 'Bereit');
+            if (badgeTone === 'active' || (state.ttsSpeaking && !state.ttsPaused)) {
+                badge.style.background = 'rgba(16, 185, 129, 0.22)';
+                badge.style.color = '#34d399';
+            } else if (badgeTone === 'paused' || state.ttsPaused) {
+                badge.style.background = 'rgba(245, 158, 11, 0.22)';
+                badge.style.color = '#fbbf24';
+            } else {
+                badge.style.background = 'rgba(16, 185, 129, 0.14)';
+                badge.style.color = '#10b981';
+            }
+        }
+        var pauseBtn = document.getElementById('btnTtsPause');
+        if (pauseBtn) {
+            pauseBtn.textContent = state.ttsPaused ? '▶️ Weiter' : '⏸️ Pause';
+        }
+        var toggleBtns = document.querySelectorAll('[data-cmd="tts-toggle-read"]');
+        for (var i = 0; i < toggleBtns.length; i++) {
+            var lbl = toggleBtns[i].querySelector('.rb-label');
+            var ico = toggleBtns[i].querySelector('.rb-icon');
+            if (state.ttsSpeaking) {
+                toggleBtns[i].classList.add('active');
+                if (ico) ico.textContent = '⏹️';
+                if (lbl) lbl.textContent = 'Stopp';
+            } else {
+                toggleBtns[i].classList.remove('active');
+                if (ico) ico.textContent = '🔊';
+                if (lbl) lbl.textContent = toggleBtns[i].closest('[data-ribbon-pane="a11y"]') ? 'Vorlesen-Test' : 'Vorlesen';
+            }
+        }
+    }
+
+    function stopTtsReading(silent) {
+        state.ttsSessionId++;
+        if ('speechSynthesis' in window) {
+            try {
+                window.speechSynthesis.cancel();
+            } catch (e) {}
+        }
+        var wasSpeaking = state.ttsSpeaking;
+        state.ttsSpeaking = false;
+        state.ttsPaused = false;
+        state.ttsActiveBlockIndex = -1;
+        updateTtsUiState('Bereit', 'idle');
+        redrawAnnotationOverlay();
+        if (wasSpeaking && !silent) {
+            setStatus('Vorlesen beendet.');
+        }
+    }
+
+    function pauseOrResumeTts() {
+        if (!('speechSynthesis' in window)) {
+            showToast('Ihr Browser unterstützt leider keine Sprachausgabe (Web Speech API).', 'error');
+            return;
+        }
+        if (!state.ttsSpeaking) {
+            startTtsReadingPage();
+            return;
+        }
+        if (state.ttsPaused) {
+            window.speechSynthesis.resume();
+            state.ttsPaused = false;
+            updateTtsUiState('Liest vor…', 'active');
+            showToast('Vorlesen fortgesetzt');
+        } else {
+            window.speechSynthesis.pause();
+            state.ttsPaused = true;
+            updateTtsUiState('Pausiert', 'paused');
+            showToast('Vorlesen pausiert');
+        }
+    }
+
+    async function toggleTtsReading() {
+        if (state.ttsSpeaking) {
+            stopTtsReading(false);
+        } else {
+            await startTtsReadingPage();
+        }
+    }
+
+    async function startTtsReadingPage() {
+        if (!('speechSynthesis' in window)) {
+            showToast('Ihr Browser unterstützt leider keine lokale Sprachausgabe (speechSynthesis).', 'error');
+            return;
+        }
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        if (state.viewMode !== 'editor') {
+            await switchView('editor');
+        }
+        revealRightDockSection('inspectorOcrSection');
+        initTtsVoices();
+
+        var blocks = state.currentPageTextBlocks || [];
+        if (blocks.length > 0) {
+            startTtsReadingFromBlock(0);
+            return;
+        }
+
+        // Fallback: if #ocrOutputText already contains text (e.g. after OCR scan), read that text
+        var outEl = document.getElementById('ocrOutputText');
+        var rawTxt = outEl ? String(outEl.value || '').replace(/^---\s*Seite\s+\d+\s*---\s*/gm, '').trim() : '';
+        if (rawTxt && rawTxt.indexOf('Kein eingebetteter Text') === -1) {
+            stopTtsReading(true);
+            var sessionId = ++state.ttsSessionId;
+            state.ttsSpeaking = true;
+            state.ttsPaused = false;
+            state.ttsActiveBlockIndex = -1;
+            updateTtsUiState('Liest Textfeld…', 'active');
+
+            var rateEl = document.getElementById('ttsRateSelect');
+            var rate = rateEl ? (parseFloat(rateEl.value) || 1.0) : 1.0;
+            var voice = getSelectedTtsVoice();
+            var u = new window.SpeechSynthesisUtterance(rawTxt);
+            u.lang = (voice && voice.lang) ? voice.lang : 'de-DE';
+            if (voice) u.voice = voice;
+            u.rate = rate;
+            u.onend = function () {
+                if (state.ttsSessionId !== sessionId) return;
+                state.ttsSpeaking = false;
+                state.ttsPaused = false;
+                updateTtsUiState('Fertig ✔', 'idle');
+            };
+            u.onerror = function () {
+                if (state.ttsSessionId !== sessionId) return;
+                state.ttsSpeaking = false;
+                state.ttsPaused = false;
+                updateTtsUiState('Bereit', 'idle');
+            };
+            window.speechSynthesis.speak(u);
+            showToast('🔊 Vorlesen gestartet (aus Textfeld)', 'success');
+            return;
+        }
+
+        setOcrStatusBox('ℹ️ <strong>Reiner Bild-Scan erkannt:</strong> Klicken Sie zuerst oben auf <strong>„🔎 In durchsuchbares PDF umwandeln“</strong>, damit der Text erkannt und vorgelesen werden kann!', 'info');
+        showToast('Diese Seite enthält noch keinen Text (Scan). Bitte starten Sie erst „🔎 Durchsuchbares PDF“.', 'error');
+    }
+
+    function startTtsReadingFromBlock(startIndex) {
+        if (!('speechSynthesis' in window)) {
+            showToast('Ihr Browser unterstützt leider keine lokale Sprachausgabe (speechSynthesis).', 'error');
+            return;
+        }
+        var doc = getActiveDoc();
+        if (!doc) return;
+        var blocks = state.currentPageTextBlocks || [];
+        if (!blocks.length) {
+            startTtsReadingPage();
+            return;
+        }
+
+        var clampedStart = Math.max(0, Math.min(blocks.length - 1, startIndex || 0));
+        stopTtsReading(true);
+        initTtsVoices();
+        revealRightDockSection('inspectorOcrSection');
+
+        // Also fill #ocrOutputText with current page lines so user can read along in the right dock
+        var outEl = document.getElementById('ocrOutputText');
+        if (outEl) {
+            var allLines = blocks.map(function (b) { return b.text; });
+            outEl.value = '--- Seite ' + (doc.currentPage + 1) + ' ---\n' + allLines.join('\n');
+        }
+
+        var sessionId = ++state.ttsSessionId;
+        state.ttsSpeaking = true;
+        state.ttsPaused = false;
+        state.ttsActiveBlockIndex = clampedStart;
+        updateTtsUiState('Zeile ' + (clampedStart + 1) + '/' + blocks.length, 'active');
+        redrawAnnotationOverlay();
+        trackUsageEvent('tts_read_aloud');
+
+        function speakNext(idx) {
+            if (state.ttsSessionId !== sessionId) return;
+            if (idx >= blocks.length) {
+                state.ttsSpeaking = false;
+                state.ttsPaused = false;
+                state.ttsActiveBlockIndex = -1;
+                updateTtsUiState('Fertig ✔', 'idle');
+                redrawAnnotationOverlay();
+                setStatus('Vorlesen von Seite ' + (doc.currentPage + 1) + ' abgeschlossen.');
+                return;
+            }
+
+            var lineText = String((blocks[idx] && blocks[idx].text) || '').trim();
+            if (!lineText) {
+                speakNext(idx + 1);
+                return;
+            }
+
+            state.ttsActiveBlockIndex = idx;
+            updateTtsUiState('Zeile ' + (idx + 1) + '/' + blocks.length, 'active');
+            setStatus('🔊 Liest Seite ' + (doc.currentPage + 1) + ' (Zeile ' + (idx + 1) + '/' + blocks.length + '): „' + lineText.substring(0, 65) + (lineText.length > 65 ? '…' : '') + '“');
+            redrawAnnotationOverlay();
+
+            var rateEl = document.getElementById('ttsRateSelect');
+            var rate = rateEl ? (parseFloat(rateEl.value) || 1.0) : 1.0;
+            var voice = getSelectedTtsVoice();
+
+            var utter = new window.SpeechSynthesisUtterance(lineText);
+            utter.lang = (voice && voice.lang) ? voice.lang : 'de-DE';
+            if (voice) utter.voice = voice;
+            utter.rate = rate;
+
+            utter.onend = function () {
+                if (state.ttsSessionId !== sessionId) return;
+                speakNext(idx + 1);
+            };
+            utter.onerror = function () {
+                if (state.ttsSessionId !== sessionId) return;
+                speakNext(idx + 1);
+            };
+
+            window.speechSynthesis.speak(utter);
+        }
+
+        showToast('🔊 Vorlesen ab Zeile ' + (clampedStart + 1) + ' gestartet', 'success');
+        speakNext(clampedStart);
     }
 
     async function runOcrOnCurrentPage() {
@@ -8170,12 +8527,14 @@
                 break;
             case 'prev-page':
                 if (doc && doc.currentPage > 0) {
+                    stopTtsReading(true);
                     doc.currentPage--;
                     renderCurrentEditorPage();
                 }
                 break;
             case 'next-page':
                 if (doc && doc.currentPage < doc.pageCount - 1) {
+                    stopTtsReading(true);
                     doc.currentPage++;
                     renderCurrentEditorPage();
                 }
@@ -8323,6 +8682,18 @@
                 break;
             case 'extract-page-text':
                 await extractEmbeddedPageText(false);
+                break;
+            case 'tts-toggle-read':
+                await toggleTtsReading();
+                break;
+            case 'tts-read-page':
+                await startTtsReadingPage();
+                break;
+            case 'tts-pause-resume':
+                pauseOrResumeTts();
+                break;
+            case 'tts-stop':
+                stopTtsReading(false);
                 break;
             case 'extract-all-text':
                 if (!doc) await createNewBlankPdfTab();
@@ -11749,6 +12120,16 @@
             cmd: 'make-searchable-pdf',
             cmdLabel: '▶️ Durchsuchbares PDF (OCR) starten'
         },
+        'tts': {
+            title: '🔊 PDF-Seite laut vorlesen lassen (Text-to-Speech)',
+            keywords: ['vorlesen', 'sprechen', 'stimme', 'audio', 'hören', 'sprachausgabe', 'tts', 'screenreader', 'vorlesefunktion', 'laut'],
+            html: '<strong>Offline-Vorlesefunktion (Text-to-Speech) mit Live-Zeilenmarkierung:</strong><br>' +
+                  '• Klicken Sie im Reiter <em>🔄 Konverter &amp; OCR</em> oder <em>♿ Barrierefreiheit</em> auf <strong>🔊 Vorlesen</strong>: Die aktuelle PDF-Seite wird Zeile für Zeile in der erkannten Lesereihenfolge vorgelesen und im Dokument <strong>grün hervorgehoben</strong>.<br>' +
+                  '• Mit <strong>🔊👆 Klick-Vorlesen</strong> klicken Sie direkt auf eine beliebige Textzeile im PDF, um genau ab dieser Stelle vorzulesen.<br>' +
+                  '• Rechts im <strong>🔊 Vorlese-Player</strong> steuern Sie Pause/Weiter, Stopp, Lesetempo (0,85× bis 1,5×) und die Systemstimme.',
+            cmd: 'tts-read-page',
+            cmdLabel: '▶️ Aktuelle Seite jetzt vorlesen'
+        },
         'a11y': {
             title: '♿ Barrierefreiheit (PDF/UA-1, WCAG 2.1 & BITV 2.0)',
             keywords: ['barrierefrei', 'barrierefreiheit', 'pdf/ua', 'bitv', 'wcag', 'screenreader', 'blinde', 'alt-text', 'tags', 'strukturbaum', 'auto-fix', 'pac'],
@@ -11800,6 +12181,7 @@
                 'edit-text': 'Werkzeug <strong>I✎ Text ändern</strong> aktiv: Klicken Sie auf eine <strong>blau umrahmte Textzeile</strong> im PDF, um den Originaltext direkt umzuschreiben.',
                 text: 'Werkzeug <strong>T+ Neuer Text</strong> aktiv: Klicken Sie auf eine freie Stelle im PDF, um neuen Text einzufügen.',
                 strikethrough: 'Werkzeug <strong>S&#822; Durchstreichen</strong> aktiv: Klicken Sie direkt auf eine markierte Textzeile oder ziehen Sie mit der Maus über einzelne Wörter.',
+                'tts-click': 'Werkzeug <strong>🔊👆 Klick-Vorlesen</strong> aktiv: Klicken Sie auf eine <strong>grün umrahmte Textzeile</strong> im PDF, um ab dieser Zeile laut vorzulesen.',
                 redact: 'Werkzeug <strong>⬛ Schwärzen</strong> aktiv: Ziehen Sie Rahmen über sensible Stellen und klicken Sie danach auf <strong>🛡️ Sanitize</strong>.',
                 stamp: 'Werkzeug <strong>🏷️ Stempel</strong> aktiv: Blenden Sie bei Bedarf oben rechts mit <code>◨</code> die Werkzeug-Eigenschaften ein, um den Stempeltext zu wählen.'
             };
@@ -12117,5 +12499,6 @@
     initEventListeners();
     initFloatingAssistant();
     initAutoSaveTimer();
+    initTtsVoices();
     renderUserStampsVault();
 })();

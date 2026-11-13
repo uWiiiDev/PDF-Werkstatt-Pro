@@ -600,12 +600,20 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🔍</span>
                         <span class="rb-label">OCR → Textfeld</span>
                     </button>
-                    <button type="button" class="ribbon-btn" data-cmd="extract-page-text">
+                    <button type="button" class="ribbon-btn" data-cmd="extract-page-text" title="Liest bereits im PDF eingebetteten Text sofort aus und öffnet das Textfeld rechts">
                         <span class="rb-icon">📖</span>
                         <span class="rb-label">Text lesen</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="tts-toggle-read" title="Aktuelle PDF-Seite (oder erkannten OCR-Text) laut vorlesen mit grüner Live-Zeilenmarkierung">
+                        <span class="rb-icon">🔊</span>
+                        <span class="rb-label">Vorlesen</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="tts-click" title="Klicken Sie im PDF auf eine beliebige Textzeile, um ab dieser Stelle vorzulesen">
+                        <span class="rb-icon">🔊👆</span>
+                        <span class="rb-label">Klick-Vorlesen</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Sandwich-OCR &amp; Texterkennung</div>
+                <div class="ribbon-section-title">Sandwich-OCR, Text &amp; Vorlesen</div>
             </div>
         </div>
 
@@ -629,8 +637,16 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🗂️</span>
                         <span class="rb-label">Stapel Auto-Fix</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="tts-toggle-read" title="Screenreader-Hörtest: Aktuelle Seite in der erkannten Lesereihenfolge laut vorlesen">
+                        <span class="rb-icon">🔊</span>
+                        <span class="rb-label">Vorlesen-Test</span>
+                    </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="tts-click" title="Auf eine beliebige Textzeile im PDF klicken, um ab dort vorzulesen">
+                        <span class="rb-icon">🔊👆</span>
+                        <span class="rb-label">Klick-Vorlesen</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Prüfung &amp; Auto-Reparatur</div>
+                <div class="ribbon-section-title">Prüfung, Auto-Reparatur &amp; Vorlesen</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -976,6 +992,39 @@ $serverInfo = pdfstudio_get_server_info();
                 <div style="display:flex;gap:6px;margin-top:6px;">
                     <button type="button" class="tool-btn" data-cmd="copy-ocr-text" style="flex:1;">📋 Kopieren</button>
                     <button type="button" class="tool-btn" data-cmd="download-ocr-text" style="flex:1;">💾 Als .txt</button>
+                </div>
+
+                <!-- 5b. Vorlese-Player (Text-to-Speech & Live-Screenreader-Vorschau) -->
+                <div id="ttsInspectorBox" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-subtle);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">🔊 Vorlese-Player (TTS)</span>
+                        <span id="ttsStatusBadge" style="font-size:11px;padding:1px 7px;border-radius:999px;background:rgba(16,185,129,0.14);color:#10b981;font-weight:600;">Bereit</span>
+                    </div>
+                    <div style="display:flex;gap:4px;margin-bottom:6px;">
+                        <button type="button" id="btnTtsPlay" class="tool-btn btn-primary" data-cmd="tts-read-page" style="flex:1.2;" title="Aktuelle Seite ab Anfang (oder Textfeld) laut vorlesen">▶️ Vorlesen</button>
+                        <button type="button" id="btnTtsPause" class="tool-btn" data-cmd="tts-pause-resume" style="flex:1;" title="Vorlesen pausieren oder fortsetzen">⏸️ Pause</button>
+                        <button type="button" id="btnTtsStop" class="tool-btn" data-cmd="tts-stop" style="flex:0.9;" title="Vorlesen beenden">⏹️ Stopp</button>
+                    </div>
+                    <button type="button" class="tool-btn" data-tool="tts-click" style="width:100%;margin-bottom:6px;" title="Klicken Sie im PDF auf eine beliebige Textzeile, um ab genau dieser Stelle vorzulesen">
+                        🔊👆 Textzeile im PDF anklicken &amp; ab dort vorlesen
+                    </button>
+                    <div class="form-grid-2" style="gap:6px;">
+                        <div class="form-row" style="margin-bottom:0;">
+                            <label for="ttsRateSelect" style="font-size:11px;">Tempo</label>
+                            <select id="ttsRateSelect" class="form-control" style="height:26px;font-size:11.5px;padding:0 6px;">
+                                <option value="0.85">0,85× (Ruhig)</option>
+                                <option value="1.0" selected>1,0× (Normal)</option>
+                                <option value="1.2">1,2× (Zügig)</option>
+                                <option value="1.5">1,5× (Schnell)</option>
+                            </select>
+                        </div>
+                        <div class="form-row" style="margin-bottom:0;">
+                            <label for="ttsVoiceSelect" style="font-size:11px;">Stimme</label>
+                            <select id="ttsVoiceSelect" class="form-control" style="height:26px;font-size:11.5px;padding:0 6px;">
+                                <option value="">Standard (DE)</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
             </div>
 
