@@ -4946,10 +4946,8 @@
                             if (extractedAscii) curSeg.rawTexts.push(extractedAscii);
                         }
                         curSeg.stmts.push(enhancedLine);
-                        if (top === "'" || top === '"') {
-                            segments.push(curSeg);
-                            curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
-                        }
+                        segments.push(curSeg);
+                        curSeg = { stmts: [], hasText: false, hasTextOp: false, rawTexts: [] };
                     } else {
                         curSeg.stmts.push(enhancedLine);
                     }
@@ -5437,9 +5435,13 @@
             var ay1 = Math.min(rA[1], rA[3]), ay2 = Math.max(rA[1], rA[3]);
             var bx1 = Math.min(rB[0], rB[2]), bx2 = Math.max(rB[0], rB[2]);
             var by1 = Math.min(rB[1], rB[3]), by2 = Math.max(rB[1], rB[3]);
+            var hA = Math.max(4, ay2 - ay1);
+            var hB = Math.max(4, by2 - by1);
+            var midYA = (ay1 + ay2) * 0.5;
+            var midYB = (by1 + by2) * 0.5;
             var overlapX = Math.min(ax2, bx2) - Math.max(ax1, bx1);
             var overlapY = Math.min(ay2, by2) - Math.max(ay1, by1);
-            return overlapX >= -10 && overlapY >= -7;
+            return overlapX >= -2 && overlapY >= Math.min(hA, hB) * 0.25 && Math.abs(midYA - midYB) <= Math.max(hA, hB) * 0.45;
         }
 
         function extractLinksFromTextRuns(runsList) {
@@ -5945,7 +5947,9 @@
                     for (var trI = 0; trI < textRuns.length; trI++) {
                         var trRun = textRuns[trI];
                         if (trRun.mcid === null || trRun.mcid === undefined) continue;
-                        if (rectsOverlapOrClose(origLk.rect, [trRun.x1, trRun.y1, trRun.x2, trRun.y2])) {
+                        var sameBaseY = Math.abs(trRun.baseY - origLk.baseY) <= Math.max(3.5, trRun.fontH * 0.42);
+                        var horizOverlap = Math.min(origLk.rect[2], trRun.x2) - Math.max(origLk.rect[0], trRun.x1);
+                        if (sameBaseY && horizOverlap >= 0) {
                             if (!seenMapM[trRun.mcid]) {
                                 seenMapM[trRun.mcid] = true;
                                 mappedMcids.push(trRun.mcid);
@@ -5956,7 +5960,8 @@
                         for (var trI2 = 0; trI2 < textRuns.length; trI2++) {
                             var trRun2 = textRuns[trI2];
                             if (trRun2.mcid === null || trRun2.mcid === undefined) continue;
-                            if (Math.abs(trRun2.baseY - origLk.baseY) <= Math.max(8, trRun2.fontH * 0.85)) {
+                            if (Math.abs(trRun2.baseY - origLk.baseY) <= Math.max(4, trRun2.fontH * 0.45) &&
+                                Math.min(origLk.rect[2], trRun2.x2) - Math.max(origLk.rect[0], trRun2.x1) >= -4) {
                                 if (!seenMapM[trRun2.mcid]) {
                                     seenMapM[trRun2.mcid] = true;
                                     mappedMcids.push(trRun2.mcid);
@@ -5965,13 +5970,15 @@
                         }
                     }
                     if (existingMerged) {
-                        // Prefer original untouched bounding box and merge any mapped MCIDs
+                        // Prefer original untouched bounding box; only use geometric mappedMcids if character-level mcids were empty
                         existingMerged.rect = origLk.rect;
-                        for (var mmI = 0; mmI < mappedMcids.length; mmI++) {
-                            if (existingMerged.mcids.indexOf(mappedMcids[mmI]) === -1) {
-                                existingMerged.mcids.push(mappedMcids[mmI]);
+                        if (!existingMerged.mcids || existingMerged.mcids.length === 0) {
+                            for (var mmI = 0; mmI < mappedMcids.length; mmI++) {
+                                if (existingMerged.mcids.indexOf(mappedMcids[mmI]) === -1) {
+                                    existingMerged.mcids.push(mappedMcids[mmI]);
+                                }
+                                mcidAlreadyLinked[mappedMcids[mmI] + '|' + existingMerged.normKey] = true;
                             }
-                            mcidAlreadyLinked[mappedMcids[mmI] + '|' + existingMerged.normKey] = true;
                         }
                     } else {
                         for (var mmI2 = 0; mmI2 < mappedMcids.length; mmI2++) {
@@ -6386,78 +6393,510 @@
                 }
             }
 
-            // Ensure page still has its primary heading (<H1> on page 0, <H2> on page > 0) if MCID 0 was claimed by a <Link>
-            var hasUnclaimedHeading = false;
-            for (var hm = 0; hm < initialPageMcidCount; hm++) {
-                if (!mcidToAnnotInfo[hm] && (pageMcidTags[hm] === 'H1' || pageMcidTags[hm] === 'H2')) {
-                    hasUnclaimedHeading = true;
-                    break;
+            // -----------------------------------------------------------------
+            // 4d. Visual Reading Order, Fragment Merging, Lists (<L>/<LI>/<LBody>) & Headings (<H1>/<H2>)
+            // -----------------------------------------------------------------
+            var pageSize = (typeof page.getSize === 'function') ? page.getSize() : { width: 595.28, height: 841.89 };
+            var pageWidth = pageSize.width || 595.28;
+            var pageRunsByMcid = {};
+            for (var prIdx = 0; prIdx < pageRuns.length; prIdx++) {
+                var prObj = pageRuns[prIdx];
+                if (prObj.mcid !== null && prObj.mcid !== undefined) {
+                    if (!pageRunsByMcid[prObj.mcid]) pageRunsByMcid[prObj.mcid] = [];
+                    pageRunsByMcid[prObj.mcid].push(prObj);
                 }
             }
-            if (!hasUnclaimedHeading) {
-                for (var hm2 = 0; hm2 < initialPageMcidCount; hm2++) {
-                    if (!mcidToAnnotInfo[hm2]) {
-                        var promotedTag = i === 0 ? 'H1' : 'H2';
-                        pageMcidTags[hm2] = promotedTag;
-                        var promoteRegex = new RegExp('\\/(?:P|Span)\\s*<<\\/MCID\\s+' + hm2 + '>>\\s*BDC');
-                        taggedContentStr = taggedContentStr.replace(promoteRegex, '/' + promotedTag + ' <</MCID ' + hm2 + '>> BDC');
-                        hasUnclaimedHeading = true;
+
+            var mcidGeoItems = [];
+            var unpositionedMcids = [];
+            for (var mGeo = 0; mGeo < initialPageMcidCount; mGeo++) {
+                var mRunsList = pageRunsByMcid[mGeo];
+                if (mRunsList && mRunsList.length > 0) {
+                    var mx1 = Infinity, my1 = Infinity, mx2 = -Infinity, my2 = -Infinity, mFontH = 0;
+                    var mBaseYSum = 0;
+                    var mTextParts = [];
+                    for (var mrI = 0; mrI < mRunsList.length; mrI++) {
+                        var mr = mRunsList[mrI];
+                        if (mr.x1 < mx1) mx1 = mr.x1;
+                        if (mr.y1 < my1) my1 = mr.y1;
+                        if (mr.x2 > mx2) mx2 = mr.x2;
+                        if (mr.y2 > my2) my2 = mr.y2;
+                        if (mr.fontH > mFontH) mFontH = mr.fontH;
+                        mBaseYSum += mr.baseY;
+                        if (mrI > 0) {
+                            var prevMr = mRunsList[mrI - 1];
+                            if ((mr.x1 - prevMr.x2) > Math.min(mr.fontH, prevMr.fontH) * 0.18 &&
+                                !/\s$/.test(prevMr.str) && !/^\s/.test(mr.str)) {
+                                mTextParts.push(' ');
+                            }
+                        }
+                        mTextParts.push(mr.str);
+                    }
+                    mcidGeoItems.push({
+                        mcid: mGeo,
+                        text: mTextParts.join(''),
+                        x1: mx1,
+                        y1: my1,
+                        x2: mx2,
+                        y2: my2,
+                        baseY: mBaseYSum / mRunsList.length,
+                        fontH: mFontH || 10
+                    });
+                } else {
+                    unpositionedMcids.push(mGeo);
+                }
+            }
+            for (var mExtra = initialPageMcidCount; mExtra < pageMcidCount; mExtra++) {
+                unpositionedMcids.push(mExtra);
+            }
+
+            // Sort positioned MCIDs from top to bottom (baseY descending), then left to right (x1 ascending)
+            mcidGeoItems.sort(function (a, b) {
+                if (Math.abs(b.baseY - a.baseY) > Math.min(a.fontH, b.fontH) * 0.42) {
+                    return b.baseY - a.baseY;
+                }
+                return a.x1 - b.x1;
+            });
+
+            // Cluster into horizontal visual rows
+            var visualRows = [];
+            for (var gi = 0; gi < mcidGeoItems.length; gi++) {
+                var gItem = mcidGeoItems[gi];
+                var targetRow = null;
+                for (var vrI = 0; vrI < visualRows.length; vrI++) {
+                    var candRow = visualRows[vrI];
+                    var rowTolY = Math.max(candRow.fontH, gItem.fontH) * 0.42;
+                    if (Math.abs(gItem.baseY - candRow.baseY) <= rowTolY) {
+                        targetRow = candRow;
                         break;
                     }
                 }
+                if (targetRow) {
+                    targetRow.items.push(gItem);
+                    targetRow.fontH = Math.max(targetRow.fontH, gItem.fontH);
+                } else {
+                    visualRows.push({
+                        baseY: gItem.baseY,
+                        fontH: gItem.fontH,
+                        items: [gItem]
+                    });
+                }
+            }
+            visualRows.sort(function (a, b) { return b.baseY - a.baseY; });
+
+            // Split each horizontal row into visual line segments (keeping word/kerning pieces together, splitting across columns)
+            for (var rIdx2 = 0; rIdx2 < visualRows.length; rIdx2++) {
+                var vRow = visualRows[rIdx2];
+                vRow.items.sort(function (a, b) { return a.x1 - b.x1; });
+                var rowSegs = [];
+                var activeSeg = null;
+                for (var ri = 0; ri < vRow.items.length; ri++) {
+                    var curIt = vRow.items[ri];
+                    if (!activeSeg) {
+                        activeSeg = {
+                            items: [curIt],
+                            mcids: [curIt.mcid],
+                            x1: curIt.x1,
+                            x2: curIt.x2,
+                            baseY: vRow.baseY,
+                            fontH: curIt.fontH
+                        };
+                    } else {
+                        var prevIt = activeSeg.items[activeSeg.items.length - 1];
+                        var gapX = curIt.x1 - prevIt.x2;
+                        var isCrossCenterColJump = gapX > Math.max(22, vRow.fontH * 2.2) &&
+                            prevIt.x2 <= pageWidth * 0.54 && curIt.x1 >= pageWidth * 0.46;
+                        var isFarRightJump = gapX > Math.max(36, vRow.fontH * 3.5) && curIt.x1 >= pageWidth * 0.68;
+                        var isHugeGap = gapX > pageWidth * 0.28;
+                        if (isCrossCenterColJump || isFarRightJump || isHugeGap) {
+                            rowSegs.push(activeSeg);
+                            activeSeg = {
+                                items: [curIt],
+                                mcids: [curIt.mcid],
+                                x1: curIt.x1,
+                                x2: curIt.x2,
+                                baseY: vRow.baseY,
+                                fontH: curIt.fontH
+                            };
+                        } else {
+                            activeSeg.items.push(curIt);
+                            activeSeg.mcids.push(curIt.mcid);
+                            activeSeg.x1 = Math.min(activeSeg.x1, curIt.x1);
+                            activeSeg.x2 = Math.max(activeSeg.x2, curIt.x2);
+                            activeSeg.fontH = Math.max(activeSeg.fontH, curIt.fontH);
+                        }
+                    }
+                }
+                if (activeSeg) rowSegs.push(activeSeg);
+
+                for (var rsI = 0; rsI < rowSegs.length; rsI++) {
+                    var sObj = rowSegs[rsI];
+                    var sTextArr = [];
+                    for (var si = 0; si < sObj.items.length; si++) {
+                        var sIt = sObj.items[si];
+                        if (si > 0) {
+                            var pIt = sObj.items[si - 1];
+                            var sGap = sIt.x1 - pIt.x2;
+                            if (sGap > Math.min(sIt.fontH, pIt.fontH) * 0.16 &&
+                                !/[\s\-–\/]$/.test(pIt.text) && !/^[\s,.;:!?)\]]/.test(sIt.text)) {
+                                sTextArr.push(' ');
+                            }
+                        }
+                        sTextArr.push(sIt.text);
+                    }
+                    sObj.text = sTextArr.join('').replace(/\s+/g, ' ').trim();
+                    sObj.colBand = (sObj.x2 <= pageWidth * 0.54) ? 'left' : ((sObj.x1 >= pageWidth * 0.46) ? 'right' : 'full');
+                }
+                vRow.segments = rowSegs;
+            }
+
+            // Order visual line segments in natural reading order (reading left column then right column for side-by-side contact boxes)
+            var orderedVisualLines = [];
+            var rowCursor = 0;
+            while (rowCursor < visualRows.length) {
+                var checkRow = visualRows[rowCursor];
+                var isHalfColRow = checkRow.segments.length > 0 && checkRow.segments.every(function (sg) {
+                    return sg.colBand === 'left' || sg.colBand === 'right';
+                });
+                if (isHalfColRow) {
+                    var bandEnd = rowCursor;
+                    var bandHasLeft = false;
+                    var bandHasMidRight = false;
+                    while (bandEnd < visualRows.length) {
+                        var bRow = visualRows[bandEnd];
+                        var allHalf = bRow.segments.length > 0 && bRow.segments.every(function (sg) {
+                            return sg.colBand === 'left' || sg.colBand === 'right';
+                        });
+                        if (!allHalf) break;
+                        for (var bs = 0; bs < bRow.segments.length; bs++) {
+                            var bSeg = bRow.segments[bs];
+                            if (bSeg.colBand === 'left') bandHasLeft = true;
+                            if (bSeg.colBand === 'right' && bSeg.x1 <= pageWidth * 0.72 && !/^Seite\b|^\d+\s*\/\s*\d+$/i.test(bSeg.text)) {
+                                bandHasMidRight = true;
+                            }
+                        }
+                        bandEnd++;
+                    }
+                    if (bandHasLeft && bandHasMidRight && (bandEnd - rowCursor) >= 2) {
+                        for (var rLeft = rowCursor; rLeft < bandEnd; rLeft++) {
+                            var lSegs = visualRows[rLeft].segments;
+                            for (var ls = 0; ls < lSegs.length; ls++) {
+                                if (lSegs[ls].colBand === 'left') orderedVisualLines.push(lSegs[ls]);
+                            }
+                        }
+                        for (var rRight = rowCursor; rRight < bandEnd; rRight++) {
+                            var rSegs = visualRows[rRight].segments;
+                            for (var rs = 0; rs < rSegs.length; rs++) {
+                                if (rSegs[rs].colBand === 'right') orderedVisualLines.push(rSegs[rs]);
+                            }
+                        }
+                        rowCursor = bandEnd;
+                        continue;
+                    }
+                }
+                for (var sgIdx = 0; sgIdx < checkRow.segments.length; sgIdx++) {
+                    orderedVisualLines.push(checkRow.segments[sgIdx]);
+                }
+                rowCursor++;
+            }
+
+            // Compute median body font height and maximum heading font height on this page
+            var fontHeightsSorted = orderedVisualLines
+                .filter(function (ln) { return ln.text.length >= 3; })
+                .map(function (ln) { return ln.fontH; })
+                .sort(function (a, b) { return a - b; });
+            var bodyFontH = fontHeightsSorted.length > 0
+                ? fontHeightsSorted[Math.floor(fontHeightsSorted.length * 0.45)]
+                : 10;
+            var maxFontH = fontHeightsSorted.length > 0
+                ? fontHeightsSorted[fontHeightsSorted.length - 1]
+                : bodyFontH;
+
+            // Identify primary <H1> line(s) on Page 1 (largest font size on page 1)
+            var h1LineIndices = {};
+            if (i === 0 && orderedVisualLines.length > 0) {
+                var bestH1Idx = -1;
+                if (maxFontH >= bodyFontH * 1.22) {
+                    for (var hScan = 0; hScan < orderedVisualLines.length; hScan++) {
+                        if (orderedVisualLines[hScan].text.length >= 3 && Math.abs(orderedVisualLines[hScan].fontH - maxFontH) <= 1.2) {
+                            bestH1Idx = hScan;
+                            break;
+                        }
+                    }
+                }
+                if (bestH1Idx === -1) bestH1Idx = 0;
+                h1LineIndices[bestH1Idx] = true;
+                // If main H1 title wraps onto the immediately following line with the same large font size, merge into H1
+                if (bestH1Idx + 1 < orderedVisualLines.length &&
+                    maxFontH >= bodyFontH * 1.22 &&
+                    Math.abs(orderedVisualLines[bestH1Idx + 1].fontH - orderedVisualLines[bestH1Idx].fontH) <= 1.0 &&
+                    (orderedVisualLines[bestH1Idx].baseY - orderedVisualLines[bestH1Idx + 1].baseY) <= orderedVisualLines[bestH1Idx].fontH * 1.55) {
+                    h1LineIndices[bestH1Idx + 1] = true;
+                }
+            }
+
+            var seenH1OnPage0 = (i > 0);
+            var semanticBlocks = [];
+
+            for (var vlIdx = 0; vlIdx < orderedVisualLines.length; vlIdx++) {
+                var vLine = orderedVisualLines[vlIdx];
+                var lText = vLine.text;
+                var prevBlock = semanticBlocks.length > 0 ? semanticBlocks[semanticBlocks.length - 1] : null;
+                var prevLineObj = (prevBlock && prevBlock.lines && prevBlock.lines.length > 0)
+                    ? prevBlock.lines[prevBlock.lines.length - 1]
+                    : null;
+
+                // 1. Primary <H1> on Page 1
+                if (h1LineIndices[vlIdx]) {
+                    seenH1OnPage0 = true;
+                    if (prevBlock && prevBlock.type === 'H1') {
+                        for (var h1m = 0; h1m < vLine.mcids.length; h1m++) prevBlock.mcids.push(vLine.mcids[h1m]);
+                        prevBlock.lines.push(vLine);
+                        prevBlock.text += ' ' + lText;
+                    } else {
+                        semanticBlocks.push({
+                            type: 'H1',
+                            mcids: vLine.mcids.slice(),
+                            lines: [vLine],
+                            x1: vLine.x1,
+                            x2: vLine.x2,
+                            baseY: vLine.baseY,
+                            fontH: vLine.fontH,
+                            text: lText
+                        });
+                    }
+                    continue;
+                }
+
+                // 2. Bullet List Item (<L> -> <LI> -> <LBody>)
+                var isBulletStart = /^[•●▪▫▸►‣⁃◦∙\uF0B7\uF0A7]/.test(lText) ||
+                    (/^[\-–]\s+\S/.test(lText) && (!prevLineObj || !/[a-zA-ZäöüÄÖÜß]$/.test(prevLineObj.text)));
+                if (isBulletStart) {
+                    semanticBlocks.push({
+                        type: 'LI',
+                        mcids: vLine.mcids.slice(),
+                        lines: [vLine],
+                        x1: vLine.x1,
+                        x2: vLine.x2,
+                        baseY: vLine.baseY,
+                        fontH: vLine.fontH,
+                        text: lText
+                    });
+                    continue;
+                }
+
+                // 3. Section Heading (<H2>) — only after <H1> has appeared
+                var isNotContactOrMeta = !/@|https?:\/\/|www\.|\+49\s*\d|^Job-ID:|Bewerbungsfrist|^Seite\s+\d|^\d+\s*\/\s*\d+$|^WIR SUCHEN SIE\b|^LKA[\-\s]?BW/i.test(lText);
+                var isLargerHeadingFont = seenH1OnPage0 && isNotContactOrMeta && lText.length >= 4 && lText.length <= 75 &&
+                    vLine.fontH >= bodyFontH * 1.16;
+                var uppercaseLettersCount = (lText.match(/[A-ZÄÖÜ]/g) || []).length;
+                var isAllCapsSectionHeader = seenH1OnPage0 && isNotContactOrMeta &&
+                    lText.length >= 5 && lText.length <= 52 &&
+                    uppercaseLettersCount >= 5 &&
+                    /^[A-ZÄÖÜ0-9\s\/\-–&():.,]+$/.test(lText);
+
+                if (isLargerHeadingFont || isAllCapsSectionHeader) {
+                    if (prevBlock && prevBlock.type === 'H2' && prevLineObj &&
+                        Math.abs(prevLineObj.fontH - vLine.fontH) <= 1.0 &&
+                        (prevLineObj.baseY - vLine.baseY) > 0 &&
+                        (prevLineObj.baseY - vLine.baseY) <= prevLineObj.fontH * 1.45) {
+                        for (var h2m = 0; h2m < vLine.mcids.length; h2m++) prevBlock.mcids.push(vLine.mcids[h2m]);
+                        prevBlock.lines.push(vLine);
+                        prevBlock.text += ' ' + lText;
+                    } else {
+                        semanticBlocks.push({
+                            type: 'H2',
+                            mcids: vLine.mcids.slice(),
+                            lines: [vLine],
+                            x1: vLine.x1,
+                            x2: vLine.x2,
+                            baseY: vLine.baseY,
+                            fontH: vLine.fontH,
+                            text: lText
+                        });
+                    }
+                    continue;
+                }
+
+                // 4. Wrapped Continuation Line of Current Bullet Item (<LI><LBody>)
+                if (prevBlock && prevBlock.type === 'LI' && prevLineObj) {
+                    var liDy = prevLineObj.baseY - vLine.baseY;
+                    var prevEndsWithConnector = /[,;:\-–(]$|\b(?:im|in|und|oder|sowie|für|von|mit|nach|gemäß|auf|der|die|das|des|dem|den|zu|zur|zum|durch|über|unter)$/i.test(prevLineObj.text);
+                    var prevReachedRightMargin = (prevLineObj.x2 - prevLineObj.x1) >= pageWidth * 0.55;
+                    var isIndentedLikeBullet = vLine.x1 >= prevBlock.x1 - 3 && vLine.x1 <= prevBlock.x1 + 42;
+                    if (liDy > 0 && liDy <= prevLineObj.fontH * 1.46 &&
+                        Math.abs(vLine.fontH - prevLineObj.fontH) <= 1.2 &&
+                        isIndentedLikeBullet &&
+                        (prevEndsWithConnector || prevReachedRightMargin)) {
+                        for (var lim = 0; lim < vLine.mcids.length; lim++) prevBlock.mcids.push(vLine.mcids[lim]);
+                        prevBlock.lines.push(vLine);
+                        prevBlock.text += ' ' + lText;
+                        continue;
+                    }
+                }
+
+                // 5. Paragraph (<P>) — merge consecutive lines of the same multi-line prose paragraph
+                if (prevBlock && prevBlock.type === 'P' && prevLineObj) {
+                    var pDy = prevLineObj.baseY - vLine.baseY;
+                    var isStandaloneFooterLine = /^Job-ID:|^Fachfragen$|^Personalfragen$|^Seite\s+\d|^\d+\s*\/\s*\d+$|\+49\s*\d{2,4}\s*\d{2,}|^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/i.test(lText) ||
+                        /^Job-ID:|^Fachfragen$|^Personalfragen$|^Seite\s+\d|^\d+\s*\/\s*\d+$|\+49\s*\d{2,4}\s*\d{2,}|^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/i.test(prevLineObj.text);
+                    var prevProseWide = (prevLineObj.x2 - prevLineObj.x1) >= pageWidth * 0.50 || prevLineObj.text.length >= 56;
+                    var prevProseConnector = /[,;:\-–(]$|\b(?:im|in|und|oder|sowie|für|von|mit|nach|gemäß|auf|der|die|das|des|dem|den|zu|zur|zum|unter|einen|einer|einem)$/i.test(prevLineObj.text);
+
+                    if (!isStandaloneFooterLine &&
+                        pDy > 0 && pDy <= prevLineObj.fontH * 1.46 &&
+                        Math.abs(vLine.fontH - prevLineObj.fontH) <= 1.0 &&
+                        Math.abs(vLine.x1 - prevLineObj.x1) <= 24 &&
+                        (prevProseWide || prevProseConnector)) {
+                        for (var pmIdx = 0; pmIdx < vLine.mcids.length; pmIdx++) prevBlock.mcids.push(vLine.mcids[pmIdx]);
+                        prevBlock.lines.push(vLine);
+                        prevBlock.text += ' ' + lText;
+                        continue;
+                    }
+                }
+
+                semanticBlocks.push({
+                    type: 'P',
+                    mcids: vLine.mcids.slice(),
+                    lines: [vLine],
+                    x1: vLine.x1,
+                    x2: vLine.x2,
+                    baseY: vLine.baseY,
+                    fontH: vLine.fontH,
+                    text: lText
+                });
+            }
+
+            // Append any unpositioned/fallback MCIDs so every MCID 0..pageMcidCount-1 is present in the structure tree
+            for (var upIdx = 0; upIdx < unpositionedMcids.length; upIdx++) {
+                semanticBlocks.push({
+                    type: 'P',
+                    mcids: [unpositionedMcids[upIdx]],
+                    lines: [],
+                    text: ''
+                });
+            }
+
+            // Guarantee valid heading presence on each page (<H1> on page 0, <H2> on page > 0)
+            var requiredHeadingTag = i === 0 ? 'H1' : 'H2';
+            var hasRequiredHeading = false;
+            for (var sbCheck = 0; sbCheck < semanticBlocks.length; sbCheck++) {
+                if (semanticBlocks[sbCheck].type === requiredHeadingTag || (i > 0 && semanticBlocks[sbCheck].type === 'H1')) {
+                    hasRequiredHeading = true;
+                    if (!extractedPageHeadings[i] || i === 0) {
+                        var hClean = String(semanticBlocks[sbCheck].text || '').trim().slice(0, 80);
+                        if (hClean.length >= 3) extractedPageHeadings[i] = hClean;
+                    }
+                    break;
+                }
+            }
+            if (!hasRequiredHeading && semanticBlocks.length > 0) {
+                semanticBlocks[0].type = requiredHeadingTag;
+                var hFallbackClean = String(semanticBlocks[0].text || '').trim().slice(0, 80);
+                if (hFallbackClean.length >= 3) extractedPageHeadings[i] = hFallbackClean;
             }
 
             var sectElemRef = context.nextRef();
             var mcidElemRefsForParentTree = [];
+            var mcidDesiredBdcTag = {};
             var sectChildrenRefs = [];
-            var lastParagraphRef = null;
-            var lastParagraphElem = null;
-            var lastParagraphKItems = null;
+            var activeListRef = null;
+            var activeListChildrenRefs = [];
 
-            for (var m = 0; m < pageMcidCount; m++) {
-                var boundAnnotInfo = mcidToAnnotInfo[m];
-                if (boundAnnotInfo) {
-                    mcidElemRefsForParentTree[m] = boundAnnotInfo.structRef;
-                    if (!boundAnnotInfo.attachedToParent) {
-                        var wrapperTag = (!hasUnclaimedHeading && sectChildrenRefs.length === 0) ? (i === 0 ? 'H1' : 'H2') : 'P';
-                        var pWrapK = [boundAnnotInfo.structRef];
-                        var pWrapElem = context.obj({
-                            Type: 'StructElem',
-                            S: PDFLib.PDFName.of(wrapperTag),
-                            P: sectElemRef,
-                            Pg: page.ref,
-                            K: pWrapK
-                        });
-                        var pWrapRef = context.register(pWrapElem);
-                        boundAnnotInfo.structElem.set(PDFLib.PDFName.of('P'), pWrapRef);
-                        boundAnnotInfo.attachedToParent = true;
-                        sectChildrenRefs.push(pWrapRef);
-                        if (wrapperTag === 'P') {
-                            lastParagraphRef = pWrapRef;
-                            lastParagraphElem = pWrapElem;
-                            lastParagraphKItems = pWrapK;
-                        }
-                    }
-                } else {
-                    var sTag = pageMcidTags[m] || 'P';
-                    var kItems = [PDFLib.PDFNumber.of(m)];
-                    var pElem = context.obj({
+            function flushActiveList() {
+                if (activeListRef !== null && activeListChildrenRefs.length > 0) {
+                    context.assign(activeListRef, context.obj({
                         Type: 'StructElem',
-                        S: PDFLib.PDFName.of(sTag),
+                        S: PDFLib.PDFName.of('L'),
                         P: sectElemRef,
                         Pg: page.ref,
-                        K: PDFLib.PDFNumber.of(m)
-                    });
-                    var pRef = context.register(pElem);
-                    mcidElemRefsForParentTree[m] = pRef;
-                    sectChildrenRefs.push(pRef);
-                    if (sTag === 'P') {
-                        lastParagraphRef = pRef;
-                        lastParagraphElem = pElem;
-                        lastParagraphKItems = kItems;
+                        K: activeListChildrenRefs
+                    }));
+                    sectChildrenRefs.push(activeListRef);
+                }
+                activeListRef = null;
+                activeListChildrenRefs = [];
+            }
+
+            function buildBlockKItemsAndBindParent(mcidArr, blockStructRef, blockBdcTag) {
+                var kList = [];
+                for (var km = 0; km < mcidArr.length; km++) {
+                    var mVal = mcidArr[km];
+                    var boundAnnot = mcidToAnnotInfo[mVal];
+                    if (boundAnnot) {
+                        mcidElemRefsForParentTree[mVal] = boundAnnot.structRef;
+                        mcidDesiredBdcTag[mVal] = 'Link';
+                        if (!boundAnnot.attachedToParent) {
+                            boundAnnot.structElem.set(PDFLib.PDFName.of('P'), blockStructRef);
+                            boundAnnot.attachedToParent = true;
+                            kList.push(boundAnnot.structRef);
+                        }
+                    } else {
+                        mcidElemRefsForParentTree[mVal] = blockStructRef;
+                        mcidDesiredBdcTag[mVal] = blockBdcTag;
+                        kList.push(PDFLib.PDFNumber.of(mVal));
                     }
                 }
+                return kList;
             }
+
+            for (var sbIdx = 0; sbIdx < semanticBlocks.length; sbIdx++) {
+                var sBlk = semanticBlocks[sbIdx];
+                if (!sBlk.mcids || sBlk.mcids.length === 0) continue;
+
+                if (sBlk.type === 'LI') {
+                    if (activeListRef === null) {
+                        activeListRef = context.nextRef();
+                        activeListChildrenRefs = [];
+                    }
+                    var liElemRef = context.nextRef();
+                    var lBodyElemRef = context.nextRef();
+                    var lBodyK = buildBlockKItemsAndBindParent(sBlk.mcids, lBodyElemRef, 'LBody');
+                    if (lBodyK.length === 0) continue;
+
+                    context.assign(lBodyElemRef, context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of('LBody'),
+                        P: liElemRef,
+                        Pg: page.ref,
+                        K: lBodyK.length === 1 ? lBodyK[0] : lBodyK
+                    }));
+                    context.assign(liElemRef, context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of('LI'),
+                        P: activeListRef,
+                        Pg: page.ref,
+                        K: [lBodyElemRef]
+                    }));
+                    activeListChildrenRefs.push(liElemRef);
+                } else {
+                    flushActiveList();
+                    var blkElemRef = context.nextRef();
+                    var blkTag = sBlk.type || 'P';
+                    var blkK = buildBlockKItemsAndBindParent(sBlk.mcids, blkElemRef, blkTag);
+                    if (blkK.length === 0) continue;
+
+                    context.assign(blkElemRef, context.obj({
+                        Type: 'StructElem',
+                        S: PDFLib.PDFName.of(blkTag),
+                        P: sectElemRef,
+                        Pg: page.ref,
+                        K: blkK.length === 1 ? blkK[0] : blkK
+                    }));
+                    sectChildrenRefs.push(blkElemRef);
+                }
+            }
+            flushActiveList();
+
+            // Synchronize BDC tags in page content stream 1:1 with semantic block tags (H1, H2, P, LBody, Link)
+            taggedContentStr = taggedContentStr.replace(
+                /\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC/g,
+                function (fullMatch, oldTag, mcidStr) {
+                    var mIdx = parseInt(mcidStr, 10);
+                    var finalTag = mcidDesiredBdcTag[mIdx] || oldTag || 'P';
+                    return '/' + finalTag + ' <</MCID ' + mIdx + '>> BDC';
+                }
+            );
 
             // Include any user-placed visual PDF/UA Tags (e.g. <Figure> with /Alt and /BBox) on this page
             if (doc.savedA11yTags && doc.savedA11yTags.length > 0) {
