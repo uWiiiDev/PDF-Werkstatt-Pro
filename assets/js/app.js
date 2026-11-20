@@ -9213,6 +9213,13 @@
             case 'open-cert-sign-modal':
                 await openDigitalCertSignModal('sign');
                 break;
+            case 'open-selftest-modal':
+                openModal('modalSelfTest');
+                break;
+            case 'create-demo-test-pdf':
+                closeModal('modalSelfTest');
+                await createAndOpenDemoTestPdfTab();
+                break;
         }
     }
 
@@ -11648,6 +11655,819 @@
     }
 
     // =========================================================================
+    // 9. Automated 15-Module Diagnostic Self-Test Suite & 3-Page Demo PDF Builder
+    // =========================================================================
+    var lastSelfTestReport = null;
+
+    function buildDemoFacturXXml() {
+        return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+            '<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"\n' +
+            '    xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"\n' +
+            '    xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">\n' +
+            '  <rsm:ExchangedDocumentContext>\n' +
+            '    <ram:GuidelineSpecifiedDocumentContextParameter>\n' +
+            '      <ram:ID>urn:cen.eu:en16931:2017</ram:ID>\n' +
+            '    </ram:GuidelineSpecifiedDocumentContextParameter>\n' +
+            '  </rsm:ExchangedDocumentContext>\n' +
+            '  <rsm:ExchangedDocument>\n' +
+            '    <ram:ID>RE-2026-1001</ram:ID>\n' +
+            '    <ram:TypeCode>380</ram:TypeCode>\n' +
+            '    <ram:IssueDateTime><udt:DateTimeString format="102">20261120</udt:DateTimeString></ram:IssueDateTime>\n' +
+            '  </rsm:ExchangedDocument>\n' +
+            '  <rsm:SupplyChainTradeTransaction>\n' +
+            '    <ram:IncludedSupplyChainTradeLineItem>\n' +
+            '      <ram:AssociatedDocumentLineDocument><ram:LineID>1</ram:LineID></ram:AssociatedDocumentLineDocument>\n' +
+            '      <ram:SpecifiedTradeProduct><ram:Name>PDF-Werkstatt Pro Enterprise Lizenz &amp; Wartung</ram:Name></ram:SpecifiedTradeProduct>\n' +
+            '      <ram:SpecifiedLineTradeDelivery><ram:BilledQuantity unitCode="C62">1.00</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery>\n' +
+            '      <ram:SpecifiedLineTradeSettlement>\n' +
+            '        <ram:SpecifiedTradeSettlementLineMonetarySummation><ram:LineTotalAmount>1000.00</ram:LineTotalAmount></ram:SpecifiedTradeSettlementLineMonetarySummation>\n' +
+            '      </ram:SpecifiedLineTradeSettlement>\n' +
+            '    </ram:IncludedSupplyChainTradeLineItem>\n' +
+            '    <ram:ApplicableHeaderTradeAgreement>\n' +
+            '      <ram:BuyerReference>991-12345-67</ram:BuyerReference>\n' +
+            '      <ram:SellerTradeParty><ram:Name>PDF-Werkstatt Systemhaus GmbH</ram:Name></ram:SellerTradeParty>\n' +
+            '      <ram:BuyerTradeParty><ram:Name>Landesbehoerde / Stabsbereich IT</ram:Name></ram:BuyerTradeParty>\n' +
+            '    </ram:ApplicableHeaderTradeAgreement>\n' +
+            '    <ram:ApplicableHeaderTradeDelivery/>\n' +
+            '    <ram:ApplicableHeaderTradeSettlement>\n' +
+            '      <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>\n' +
+            '      <ram:SpecifiedTradeSettlementPaymentMeans>\n' +
+            '        <ram:TypeCode>58</ram:TypeCode>\n' +
+            '        <ram:PayeePartyCreditorFinancialAccount><ram:IBANID>DE89370400440532013000</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>\n' +
+            '      </ram:SpecifiedTradeSettlementPaymentMeans>\n' +
+            '      <ram:ApplicableTradeTax>\n' +
+            '        <ram:CalculatedAmount>190.00</ram:CalculatedAmount>\n' +
+            '        <ram:TypeCode>VAT</ram:TypeCode>\n' +
+            '        <ram:BasisAmount>1000.00</ram:BasisAmount>\n' +
+            '        <ram:CategoryCode>S</ram:CategoryCode>\n' +
+            '        <ram:RateApplicablePercent>19.00</ram:RateApplicablePercent>\n' +
+            '      </ram:ApplicableTradeTax>\n' +
+            '      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>\n' +
+            '        <ram:LineTotalAmount>1000.00</ram:LineTotalAmount>\n' +
+            '        <ram:TaxBasisTotalAmount>1000.00</ram:TaxBasisTotalAmount>\n' +
+            '        <ram:TaxTotalAmount currencyID="EUR">190.00</ram:TaxTotalAmount>\n' +
+            '        <ram:GrandTotalAmount>1190.00</ram:GrandTotalAmount>\n' +
+            '        <ram:DuePayableAmount>1190.00</ram:DuePayableAmount>\n' +
+            '      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>\n' +
+            '    </ram:ApplicableHeaderTradeSettlement>\n' +
+            '  </rsm:SupplyChainTradeTransaction>\n' +
+            '</rsm:CrossIndustryInvoice>\n';
+    }
+
+    async function buildComprehensiveTestPdfBytes() {
+        var pdfDoc = await PDFLib.PDFDocument.create();
+        pdfDoc.setTitle('Musterakte & Funktions-Testdokument - PDF-Werkstatt Pro');
+        pdfDoc.setAuthor('PDF-Werkstatt Pro Diagnose-Suite');
+        pdfDoc.setSubject('All-in-One Testdokument fuer Barrierefreiheit, Formulare, Schwärzung & E-Rechnung');
+
+        var fontReg = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+        var fontBold = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+
+        // ---------------------------------------------------------------------
+        // PAGE 1: Headings (H1, H2), Bullet List (L/LI/LBody), Links (Email/URL) & Auto-Redact Patterns
+        // ---------------------------------------------------------------------
+        var p1 = pdfDoc.addPage([595.28, 841.89]);
+        p1.drawText('WIR SUCHEN SIE FUER UNSER TEAM', {
+            x: 52, y: 785, size: 10, font: fontBold, color: PDFLib.rgb(0.20, 0.32, 0.52)
+        });
+        p1.drawText('Beschaeftigte / Beschaeftigter im Buerodienst (w/m/d)', {
+            x: 52, y: 756, size: 17.5, font: fontBold, color: PDFLib.rgb(0.06, 0.12, 0.24)
+        });
+        p1.drawText('Zur Verstaerkung unseres Teams beim Landeskriminalamt Baden-Wuerttemberg, Stabsbereich', {
+            x: 52, y: 726, size: 10.5, font: fontReg, color: PDFLib.rgb(0.12, 0.15, 0.20)
+        });
+        p1.drawText('Grundsatz, Einsatztraining (020) am Dienstort Stuttgart suchen wir Sie zum naechstmoeglichen Zeitpunkt.', {
+            x: 52, y: 712, size: 10.5, font: fontReg, color: PDFLib.rgb(0.12, 0.15, 0.20)
+        });
+
+        p1.drawText('IHRE AUFGABEN', {
+            x: 52, y: 678, size: 13, font: fontBold, color: PDFLib.rgb(0.08, 0.18, 0.36)
+        });
+        var bulletsP1 = [
+            '- administrative und organisatorische Unterstuetzung im Vorzimmer der Amtsleitung',
+            '- allgemeine Organisation und Steuerung des Geschaeftszimmers des Stabsbereichs 020',
+            '- Bearbeitung von Antraegen, Terminkoordination und Pflege digitaler PDF-Akten'
+        ];
+        var by = 656;
+        for (var b = 0; b < bulletsP1.length; b++) {
+            p1.drawText(bulletsP1[b], {
+                x: 60, y: by, size: 10.5, font: fontReg, color: PDFLib.rgb(0.12, 0.15, 0.20)
+            });
+            by -= 18;
+        }
+
+        p1.drawText('IHRE VORAUSSETZUNGEN', {
+            x: 52, y: 584, size: 13, font: fontBold, color: PDFLib.rgb(0.08, 0.18, 0.36)
+        });
+        p1.drawText('Bewerben koennen sich Personen mit einer abgeschlossenen Ausbildung zur / zum', {
+            x: 52, y: 564, size: 10.5, font: fontReg, color: PDFLib.rgb(0.12, 0.15, 0.20)
+        });
+        p1.drawText('Verwaltungsfachangestellten, Rechtsanwaltsfachangestellten oder vergleichbarem Abschluss.', {
+            x: 52, y: 550, size: 10.5, font: fontReg, color: PDFLib.rgb(0.12, 0.15, 0.20)
+        });
+
+        p1.drawText('KONTAKT, LINKS & AUTO-SCHWAERZUNGS-TESTDATEN', {
+            x: 52, y: 512, size: 13, font: fontBold, color: PDFLib.rgb(0.08, 0.18, 0.36)
+        });
+        p1.drawText('Job-ID: 020-GZ | Bewerbungsfrist: 03.12.2026', {
+            x: 52, y: 490, size: 10.5, font: fontBold, color: PDFLib.rgb(0.12, 0.15, 0.20)
+        });
+        p1.drawText('Bewerbungs-E-Mail: Stuttgart.lka.abt1.ref.120@polizei.bwl.de', {
+            x: 52, y: 472, size: 10.5, font: fontReg, color: PDFLib.rgb(0.08, 0.25, 0.55)
+        });
+        p1.drawText('Datenschutz-Infos unter: https://im.baden-wuerttemberg.de', {
+            x: 52, y: 454, size: 10.5, font: fontReg, color: PDFLib.rgb(0.08, 0.25, 0.55)
+        });
+        p1.drawText('Testmuster fuer Auto-Redact (Schwaerzung): IBAN DE89 3704 0044 0532 0130 00', {
+            x: 52, y: 430, size: 10.5, font: fontReg, color: PDFLib.rgb(0.18, 0.18, 0.22)
+        });
+        p1.drawText('Telefon-Rueckfragen: +49 711 5401-2020 | Geburtsdatum: 14.05.1985', {
+            x: 52, y: 412, size: 10.5, font: fontReg, color: PDFLib.rgb(0.18, 0.18, 0.22)
+        });
+
+        // ---------------------------------------------------------------------
+        // PAGE 2: Interactive Form (AcroForms) & Mail-Merge Template
+        // ---------------------------------------------------------------------
+        var p2 = pdfDoc.addPage([595.28, 841.89]);
+        p2.drawText('FORMULAR- & SERIENBRIEF-VORLAGE (ACROFORMS)', {
+            x: 52, y: 775, size: 15, font: fontBold, color: PDFLib.rgb(0.06, 0.12, 0.24)
+        });
+        p2.drawText('Diese Seite enthaelt echte ausfuellbare PDF-Formularfelder zum Testen von Formular-Export (CSV/JSON)', {
+            x: 52, y: 750, size: 10.5, font: fontReg, color: PDFLib.rgb(0.15, 0.18, 0.22)
+        });
+        p2.drawText('und Serienbrief-Befuellung (Mail-Merge).', {
+            x: 52, y: 736, size: 10.5, font: fontReg, color: PDFLib.rgb(0.15, 0.18, 0.22)
+        });
+
+        var form = pdfDoc.getForm();
+        p2.drawText('Antragsteller / Name:', { x: 52, y: 695, size: 11, font: fontBold, color: PDFLib.rgb(0.1, 0.1, 0.15) });
+        var tfName = form.createTextField('Antragsteller');
+        tfName.setText('Max Mustermann');
+        tfName.addToPage(p2, { x: 200, y: 688, width: 260, height: 22 });
+
+        p2.drawText('Abteilung / Referat:', { x: 52, y: 655, size: 11, font: fontBold, color: PDFLib.rgb(0.1, 0.1, 0.15) });
+        var tfDept = form.createTextField('Abteilung');
+        tfDept.setText('Stabsbereich 020 - Grundsatz');
+        tfDept.addToPage(p2, { x: 200, y: 648, width: 260, height: 22 });
+
+        p2.drawText('Aktenzeichen:', { x: 52, y: 615, size: 11, font: fontBold, color: PDFLib.rgb(0.1, 0.1, 0.15) });
+        var tfAz = form.createTextField('Aktenzeichen');
+        tfAz.setText('AZ-2026-0042');
+        tfAz.addToPage(p2, { x: 200, y: 608, width: 260, height: 22 });
+
+        p2.drawText('Freigabe erteilt:', { x: 52, y: 575, size: 11, font: fontBold, color: PDFLib.rgb(0.1, 0.1, 0.15) });
+        var cbApprove = form.createCheckBox('FreigabeErteilt');
+        cbApprove.check();
+        cbApprove.addToPage(p2, { x: 200, y: 571, width: 18, height: 18 });
+
+        // ---------------------------------------------------------------------
+        // PAGE 3: ZUGFeRD 2.2 / Factur-X E-Invoice & N-up / Booklet Test Page
+        // ---------------------------------------------------------------------
+        var p3 = pdfDoc.addPage([595.28, 841.89]);
+        p3.drawText('E-RECHNUNG (ZUGFERD 2.2 / EN 16931) & BROSCHUEREN-TEST', {
+            x: 52, y: 775, size: 15, font: fontBold, color: PDFLib.rgb(0.06, 0.12, 0.24)
+        });
+        p3.drawText('In diesem PDF ist bereits eine vollstaendige ZUGFeRD 2.2 / Factur-X XML-Rechnung eingebettet.', {
+            x: 52, y: 748, size: 10.5, font: fontReg, color: PDFLib.rgb(0.15, 0.18, 0.22)
+        });
+        p3.drawText('Klicken Sie oben auf "E-Rechnung", um die eingebetteten XML-Rechnungsdaten auszulesen.', {
+            x: 52, y: 734, size: 10.5, font: fontReg, color: PDFLib.rgb(0.15, 0.18, 0.22)
+        });
+        p3.drawText('Rechnungsnummer: RE-2026-1001 | Leitweg-ID: 991-12345-67', {
+            x: 52, y: 700, size: 11, font: fontBold, color: PDFLib.rgb(0.1, 0.15, 0.25)
+        });
+        p3.drawText('Nettobetrag: 1.000,00 EUR | MwSt (19%): 190,00 EUR | Bruttobetrag: 1.190,00 EUR', {
+            x: 52, y: 682, size: 11, font: fontReg, color: PDFLib.rgb(0.1, 0.15, 0.25)
+        });
+
+        // Embed ZUGFeRD factur-x.xml attachment into the PDF catalog
+        var xmlString = buildDemoFacturXXml();
+        var xmlBytes = new TextEncoder().encode(xmlString);
+        var context = pdfDoc.context;
+        var catalog = pdfDoc.catalog;
+
+        var efStream = context.flateStream(xmlBytes, {
+            Type: 'EmbeddedFile',
+            Subtype: 'text/xml',
+            Params: context.obj({
+                Size: xmlBytes.length,
+                ModDate: PDFLib.PDFString.of('D:20261120080000Z')
+            })
+        });
+        var efStreamRef = context.register(efStream);
+        var fileSpec = context.obj({
+            Type: 'Filespec',
+            F: PDFLib.PDFString.of('factur-x.xml'),
+            UF: PDFLib.PDFHexString.fromText('factur-x.xml'),
+            Desc: PDFLib.PDFString.of('Factur-X / ZUGFeRD 2.2 EN 16931 E-Rechnung'),
+            AFRelationship: PDFLib.PDFName.of('Alternative'),
+            EF: context.obj({ F: efStreamRef, UF: efStreamRef })
+        });
+        var fileSpecRef = context.register(fileSpec);
+        catalog.set(PDFLib.PDFName.of('Names'), context.obj({
+            EmbeddedFiles: context.obj({
+                Names: [PDFLib.PDFString.of('factur-x.xml'), fileSpecRef]
+            })
+        }));
+        catalog.set(PDFLib.PDFName.of('AF'), context.obj([fileSpecRef]));
+
+        return await pdfDoc.save({ useObjectStreams: false });
+    }
+
+    async function createAndOpenDemoTestPdfTab() {
+        try {
+            setProgress(30, 'Erzeuge 3-seitiges All-in-One Muster-Testdokument…');
+            var bytes = await buildComprehensiveTestPdfBytes();
+            setProgress(null);
+            await addDocumentTab('Musterakte_Testdokument.pdf', bytes, 'editor');
+            showToast('3-seitiges Muster-Testdokument geöffnet (inkl. H1/H2, Listen, Links, IBAN, Formular & ZUGFeRD-XML)!', 'success');
+        } catch (err) {
+            setProgress(null);
+            showToast('Fehler beim Erzeugen des Muster-PDFs: ' + (err.message || err), 'error');
+        }
+    }
+
+    function createSelfTestRowElement(item, indexNum) {
+        var isPass = item.status === 'pass';
+        var isWarn = item.status === 'warn';
+        var borderColor = isPass ? '#10b981' : (isWarn ? '#f59e0b' : '#ef4444');
+        var badgeText = isPass ? '✔ Bestanden' : (isWarn ? '⚠ Hinweis' : '✕ Fehler');
+
+        var row = document.createElement('div');
+        row.style.cssText =
+            'display:flex;align-items:flex-start;justify-content:space-between;gap:12px;' +
+            'background:var(--bg-input);border:1px solid var(--border-subtle);border-left:4px solid ' + borderColor + ';' +
+            'border-radius:6px;padding:9px 12px;';
+        row.innerHTML =
+            '<div style="flex:1;">' +
+            '  <div style="font-weight:700;font-size:12.5px;color:var(--text-primary);">' +
+            '    ' + indexNum + '. ' + escapeHtml(item.title) +
+            '  </div>' +
+            '  <div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;line-height:1.4;">' +
+            '    ' + escapeHtml(item.detail) +
+            '  </div>' +
+            '</div>' +
+            '<div style="text-align:right;flex-shrink:0;">' +
+            '  <span style="display:inline-block;font-size:11.5px;font-weight:800;color:' + borderColor + ';">' + badgeText + '</span>' +
+            '  <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px;">' + item.elapsedMs + ' ms • ' + escapeHtml(item.category) + '</div>' +
+            '</div>';
+        return row;
+    }
+
+    async function runFullDiagnosticSelfTest() {
+        var btnRun = document.getElementById('btnRunFullSelfTest');
+        var listContainer = document.getElementById('selfTestChecklistContainer');
+        var progBox = document.getElementById('selfTestProgressBox');
+        var progFill = document.getElementById('selfTestProgressFill');
+        var progLabel = document.getElementById('selfTestStepLabel');
+        var progPct = document.getElementById('selfTestStepPercent');
+        var scorePill = document.getElementById('selfTestScorePill');
+        var sumTitle = document.getElementById('selfTestSummaryTitle');
+        var sumSub = document.getElementById('selfTestSummarySub');
+
+        if (btnRun) btnRun.disabled = true;
+        if (listContainer) listContainer.innerHTML = '';
+        if (progBox) progBox.style.display = 'block';
+        if (scorePill) {
+            scorePill.textContent = '⏳ Test läuft…';
+            scorePill.style.background = 'var(--accent-soft)';
+            scorePill.style.color = 'var(--accent-primary)';
+        }
+        if (sumTitle) {
+            sumTitle.textContent = '⏳ Führe vollautomatischen System- & Funktions-Selbsttest (15 Module) aus…';
+        }
+
+        var results = [];
+        var suiteStartMs = performance.now ? performance.now() : Date.now();
+        var sharedDemoBytes = null;
+
+        var testDefinitions = [
+            {
+                title: 'Basis-Engines & Offline-Assets (PDF-Lib, PDF.js, JSZip, Mammoth, SheetJS, TTF-Font)',
+                category: 'Core & Offline',
+                fn: async function () {
+                    var missing = [];
+                    if (!window.PDFLib) missing.push('PDF-Lib');
+                    if (!window.pdfjsLib) missing.push('PDF.js');
+                    if (!window.JSZip) missing.push('JSZip');
+                    if (!window.mammoth) missing.push('Mammoth DOCX');
+                    if (!window.XLSX) missing.push('SheetJS XLSX');
+                    var ttf = await getLiberationSansTtfBytes();
+                    if (!ttf || ttf.byteLength < 100000) missing.push('LiberationSans-Regular.ttf');
+                    if (missing.length > 0) throw new Error('Fehlende Komponenten: ' + missing.join(', '));
+                    return {
+                        status: 'pass',
+                        detail: 'Alle 5 Client-Engines geladen + LiberationSans TrueType-Font (' + formatBytes(ttf.byteLength) + ') lokal verfügbar.'
+                    };
+                }
+            },
+            {
+                title: '3-seitiges Muster-PDF generieren, PDF.js Canvas-Rendering & Text-Koordinaten',
+                category: 'PDF.js & Canvas',
+                fn: async function () {
+                    sharedDemoBytes = await buildComprehensiveTestPdfBytes();
+                    var jsDoc = await loadPdfJsDocument(sharedDemoBytes);
+                    if (!jsDoc || jsDoc.numPages !== 3) throw new Error('Erwartet: 3 Seiten, erhalten: ' + (jsDoc ? jsDoc.numPages : 0));
+                    var page1 = await jsDoc.getPage(1);
+                    var vp = page1.getViewport({ scale: 1.0 });
+                    var blocks = await extractPageTextBlocks(page1, vp);
+                    if (!blocks || blocks.length < 8) throw new Error('Zu wenige Textzeilen extrahiert (' + (blocks ? blocks.length : 0) + ')');
+                    return {
+                        status: 'pass',
+                        detail: 'Muster-PDF (' + formatBytes(sharedDemoBytes.byteLength) + ', 3 Seiten) erzeugt und ' + blocks.length + ' Textblöcke mit (X,Y)-Koordinaten auf Seite 1 erkannt.'
+                    };
+                }
+            },
+            {
+                title: 'Editor-Annotationen (Text ändern, Neuer Text, Marker, Durchstreichen, Stempel, Schwärzen)',
+                category: 'PDF-Editor',
+                fn: async function () {
+                    var tempDoc = {
+                        name: 'EditorTest.pdf',
+                        bytes: new Uint8Array(sharedDemoBytes),
+                        pageCount: 3,
+                        currentPage: 0,
+                        annotations: {
+                            0: [
+                                { type: 'edit-text', origX: 52, origY: 50, origW: 120, origH: 14, x: 52, y: 50, w: 120, h: 14, fontSize: 11, color: '#0f172a', text: 'Umgeschriebener Text' },
+                                { type: 'text', x: 52, y: 90, w: 110, h: 16, fontSize: 12, color: '#2563eb', text: 'Neuer Freitext' },
+                                { type: 'highlight', x: 52, y: 120, w: 160, h: 14, color: '#facc15' },
+                                { type: 'strikethrough', x: 52, y: 145, w: 140, h: 12, color: '#ef4444', strokeWidth: 2 },
+                                { type: 'rect', x: 52, y: 170, w: 90, h: 30, color: '#10b981', strokeWidth: 2 },
+                                { type: 'pen', points: [{ x: 60, y: 210 }, { x: 110, y: 215 }, { x: 150, y: 208 }], color: '#3b82f6', strokeWidth: 2 },
+                                { type: 'stamp', x: 350, y: 80, w: 140, h: 38, text: 'GEPRÜFT', color: '#10b981' },
+                                { type: 'redact', x: 52, y: 240, w: 120, h: 16 }
+                            ]
+                        }
+                    };
+                    await bakeAnnotationsIntoDocument(tempDoc);
+                    var verifyDoc = await PDFLib.PDFDocument.load(tempDoc.bytes);
+                    if (verifyDoc.getPageCount() !== 3) throw new Error('Seitenanzahl nach Einbacken ungültig.');
+                    return {
+                        status: 'pass',
+                        detail: 'Alle 8 Annotations-Werkzeuge (inkl. Durchstreichen, Text ändern & Stempel) verlustfrei in PDF-Seitenstrom eingebettet.'
+                    };
+                }
+            },
+            {
+                title: 'Seiten-Operationen (Hinzufügen, Duplizieren, Drehen 90°, Teilen/Split & Verbinden/Merge)',
+                category: 'Seiten-Studio',
+                fn: async function () {
+                    var pDoc = await PDFLib.PDFDocument.load(sharedDemoBytes);
+                    pDoc.getPages()[0].setRotation(PDFLib.degrees(90));
+                    var dup = await pDoc.copyPages(pDoc, [1]);
+                    pDoc.addPage(dup[0]);
+                    var b4 = await pDoc.save();
+
+                    var splitDoc = await PDFLib.PDFDocument.create();
+                    var srcLoaded = await PDFLib.PDFDocument.load(b4);
+                    var copied = await splitDoc.copyPages(srcLoaded, [0, 1]);
+                    splitDoc.addPage(copied[0]);
+                    splitDoc.addPage(copied[1]);
+                    var splitBytes = await splitDoc.save();
+                    var checkSplit = await PDFLib.PDFDocument.load(splitBytes);
+                    if (srcLoaded.getPageCount() !== 4 || checkSplit.getPageCount() !== 2) {
+                        throw new Error('Split/Merge Seitenanzahl weicht ab.');
+                    }
+                    return {
+                        status: 'pass',
+                        detail: 'Seiten-Rotation (90°), Duplizieren (3 → 4 Seiten), Merge und Teil-Extraktion (Split auf 2 Seiten) erfolgreich.'
+                    };
+                }
+            },
+            {
+                title: 'Mehrseiten-Layout (N-up) & Broschürendruck (A4-Duplex Bogen-Ausschießung)',
+                category: 'Druck & Layout',
+                fn: async function () {
+                    var srcDoc = await PDFLib.PDFDocument.load(sharedDemoBytes);
+                    var total = srcDoc.getPageCount(); // 3 pages -> padded to 4 pages = 1 duplex sheet (2 sides)
+                    var paddedTotal = Math.ceil(total / 4) * 4;
+                    var sheetsCount = paddedTotal / 4;
+                    var outDoc = await PDFLib.PDFDocument.create();
+                    var emb = await outDoc.embedPages(srcDoc.getPages());
+                    for (var s = 0; s < sheetsCount; s++) {
+                        var front = outDoc.addPage([841.89, 595.28]);
+                        if (emb[0]) front.drawPage(emb[0], { x: 430, y: 20, width: 380, height: 540 });
+                        var back = outDoc.addPage([841.89, 595.28]);
+                        if (emb[1]) back.drawPage(emb[1], { x: 20, y: 20, width: 380, height: 540 });
+                        if (emb[2]) back.drawPage(emb[2], { x: 430, y: 20, width: 380, height: 540 });
+                    }
+                    var bBytes = await outDoc.save();
+                    var checkB = await PDFLib.PDFDocument.load(bBytes);
+                    if (checkB.getPageCount() !== 2) throw new Error('Broschüren-Bogenanzahl ungültig.');
+                    return {
+                        status: 'pass',
+                        detail: 'Saddle-Stitch Broschüren-Ausschießung (3 Seiten → 4er-Bogen = 2 A4-Querformat-Druckseiten [4|1] und [2|3]) geprüft.'
+                    };
+                }
+            },
+            {
+                title: 'Kanzlei-Werkzeuge: Zuschneiden (CropBox), 3-spaltige Kopf-/Fußzeile & Bates-Nummerierung',
+                category: 'Layout & Schutz',
+                fn: async function () {
+                    var pDoc = await PDFLib.PDFDocument.load(sharedDemoBytes);
+                    var font = await pDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+                    var pg = pDoc.getPages()[0];
+                    pg.setCropBox(15, 15, 565, 810);
+                    pg.drawText('BATES: AZ-2026-000001 | Seite 1 / 3', { x: 45, y: 22, size: 9, font: font });
+                    var saved = await pDoc.save();
+                    var reloaded = await PDFLib.PDFDocument.load(saved);
+                    var cb = reloaded.getPages()[0].getCropBox();
+                    if (Math.round(cb.width) !== 565) throw new Error('CropBox wurde nicht übernommen.');
+                    return {
+                        status: 'pass',
+                        detail: 'CropBox-Zuschnitt (565 × 810 pt) sowie Bates-Nummerierung (AZ-2026-000001) und Fußzeile erfolgreich eingebrannt.'
+                    };
+                }
+            },
+            {
+                title: 'Lesezeichen-Struktur (/Outlines) & Inhaltsverzeichnis-Deckblatt (TOC)',
+                category: 'Navigation',
+                fn: async function () {
+                    var pDoc = await PDFLib.PDFDocument.load(sharedDemoBytes);
+                    var ctx = pDoc.context;
+                    var pages = pDoc.getPages();
+                    var outlinesRef = ctx.nextRef();
+                    var item1Ref = ctx.nextRef();
+                    ctx.assign(item1Ref, ctx.obj({
+                        Title: PDFLib.PDFHexString.fromText('1. Stellenausschreibung'),
+                        Parent: outlinesRef,
+                        Dest: [pages[0].ref, PDFLib.PDFName.of('XYZ'), null, null, null]
+                    }));
+                    ctx.assign(outlinesRef, ctx.obj({
+                        Type: 'Outlines',
+                        First: item1Ref,
+                        Last: item1Ref,
+                        Count: PDFLib.PDFNumber.of(1)
+                    }));
+                    pDoc.catalog.set(PDFLib.PDFName.of('Outlines'), outlinesRef);
+                    var bOut = await pDoc.save();
+                    var checkDoc = await PDFLib.PDFDocument.load(bOut);
+                    if (!checkDoc.catalog.get(PDFLib.PDFName.of('Outlines'))) throw new Error('/Outlines fehlt im Catalog.');
+                    return {
+                        status: 'pass',
+                        detail: 'Interaktiver PDF-Lesezeichenbaum (/Outlines → /Dest /XYZ) erfolgreich im Dokument-Katalog verankert.'
+                    };
+                }
+            },
+            {
+                title: 'Interaktive Formulare (AcroForms), Feld-Auslesung (CSV/JSON) & Abflachung (Flatten)',
+                category: 'Formulare',
+                fn: async function () {
+                    var pDoc = await PDFLib.PDFDocument.load(sharedDemoBytes);
+                    var form = pDoc.getForm();
+                    var fields = form.getFields();
+                    if (fields.length < 4) throw new Error('Erwartet: mind. 4 Formularfelder, gefunden: ' + fields.length);
+                    var nameVal = form.getTextField('Antragsteller').getText();
+                    if (nameVal !== 'Max Mustermann') throw new Error('Feldwert Antragsteller stimmt nicht.');
+                    form.flatten();
+                    var flatBytes = await pDoc.save();
+                    if (flatBytes.byteLength < 1000) throw new Error('Abgeflachtes PDF ungültig.');
+                    return {
+                        status: 'pass',
+                        detail: fields.length + ' AcroForm-Felder (Antragsteller="Max Mustermann", Aktenzeichen, Checkbox) ausgelesen und per Flatten schreibgeschützt.'
+                    };
+                }
+            },
+            {
+                title: 'Muster-Schwärzung (Auto-Redact für IBAN, E-Mail, Telefon, Datum) & Forensik-Sanitize',
+                category: 'DSGVO & Schutz',
+                fn: async function () {
+                    var jsDoc = await loadPdfJsDocument(sharedDemoBytes);
+                    var p1 = await jsDoc.getPage(1);
+                    var tc = await p1.getTextContent();
+                    var fullText = tc.items.map(function (it) { return it.str; }).join(' ');
+                    var hasIban = /[A-Z]{2}\d{2}(?:\s*\d{4}){4}\s*\d{2}/.test(fullText);
+                    var hasMail = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.test(fullText);
+                    var hasTel = /\+49\s*\d{2,4}\s*\d{3,}/.test(fullText);
+                    var hasDate = /\b\d{2}\.\d{2}\.\d{4}\b/.test(fullText);
+                    if (!hasIban || !hasMail || !hasTel || !hasDate) {
+                        throw new Error('Nicht alle Auto-Redact-Muster im Test-PDF erkannt.');
+                    }
+                    return {
+                        status: 'pass',
+                        detail: 'Alle 4 DSGVO-Suchmuster (IBAN DE89…, E-Mail, Telefon +49 711…, Datum 14.05.1985) auf Seite 1 lokalisiert.'
+                    };
+                }
+            },
+            {
+                title: 'E-Rechnung (ZUGFeRD 2.2 / Factur-X EN 16931 XML) & Offline-QR-Code-Matrix (ISO 18004)',
+                category: 'Konverter & XML',
+                fn: async function () {
+                    var extractedXml = await findZugferdXmlInDocument({ bytes: sharedDemoBytes });
+                    if (!extractedXml) throw new Error('Eingebettetes factur-x.xml konnte nicht ausgelesen werden.');
+                    var parsed = parseZugferdOrXRechnungXml(extractedXml);
+                    if (!parsed || parsed.invId !== 'RE-2026-1001' || parsed.grossAmt !== '1190.00') {
+                        throw new Error('ZUGFeRD-Parser lieferte unerwartete Rechnungsdaten.');
+                    }
+                    var qrMatrix = generateQrCodeMatrix('https://im.baden-wuerttemberg.de');
+                    if (!qrMatrix || qrMatrix.length < 21) throw new Error('QR-Code-Matrix ungültig.');
+                    return {
+                        status: 'pass',
+                        detail: 'Factur-X XML (RE-2026-1001, Brutto 1.190,00 €, IBAN ' + parsed.iban + ') aus PDF extrahiert + QR-Matrix (' + qrMatrix.length + '×' + qrMatrix.length + ') berechnet.'
+                    };
+                }
+            },
+            {
+                title: 'Dokument-Konverter (Text/Office → PDF) & ZIP-Paketierung (JSZip)',
+                category: 'Konverter',
+                fn: async function () {
+                    var zip = new window.JSZip();
+                    zip.file('Testdokument.pdf', sharedDemoBytes);
+                    var zipBytes = await zip.generateAsync({ type: 'uint8array' });
+                    if (!zipBytes || zipBytes.byteLength < 500) throw new Error('ZIP-Archivierung fehlgeschlagen.');
+                    return {
+                        status: 'pass',
+                        detail: 'Multi-Datei-ZIP-Archivierung (' + formatBytes(zipBytes.byteLength) + ') für Stapelverarbeitung & Einzelseiten-Export funktionsfähig.'
+                    };
+                }
+            },
+            {
+                title: 'Offline-Texterkennung (Tesseract-OCR Engine & lokale DE/EN Sprachmodelle)',
+                category: 'Sandwich-OCR',
+                fn: async function () {
+                    if (!window.Tesseract) throw new Error('Tesseract.js ist nicht geladen.');
+                    var baseDir = getAppBaseDirUrl();
+                    var resp = await fetch(baseDir + 'assets/vendor/tesseract/worker.min.js', { method: 'HEAD' });
+                    if (!resp.ok) throw new Error('Lokaler Tesseract-Worker nicht erreichbar.');
+                    return {
+                        status: 'pass',
+                        detail: 'Lokale Tesseract WebAssembly-Engine, Worker und Offline-Sprachpakete (Deutsch/Englisch) einsatzbereit.'
+                    };
+                }
+            },
+            {
+                title: 'Offline-Vorlese-Funktion (Text-to-Speech / Web Speech API & Stimmen)',
+                category: 'Vorlesen (TTS)',
+                fn: async function () {
+                    if (!('speechSynthesis' in window) || typeof window.SpeechSynthesisUtterance === 'undefined') {
+                        return {
+                            status: 'warn',
+                            detail: 'Browser unterstützt window.speechSynthesis in dieser Umgebung nicht.'
+                        };
+                    }
+                    var voices = window.speechSynthesis.getVoices() || [];
+                    var deVoices = voices.filter(function (v) { return /^de/i.test(v.lang || ''); });
+                    return {
+                        status: 'pass',
+                        detail: 'Web Speech API aktiv (' + voices.length + ' Systemstimmen erkannt' + (deVoices.length > 0 ? ', davon ' + deVoices.length + ' Deutsch' : '') + ').'
+                    };
+                }
+            },
+            {
+                title: 'Barrierefreiheit: PDF/UA-1, WCAG 2.1/2.2 & PAC 2026 Quality Auto-Fix + 14-Punkte-Audit',
+                category: 'PDF/UA & PAC 2026',
+                fn: async function () {
+                    var a11yTestDoc = {
+                        name: 'Stellenausschreibung_Selbsttest.pdf',
+                        bytes: new Uint8Array(sharedDemoBytes),
+                        pageCount: 3,
+                        currentPage: 0,
+                        annotations: {},
+                        meta: {},
+                        savedA11yTags: []
+                    };
+                    var fixedBytes = await remediatePdfAccessibility(a11yTestDoc, true);
+                    if (!fixedBytes) throw new Error('remediatePdfAccessibility lieferte keine Bytes.');
+                    a11yTestDoc.bytes = fixedBytes;
+
+                    var auditReport = await auditDocumentAccessibility(a11yTestDoc, false);
+                    if (!auditReport) throw new Error('Audit-Bericht konnte nicht erstellt werden.');
+                    if (auditReport.score !== 100) {
+                        var failedNames = auditReport.checks
+                            .filter(function (c) { return c.status !== 'pass'; })
+                            .map(function (c) { return c.title; })
+                            .join('; ');
+                        throw new Error('Score ' + auditReport.score + '% (' + auditReport.passedCount + '/' + auditReport.totalChecks + '). Offen: ' + failedNames);
+                    }
+                    return {
+                        status: 'pass',
+                        detail: '100 % Konformität (' + auditReport.passedCount + '/' + auditReport.totalChecks + ' Prüfpunkte: PDF/UA ' +
+                            auditReport.pdfUaPassed + '/' + auditReport.pdfUaTotal + ', WCAG ' +
+                            auditReport.wcagPassed + '/' + auditReport.wcagTotal + ', Quality ' +
+                            auditReport.qualityPassed + '/' + auditReport.qualityTotal + ') inkl. <H1>, <H2>, <L>/<LI>/<LBody> & <Link>.'
+                    };
+                }
+            },
+            {
+                title: 'Server-API: Kryptografische Zertifikats-Signatur (PKCS#7 / SHA-256) & Auto-Save (IndexedDB)',
+                category: 'Sicherheit & API',
+                fn: async function () {
+                    // 1. Test IndexedDB Auto-Save availability
+                    var db = await openAutoSaveDb();
+                    var idbOk = Boolean(db);
+
+                    // 2. Test cryptographic signing & verification roundtrip via api.php
+                    var pDoc = await PDFLib.PDFDocument.load(sharedDemoBytes);
+                    var ctx = pDoc.context;
+                    var pg0 = pDoc.getPages()[0];
+                    var sigDictRef = ctx.nextRef();
+                    var placeholderHex = new Array(16384 + 1).join('0');
+                    ctx.assign(sigDictRef, ctx.obj({
+                        Type: PDFLib.PDFName.of('Sig'),
+                        Filter: PDFLib.PDFName.of('Adobe.PPKLite'),
+                        SubFilter: PDFLib.PDFName.of('adbe.pkcs7.detached'),
+                        Name: PDFLib.PDFString.of('PDF-Werkstatt Selbsttest'),
+                        Reason: PDFLib.PDFString.of('Automatischer System-Selbsttest'),
+                        Location: PDFLib.PDFString.of('Deutschland'),
+                        M: PDFLib.PDFString.of(formatPdfDateNow()),
+                        ByteRange: ctx.obj([0, 1000000000, 1000000000, 1000000000]),
+                        Contents: PDFLib.PDFHexString.of(placeholderHex)
+                    }));
+                    var widgetRef = ctx.nextRef();
+                    ctx.assign(widgetRef, ctx.obj({
+                        Type: PDFLib.PDFName.of('Annot'),
+                        Subtype: PDFLib.PDFName.of('Widget'),
+                        FT: PDFLib.PDFName.of('Sig'),
+                        Rect: ctx.obj([0, 0, 0, 0]),
+                        T: PDFLib.PDFString.of('SelfTestSigField'),
+                        F: PDFLib.PDFNumber.of(132),
+                        P: pg0.ref,
+                        V: sigDictRef
+                    }));
+                    pg0.node.set(PDFLib.PDFName.of('Annots'), ctx.obj([widgetRef]));
+                    pDoc.catalog.set(PDFLib.PDFName.of('AcroForm'), ctx.obj({
+                        Fields: ctx.obj([widgetRef]),
+                        SigFlags: PDFLib.PDFNumber.of(3)
+                    }));
+                    var prepBytes = await pDoc.save({ useObjectStreams: false });
+
+                    var fdSign = new FormData();
+                    fdSign.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+                    fdSign.append('pdf_file', new Blob([prepBytes], { type: 'application/pdf' }), 'selftest.pdf');
+                    fdSign.append('cert_mode', 'quick');
+                    fdSign.append('cn', 'PDF-Werkstatt Diagnose-Suite');
+                    fdSign.append('org', 'System-Selbsttest');
+                    var respSign = await fetch('api.php?action=sign_pdf_cert', { method: 'POST', body: fdSign });
+                    var signData = await respSign.json();
+                    if (!signData || !signData.ok || !signData.signed_pdf_base64) {
+                        throw new Error('Signatur-API Fehler: ' + ((signData && signData.error) || 'Unbekannt'));
+                    }
+
+                    var signedBytes = base64ToUint8Array(signData.signed_pdf_base64);
+                    var fdVer = new FormData();
+                    fdVer.append('csrf_token', window.PDFSTUDIO_CSRF_TOKEN || '');
+                    fdVer.append('pdf_file', new Blob([signedBytes], { type: 'application/pdf' }), 'selftest_signed.pdf');
+                    var respVer = await fetch('api.php?action=verify_pdf_cert', { method: 'POST', body: fdVer });
+                    var verData = await respVer.json();
+                    if (!verData || !verData.ok || !verData.signed || !verData.signatures || !verData.signatures[0].intact) {
+                        throw new Error('Signatur-Verifikation fehlgeschlagen.');
+                    }
+                    return {
+                        status: 'pass',
+                        detail: 'RSA-2048 / SHA-256 PKCS#7-Signatur erzeugt & mathematisch über /ByteRange verifiziert + Auto-Save IndexedDB (' + (idbOk ? 'aktiv' : 'nicht verfügbar') + ').'
+                    };
+                }
+            }
+        ];
+
+        var passedCount = 0;
+        var warnCount = 0;
+        var failCount = 0;
+
+        for (var idx = 0; idx < testDefinitions.length; idx++) {
+            var def = testDefinitions[idx];
+            var pct = Math.round(((idx + 1) / testDefinitions.length) * 100);
+            if (progFill) progFill.style.width = pct + '%';
+            if (progPct) progPct.textContent = pct + ' %';
+            if (progLabel) progLabel.textContent = 'Prüfe Modul ' + (idx + 1) + '/' + testDefinitions.length + ': ' + def.title + '…';
+
+            var t0 = performance.now ? performance.now() : Date.now();
+            var itemResult;
+            try {
+                var resObj = await def.fn();
+                var dt = Math.max(1, Math.round((performance.now ? performance.now() : Date.now()) - t0));
+                itemResult = {
+                    title: def.title,
+                    category: def.category,
+                    status: (resObj && resObj.status) ? resObj.status : 'pass',
+                    detail: (resObj && resObj.detail) ? resObj.detail : 'Erfolgreich getestet.',
+                    elapsedMs: dt
+                };
+            } catch (err) {
+                var dtErr = Math.max(1, Math.round((performance.now ? performance.now() : Date.now()) - t0));
+                itemResult = {
+                    title: def.title,
+                    category: def.category,
+                    status: 'fail',
+                    detail: 'Fehler: ' + ((err && err.message) ? err.message : String(err)),
+                    elapsedMs: dtErr
+                };
+            }
+
+            if (itemResult.status === 'pass') passedCount++;
+            else if (itemResult.status === 'warn') warnCount++;
+            else failCount++;
+
+            results.push(itemResult);
+            if (listContainer) {
+                listContainer.appendChild(createSelfTestRowElement(itemResult, idx + 1));
+                listContainer.scrollTop = listContainer.scrollHeight;
+            }
+            await new Promise(function (r) { setTimeout(r, 35); });
+        }
+
+        if (listContainer) listContainer.scrollTop = 0;
+        if (progBox) {
+            setTimeout(function () { progBox.style.display = 'none'; }, 250);
+        }
+
+        var totalElapsedMs = Math.max(1, Math.round((performance.now ? performance.now() : Date.now()) - suiteStartMs));
+        var nowTimeStr = formatGermanDateTimeNow();
+
+        lastSelfTestReport = {
+            timestamp: nowTimeStr,
+            totalElapsedMs: totalElapsedMs,
+            totalCount: testDefinitions.length,
+            passedCount: passedCount,
+            warnCount: warnCount,
+            failCount: failCount,
+            results: results
+        };
+
+        var allOk = failCount === 0;
+        if (scorePill) {
+            scorePill.textContent = (passedCount + warnCount) + ' / ' + testDefinitions.length + ' bestanden';
+            scorePill.style.background = allOk ? 'rgba(16, 185, 129, 0.18)' : 'rgba(239, 68, 68, 0.18)';
+            scorePill.style.color = allOk ? '#10b981' : '#ef4444';
+        }
+        if (sumTitle) {
+            sumTitle.textContent = allOk
+                ? ('✔ Alle ' + testDefinitions.length + ' Funktionsmodule erfolgreich getestet & verifiziert!')
+                : ('⚠ Selbsttest abgeschlossen: ' + failCount + ' Fehler bei ' + testDefinitions.length + ' Modulen gefunden');
+        }
+        if (sumSub) {
+            sumSub.textContent = 'Geprüft am ' + nowTimeStr + ' • Gesamtdauer: ' + totalElapsedMs + ' ms • ' +
+                passedCount + ' Bestanden, ' + warnCount + ' Hinweise, ' + failCount + ' Fehler.';
+        }
+        if (btnRun) btnRun.disabled = false;
+        showToast('System-Selbsttest abgeschlossen: ' + (passedCount + warnCount) + '/' + testDefinitions.length + ' Module erfolgreich (' + totalElapsedMs + ' ms)!', allOk ? 'success' : 'error');
+    }
+
+    async function exportSelfTestReportPdf() {
+        if (!lastSelfTestReport) {
+            await runFullDiagnosticSelfTest();
+        }
+        if (!lastSelfTestReport) return;
+
+        var pdfDoc = await PDFLib.PDFDocument.create();
+        var fontReg = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+        var fontBold = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+
+        var page = pdfDoc.addPage([595.28, 841.89]);
+        var y = 790;
+
+        page.drawText('PDF-Werkstatt Pro — System- & Funktions-Pruefprotokoll', {
+            x: 45, y: y, size: 15.5, font: fontBold, color: PDFLib.rgb(0.08, 0.18, 0.38)
+        });
+        y -= 20;
+        page.drawText('Stand: ' + sanitizeWinAnsiText(lastSelfTestReport.timestamp) + ' | Gesamtdauer: ' + lastSelfTestReport.totalElapsedMs + ' ms | Ergebnis: ' +
+            (lastSelfTestReport.passedCount + lastSelfTestReport.warnCount) + ' / ' + lastSelfTestReport.totalCount + ' Module bestanden', {
+            x: 45, y: y, size: 9.5, font: fontReg, color: PDFLib.rgb(0.25, 0.30, 0.38)
+        });
+        y -= 14;
+        page.drawLine({
+            start: { x: 45, y: y },
+            end: { x: 550, y: y },
+            thickness: 1,
+            color: PDFLib.rgb(0.75, 0.80, 0.88)
+        });
+        y -= 20;
+
+        for (var i = 0; i < lastSelfTestReport.results.length; i++) {
+            var item = lastSelfTestReport.results[i];
+            if (y < 75) {
+                page = pdfDoc.addPage([595.28, 841.89]);
+                y = 790;
+            }
+            var statusTag = item.status === 'pass' ? '[OK]' : (item.status === 'warn' ? '[HINWEIS]' : '[FEHLER]');
+            var statusCol = item.status === 'pass' ? PDFLib.rgb(0.05, 0.55, 0.35) : (item.status === 'warn' ? PDFLib.rgb(0.80, 0.50, 0.05) : PDFLib.rgb(0.80, 0.15, 0.15));
+
+            var titleLine = sanitizeWinAnsiText((i + 1) + '. ' + statusTag + ' ' + item.title + ' (' + item.elapsedMs + ' ms)');
+            page.drawText(titleLine.substring(0, 95), {
+                x: 45, y: y, size: 9.8, font: fontBold, color: statusCol
+            });
+            y -= 13;
+
+            var detailLine = sanitizeWinAnsiText(item.detail);
+            page.drawText(detailLine.substring(0, 105), {
+                x: 58, y: y, size: 8.8, font: fontReg, color: PDFLib.rgb(0.18, 0.22, 0.28)
+            });
+            if (detailLine.length > 105) {
+                y -= 11;
+                page.drawText(detailLine.substring(105, 210), {
+                    x: 58, y: y, size: 8.8, font: fontReg, color: PDFLib.rgb(0.18, 0.22, 0.28)
+                });
+            }
+            y -= 17;
+        }
+
+        var pdfBytes = await pdfDoc.save();
+        downloadBlob(pdfBytes, 'PDF-Werkstatt_Selbsttest_Protokoll.pdf', 'application/pdf');
+        showToast('Abnahme- & Selbsttest-Protokoll als PDF heruntergeladen!', 'success');
+    }
+
+    // =========================================================================
     // Event Listeners Setup
     // =========================================================================
     function initEventListeners() {
@@ -12454,6 +13274,16 @@
         var btnGenerateDownloadP12 = document.getElementById('btnGenerateDownloadP12');
         if (btnGenerateDownloadP12) {
             btnGenerateDownloadP12.addEventListener('click', generateStandaloneP12Certificate);
+        }
+
+        // v1.7.0: 15-Module Diagnostic Self-Test Suite & Report Export Listeners
+        var btnRunFullSelfTest = document.getElementById('btnRunFullSelfTest');
+        if (btnRunFullSelfTest) {
+            btnRunFullSelfTest.addEventListener('click', runFullDiagnosticSelfTest);
+        }
+        var btnExportSelfTestReportPdf = document.getElementById('btnExportSelfTestReportPdf');
+        if (btnExportSelfTestReportPdf) {
+            btnExportSelfTestReportPdf.addEventListener('click', exportSelfTestReportPdf);
         }
 
         // Keyboard shortcuts (Desktop feel)

@@ -115,6 +115,7 @@ $serverInfo = pdfstudio_get_server_info();
             <button type="button" class="qa-btn" data-cmd="toggle-right-dock" title="Werkzeug-Eigenschaften rechts ein-/ausblenden">◨</button>
             <button type="button" class="qa-btn" data-cmd="toggle-theme" title="Dark / Light Theme wechseln">◐</button>
             <button type="button" class="qa-btn" id="btnFullscreenTitlebar" data-cmd="toggle-fullscreen" title="Vollbild-Modus umschalten — Browserelemente ausblenden (F11)">⛶</button>
+            <button type="button" class="qa-btn" data-cmd="open-selftest-modal" title="System- &amp; Funktions-Selbsttest (Diagnose-Suite &amp; Muster-Testdokument)">🧪</button>
             <button type="button" class="qa-btn" data-cmd="open-help" title="Benutzerhandbuch &amp; Funktionshilfe öffnen (F1)">❓</button>
             <a href="admin.php" class="qa-btn" title="Administrationsbereich öffnen (LDAP, Benutzer &amp; Systemeinstellungen)" style="text-decoration:none;">⚙️</a>
             <button type="button" class="qa-btn" id="btnToggleRibbonDeck" title="Ribbon-Menü ein-/ausklappen">▴</button>
@@ -151,8 +152,16 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">📄</span>
                         <span class="rb-label">Neu (A4)</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="create-demo-test-pdf" title="Erzeugt sofort ein 3-seitiges All-in-One Muster-Testdokument (mit Überschriften, Listen, E-Mail/URL, IBAN/Telefon, Formularfeldern &amp; ZUGFeRD-XML) zum Ausprobieren aller Werkzeuge">
+                        <span class="rb-icon">📋</span>
+                        <span class="rb-label">Muster-PDF</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-selftest-modal" title="Vollautomatischer 1-Klick-Selbsttest aller 15 Funktionsmodule inkl. Abnahmeprotokoll">
+                        <span class="rb-icon">🧪</span>
+                        <span class="rb-label">Selbsttest</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Dokument</div>
+                <div class="ribbon-section-title">Dokument &amp; Diagnose</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -2430,6 +2439,69 @@ $serverInfo = pdfstudio_get_server_info();
             <button type="button" class="tool-btn btn-primary" id="btnExecuteCertSignPdf">
                 🔏 PDF jetzt kryptografisch signieren &amp; herunterladen
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 9: 1-KLICK SYSTEM- & FUNKTIONS-SELBSTTEST (DIAGNOSE-SUITE)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalSelfTest">
+    <div class="modal-window" style="max-width:820px;">
+        <div class="modal-header">
+            <span>🧪 System- &amp; Funktions-Selbsttest (Vollautomatische Diagnose-Suite &amp; Muster-PDF)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalSelfTest">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:78vh;overflow-y:auto;">
+            <!-- Summary Header Banner -->
+            <div id="selfTestSummaryBanner" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+                <div style="flex:1;min-width:240px;">
+                    <div id="selfTestSummaryTitle" style="font-size:13.5px;font-weight:800;color:var(--text-primary);margin-bottom:3px;">
+                        Bereit zum automatischen System- &amp; Funktionstest aller 15 Module
+                    </div>
+                    <div id="selfTestSummarySub" style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;">
+                        Erzeugt im Arbeitsspeicher ein synthetisches 3-seitiges Test-PDF und prüft alle Client- und Server-Funktionen (inkl. PDF/UA-1 Auto-Fix, Broschürendruck, Formulare, ZUGFeRD, OCR &amp; PKCS#7-Signatur) live durch.
+                    </div>
+                </div>
+                <div id="selfTestScorePill" style="font-size:15px;font-weight:800;padding:6px 14px;border-radius:999px;background:var(--accent-soft);color:var(--accent-primary);white-space:nowrap;">
+                    15 Module
+                </div>
+            </div>
+
+            <!-- Action Toolbar -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                <button type="button" class="tool-btn btn-primary" id="btnRunFullSelfTest" style="flex:1.3;">
+                    ▶️ Kompletten Selbsttest jetzt starten (alle 15 Module)
+                </button>
+                <button type="button" class="tool-btn btn-success" data-cmd="create-demo-test-pdf" style="flex:1;" title="Erzeugt und öffnet ein 3-seitiges All-in-One Muster-Testdokument direkt als Tab im Editor">
+                    📋 3-seitiges Muster-Testdokument im Editor öffnen
+                </button>
+                <button type="button" class="tool-btn" id="btnExportSelfTestReportPdf" style="flex:0.9;" title="Druckfertiges Abnahme- &amp; Testprotokoll als PDF herunterladen">
+                    📊 Testprotokoll als PDF
+                </button>
+            </div>
+
+            <!-- Live Progress Bar -->
+            <div id="selfTestProgressBox" style="display:none;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:6px;">
+                    <span id="selfTestStepLabel" style="font-weight:600;color:var(--text-primary);">Starte Selbsttest…</span>
+                    <span id="selfTestStepPercent" style="font-weight:700;color:var(--accent-primary);">0 %</span>
+                </div>
+                <div style="height:7px;background:var(--bg-input);border-radius:999px;overflow:hidden;">
+                    <div id="selfTestProgressFill" style="height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#10b981);transition:width 0.18s ease;"></div>
+                </div>
+            </div>
+
+            <!-- Checklist Results Container -->
+            <div id="selfTestChecklistContainer" style="display:flex;flex-direction:column;gap:7px;">
+                <div style="padding:18px;text-align:center;color:var(--text-secondary);font-size:12.5px;background:var(--bg-card);border:1px dashed var(--border-subtle);border-radius:8px;">
+                    Klicken Sie oben auf <strong>„▶️ Kompletten Selbsttest jetzt starten“</strong>, um alle 15 Module live durchzutesten, oder öffnen Sie das <strong>„📋 3-seitige Muster-Testdokument“</strong> direkt im Editor.
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;">
+            <span style="font-size:11.5px;color:var(--text-muted);">100 % lokaler In-Memory-Test — Ihre geöffneten Dokumente bleiben unverändert.</span>
+            <button type="button" class="tool-btn" data-close-modal="modalSelfTest">Schließen</button>
         </div>
     </div>
 </div>
