@@ -281,8 +281,12 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">▭</span>
                         <span class="rb-label">Rahmen</span>
                     </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="measure" title="Mess- &amp; Lineal-Werkzeug: Abstand, Breite × Höhe, Fläche und Winkel direkt in Millimetern (mm / cm / pt) auf der PDF-Seite abmessen">
+                        <span class="rb-icon">📏</span>
+                        <span class="rb-label">Lineal / mm</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Zeichnen &amp; Text</div>
+                <div class="ribbon-section-title">Zeichnen, Messen &amp; Text</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -520,8 +524,12 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🔢</span>
                         <span class="rb-label">Seitenzahlen</span>
                     </button>
+                    <button type="button" class="ribbon-btn tool-btn" data-tool="measure" title="Mess- &amp; Lineal-Werkzeug: Abstände, Ränder und Maße millimetergenau (mm / cm / pt) auf der Seite messen">
+                        <span class="rb-icon">📏</span>
+                        <span class="rb-label">Messen (mm)</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Seitenlayout, Bates &amp; Stempelung</div>
+                <div class="ribbon-section-title">Seitenlayout, Messen, Bates &amp; Stempelung</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -593,8 +601,12 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">📄</span>
                         <span class="rb-label">PDF → Text</span>
                     </button>
+                    <button type="button" class="ribbon-btn rb-primary" data-cmd="open-table-extract-modal" title="Erkennt Tabellen auf der PDF-Seite automatisch anhand der Spalten-/Zeilen-Koordinaten und exportiert sie nach Excel / CSV">
+                        <span class="rb-icon">📊</span>
+                        <span class="rb-label">Tabelle → CSV</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Export aus PDF</div>
+                <div class="ribbon-section-title">Export aus PDF (Bild, Text &amp; Excel-CSV)</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -2587,6 +2599,81 @@ $serverInfo = pdfstudio_get_server_info();
         <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
             <span style="font-size:11.5px;color:var(--text-muted);">Tipp: Klicken Sie auf eine Zeile in der Ergebnisliste, um direkt zur Textstelle im PDF zu springen.</span>
             <button type="button" class="tool-btn" data-close-modal="modalContrastChecker">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 11: INTELLIGENTER TABELLEN-EXTRAKTOR (PDF-TABELLE -> EXCEL / CSV)
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalTableExtractor">
+    <div class="modal-window" style="max-width:880px;">
+        <div class="modal-header">
+            <span>📊 Intelligenter Tabellen-Extraktor (PDF-Tabelle → Excel / CSV / Zwischenablage)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalTableExtractor">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:78vh;overflow-y:auto;">
+            <!-- Summary Banner -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+                <div style="flex:1;min-width:250px;">
+                    <div style="font-size:13.5px;font-weight:800;color:var(--text-primary);margin-bottom:3px;">
+                        Koordinatenbasierte Zeilen- &amp; Spaltenerkennung für Excel / LibreOffice Calc
+                    </div>
+                    <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;">
+                        Rekonstruiert Tabellenzeilen und Spaltenraster direkt aus den X-/Y-Positionen der PDF-Textblöcke. Alle erkannten Zellen können unten in der Vorschau bei Bedarf direkt angeklickt und editiert werden.
+                    </div>
+                </div>
+                <span id="tableExtractorStatsPill" style="font-size:13px;font-weight:800;padding:5px 12px;border-radius:999px;background:var(--accent-soft);color:var(--accent-primary);white-space:nowrap;">
+                    0 Zeilen × 0 Spalten
+                </span>
+            </div>
+
+            <!-- Options Toolbar -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:5px;">
+                        <label for="tableExtractScope" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Umfang:</label>
+                        <select id="tableExtractScope" class="form-control" style="width:auto;height:30px;font-size:12px;padding:0 8px;">
+                            <option value="current">Aktuelle Seite</option>
+                            <option value="all">Alle Seiten zusammenführen</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:5px;">
+                        <label for="tableExtractColTolerance" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Spalten-Raster:</label>
+                        <select id="tableExtractColTolerance" class="form-control" style="width:auto;height:30px;font-size:12px;padding:0 8px;">
+                            <option value="14">Fein (enge Spalten)</option>
+                            <option value="24" selected>Standard (Auto-Raster)</option>
+                            <option value="38">Breit (große Spaltenabstände)</option>
+                        </select>
+                    </div>
+                    <label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--text-primary);cursor:pointer;">
+                        <input type="checkbox" id="chkTableOnlyMultiCol" checked>
+                        <span>Nur mehrspaltige Zeilen (&ge; 2 Spalten)</span>
+                    </label>
+                </div>
+                <button type="button" class="tool-btn btn-primary" id="btnRunTableExtract">
+                    🔍 Tabelle neu erkennen
+                </button>
+            </div>
+
+            <!-- Editable HTML Table Preview -->
+            <div id="tableExtractorPreviewBox" style="max-height:380px;overflow:auto;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:8px;">
+                <div style="padding:18px;text-align:center;color:var(--text-secondary);font-size:12.5px;">
+                    Analysiere Seitenstruktur…
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span style="font-size:11.5px;color:var(--text-muted);">Tipp: Alle Tabellenzellen in der Vorschau sind vor dem Export direkt per Klick editierbar!</span>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn" id="btnCopyTableForExcel" title="Kopiert die Tabelle Tab-getrennt (TSV) in die Zwischenablage — direkt mit Strg+V in Excel einfügbar">
+                    📋 Für Excel kopieren (Strg+V)
+                </button>
+                <button type="button" class="tool-btn btn-success" id="btnDownloadTableCsv" title="Lädt die Tabelle als UTF-8 CSV-Datei (Semikolon-getrennt mit BOM für deutsche Umlaute in Excel) herunter">
+                    💾 Als Excel-CSV herunterladen (.csv)
+                </button>
+                <button type="button" class="tool-btn" data-close-modal="modalTableExtractor">Schließen</button>
+            </div>
         </div>
     </div>
 </div>

@@ -870,6 +870,7 @@
             strikethrough: 'Text durchstreichen',
             redact: 'Schwärzen',
             rect: 'Rechteck',
+            measure: 'Lineal / Messen (mm / cm / pt)',
             stamp: 'Stempel',
             'form-text': 'Formular: Textfeld',
             'form-check': 'Formular: Checkbox',
@@ -893,6 +894,8 @@
             }
         } else if (toolName === 'strikethrough' && getActiveDoc()) {
             showToast('Klicken Sie direkt auf eine Textzeile oder ziehen Sie mit gedrückter Maustaste über einzelne Wörter zum Durchstreichen.');
+        } else if (toolName === 'measure' && getActiveDoc()) {
+            showToast('📏 Messwerkzeug aktiv: Ziehen Sie mit gedrückter Maustaste von Punkt A nach Punkt B (Shift halten für 0°/45°/90°-Einrastung).');
         } else if (toolName === 'tts-click' && getActiveDoc()) {
             if (!state.currentPageTextBlocks || state.currentPageTextBlocks.length === 0) {
                 showToast('Hinweis: Diese Seite ist ein reiner Bild-Scan ohne Textebene. Starten Sie erst „🔎 Durchsuchbares PDF (OCR)“, um Zeilen anzuklicken.');
@@ -1207,6 +1210,85 @@
             ctx.font = '700 ' + Math.round(10 * scale) + 'px sans-serif';
             ctx.textBaseline = 'top';
             ctx.fillText(tagBadge, x + 4 * scale, Math.max(2, y - 14 * scale));
+        } else if (ann.type === 'measure') {
+            var mx1 = (ann.x1 !== undefined ? ann.x1 : ann.x) * scale;
+            var my1 = (ann.y1 !== undefined ? ann.y1 : ann.y) * scale;
+            var mx2 = (ann.x2 !== undefined ? ann.x2 : (ann.x + (ann.w || 60))) * scale;
+            var my2 = (ann.y2 !== undefined ? ann.y2 : (ann.y + (ann.h || 0))) * scale;
+            var mCol = ann.color || '#0284c7';
+            var mInfo = computePdfMeasurement(mx1 / scale, my1 / scale, mx2 / scale, my2 / scale);
+
+            // Draw dashed ΔX × ΔY bounding area if diagonal
+            if (Math.abs(mx2 - mx1) > 8 * scale && Math.abs(my2 - my1) > 8 * scale) {
+                var bx = Math.min(mx1, mx2);
+                var by = Math.min(my1, my2);
+                var bw = Math.abs(mx2 - mx1);
+                var bh = Math.abs(my2 - my1);
+                ctx.fillStyle = 'rgba(2, 132, 199, 0.06)';
+                ctx.strokeStyle = 'rgba(2, 132, 199, 0.45)';
+                ctx.lineWidth = 1.2;
+                ctx.setLineDash([4, 3]);
+                ctx.fillRect(bx, by, bw, bh);
+                ctx.strokeRect(bx, by, bw, bh);
+                ctx.setLineDash([]);
+            }
+
+            // Main measurement line
+            ctx.strokeStyle = mCol;
+            ctx.lineWidth = Math.max(2, 2 * scale);
+            ctx.beginPath();
+            ctx.moveTo(mx1, my1);
+            ctx.lineTo(mx2, my2);
+            ctx.stroke();
+
+            // Perpendicular dimension end ticks & endpoint dots
+            var angleRad = Math.atan2(my2 - my1, mx2 - mx1);
+            var perpX = -Math.sin(angleRad) * 6 * scale;
+            var perpY = Math.cos(angleRad) * 6 * scale;
+            ctx.beginPath();
+            ctx.moveTo(mx1 - perpX, my1 - perpY);
+            ctx.lineTo(mx1 + perpX, my1 + perpY);
+            ctx.moveTo(mx2 - perpX, my2 - perpY);
+            ctx.lineTo(mx2 + perpX, my2 + perpY);
+            ctx.stroke();
+
+            ctx.fillStyle = mCol;
+            ctx.beginPath();
+            ctx.arc(mx1, my1, 3 * scale, 0, Math.PI * 2);
+            ctx.arc(mx2, my2, 3 * scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Floating measurement callout label at midpoint
+            var midX = (mx1 + mx2) / 2;
+            var midY = (my1 + my2) / 2;
+            var line1 = '📏 ' + mInfo.distMmStr + ' mm (' + mInfo.distCmStr + ' cm | ' + mInfo.distPtStr + ' pt)';
+            var line2 = (mInfo.dxMm >= 1.0 && mInfo.dyMm >= 1.0)
+                ? ('ΔX: ' + mInfo.dxMmStr + ' × ΔY: ' + mInfo.dyMmStr + ' mm (' + mInfo.areaCm2Str + ' cm²) • ' + mInfo.angleStr + '°')
+                : ('Winkel: ' + mInfo.angleStr + '°');
+
+            var mFontPx = Math.max(10, Math.round(10.5 * scale));
+            ctx.font = '700 ' + mFontPx + 'px sans-serif';
+            var w1 = ctx.measureText(line1).width;
+            ctx.font = '600 ' + Math.max(9, Math.round(9.5 * scale)) + 'px sans-serif';
+            var w2 = ctx.measureText(line2).width;
+            var pillW = Math.max(w1, w2) + 14 * scale;
+            var pillH = (mFontPx * 2.25) + 6 * scale;
+            var pillX = Math.max(4, Math.min(el.annCanvas.width - pillW - 4, midX - pillW / 2));
+            var pillY = Math.max(4, Math.min(el.annCanvas.height - pillH - 4, midY - pillH - 6 * scale));
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+            ctx.strokeStyle = mCol;
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(pillX, pillY, pillW, pillH);
+            ctx.strokeRect(pillX, pillY, pillW, pillH);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.textBaseline = 'top';
+            ctx.font = '700 ' + mFontPx + 'px sans-serif';
+            ctx.fillText(line1, pillX + 7 * scale, pillY + 4 * scale);
+            ctx.fillStyle = '#7dd3fc';
+            ctx.font = '600 ' + Math.max(9, Math.round(9.5 * scale)) + 'px sans-serif';
+            ctx.fillText(line2, pillX + 7 * scale, pillY + 5 * scale + mFontPx * 1.15);
         }
 
         if (isSelected) {
@@ -1217,6 +1299,43 @@
             ctx.strokeRect(x - 4, y - 4, w + 8, h + 8);
         }
         ctx.restore();
+    }
+
+    function computePdfMeasurement(x1, y1, x2, y2) {
+        var ptToMm = 25.4 / 72.0;
+        var dxPt = Math.abs(x2 - x1);
+        var dyPt = Math.abs(y2 - y1);
+        var distPt = Math.sqrt(dxPt * dxPt + dyPt * dyPt);
+        var dxMm = dxPt * ptToMm;
+        var dyMm = dyPt * ptToMm;
+        var distMm = distPt * ptToMm;
+        var distCm = distMm / 10.0;
+        var areaCm2 = (dxMm * dyMm) / 100.0;
+        var angleDeg = Math.atan2(-(y2 - y1), x2 - x1) * (180 / Math.PI);
+        if (angleDeg < 0) angleDeg += 360;
+
+        function fmt(n, digits) {
+            return Number(n || 0).toFixed(digits).replace('.', ',');
+        }
+
+        return {
+            dxPt: dxPt,
+            dyPt: dyPt,
+            distPt: distPt,
+            dxMm: dxMm,
+            dyMm: dyMm,
+            distMm: distMm,
+            distCm: distCm,
+            areaCm2: areaCm2,
+            angleDeg: angleDeg,
+            distMmStr: fmt(distMm, 1),
+            distCmStr: fmt(distCm, 2),
+            distPtStr: fmt(distPt, 1),
+            dxMmStr: fmt(dxMm, 1),
+            dyMmStr: fmt(dyMm, 1),
+            areaCm2Str: fmt(areaCm2, 2),
+            angleStr: fmt(angleDeg, 1)
+        };
     }
 
     function getCanvasCoords(e) {
@@ -1540,6 +1659,20 @@
                     strokeWidth: strokeWidth,
                     points: [{ x: pt.x, y: pt.y }]
                 };
+            } else if (state.activeTool === 'measure') {
+                state.currentDraftAnnotation = {
+                    type: 'measure',
+                    x1: pt.x,
+                    y1: pt.y,
+                    x2: pt.x,
+                    y2: pt.y,
+                    x: pt.x,
+                    y: pt.y,
+                    w: 1,
+                    h: 1,
+                    color: '#0284c7',
+                    strokeWidth: 2
+                };
             } else {
                 state.currentDraftAnnotation = {
                     type: state.activeTool,
@@ -1572,6 +1705,11 @@
                             ann.points[i].x += dx;
                             ann.points[i].y += dy;
                         }
+                    } else if (ann.type === 'measure') {
+                        ann.x1 = (ann.x1 || 0) + dx;
+                        ann.y1 = (ann.y1 || 0) + dy;
+                        ann.x2 = (ann.x2 || 0) + dx;
+                        ann.y2 = (ann.y2 || 0) + dy;
                     }
                     doc.modified = true;
                     redrawAnnotationOverlay();
@@ -1582,6 +1720,29 @@
             if (state.dragMode === 'draw' && state.currentDraftAnnotation) {
                 if (state.currentDraftAnnotation.type === 'pen') {
                     state.currentDraftAnnotation.points.push({ x: pt.x, y: pt.y });
+                } else if (state.currentDraftAnnotation.type === 'measure') {
+                    var tx2 = pt.x;
+                    var ty2 = pt.y;
+                    if (e.shiftKey) {
+                        var sdx = tx2 - state.dragStart.x;
+                        var sdy = ty2 - state.dragStart.y;
+                        var sAngle = Math.atan2(sdy, sdx);
+                        var snapAngle = Math.round(sAngle / (Math.PI / 4)) * (Math.PI / 4);
+                        var sLen = Math.sqrt(sdx * sdx + sdy * sdy);
+                        tx2 = state.dragStart.x + Math.cos(snapAngle) * sLen;
+                        ty2 = state.dragStart.y + Math.sin(snapAngle) * sLen;
+                    }
+                    state.currentDraftAnnotation.x1 = state.dragStart.x;
+                    state.currentDraftAnnotation.y1 = state.dragStart.y;
+                    state.currentDraftAnnotation.x2 = tx2;
+                    state.currentDraftAnnotation.y2 = ty2;
+                    state.currentDraftAnnotation.x = Math.min(state.dragStart.x, tx2);
+                    state.currentDraftAnnotation.y = Math.min(state.dragStart.y, ty2);
+                    state.currentDraftAnnotation.w = Math.max(14, Math.abs(tx2 - state.dragStart.x));
+                    state.currentDraftAnnotation.h = Math.max(14, Math.abs(ty2 - state.dragStart.y));
+
+                    var liveM = computePdfMeasurement(state.dragStart.x, state.dragStart.y, tx2, ty2);
+                    setStatus('📏 Messung: ' + liveM.distMmStr + ' mm (' + liveM.distCmStr + ' cm | ' + liveM.distPtStr + ' pt) | ΔX: ' + liveM.dxMmStr + ' mm × ΔY: ' + liveM.dyMmStr + ' mm | Fläche: ' + liveM.areaCm2Str + ' cm² | Winkel: ' + liveM.angleStr + '°');
                 } else {
                     state.currentDraftAnnotation.x = Math.min(state.dragStart.x, pt.x);
                     state.currentDraftAnnotation.y = Math.min(state.dragStart.y, pt.y);
@@ -1601,6 +1762,23 @@
                 var draft = state.currentDraftAnnotation;
                 state.currentDraftAnnotation = null;
                 var list = getPageAnnotations(doc, doc.currentPage);
+
+                if (draft.type === 'measure') {
+                    var mDone = computePdfMeasurement(draft.x1, draft.y1, draft.x2, draft.y2);
+                    if (mDone.distPt < 3) {
+                        redrawAnnotationOverlay();
+                        state.dragMode = null;
+                        return;
+                    }
+                    list.push(draft);
+                    state.selectedAnnotationIndex = list.length - 1;
+                    doc.modified = true;
+                    renderTabsBar();
+                    redrawAnnotationOverlay();
+                    showToast('📏 Gemessen: ' + mDone.distMmStr + ' mm (' + mDone.distCmStr + ' cm | ' + mDone.distPtStr + ' pt) • ΔX: ' + mDone.dxMmStr + ' × ΔY: ' + mDone.dyMmStr + ' mm', 'success');
+                    state.dragMode = null;
+                    return;
+                }
 
                 // For 'strikethrough': if user single-clicked (without dragging), snap to the clicked PDF text line!
                 if (draft.type === 'strikethrough' && (draft.w || 0) < 6 && (draft.h || 0) < 6) {
@@ -1799,6 +1977,32 @@
                         height: rRect.height,
                         borderColor: pdfColor,
                         borderWidth: ann.strokeWidth || 3
+                    });
+                } else if (ann.type === 'measure') {
+                    var mx1 = ann.x1 !== undefined ? ann.x1 : ann.x;
+                    var my1 = ann.y1 !== undefined ? ann.y1 : ann.y;
+                    var mx2 = ann.x2 !== undefined ? ann.x2 : (ann.x + (ann.w || 60));
+                    var my2 = ann.y2 !== undefined ? ann.y2 : (ann.y + (ann.h || 0));
+                    var mStartPt = baseVp.convertToPdfPoint(mx1, my1);
+                    var mEndPt = baseVp.convertToPdfPoint(mx2, my2);
+                    var mRgb = hexToRgbNormalized(ann.color || '#0284c7');
+                    var mPdfCol = PDFLib.rgb(mRgb.r, mRgb.g, mRgb.b);
+                    page.drawLine({
+                        start: { x: mStartPt[0], y: mStartPt[1] },
+                        end: { x: mEndPt[0], y: mEndPt[1] },
+                        thickness: 1.8,
+                        color: mPdfCol
+                    });
+                    var mInfoBake = computePdfMeasurement(mx1, my1, mx2, my2);
+                    var mLabelTxt = sanitizeWinAnsiText(mInfoBake.distMmStr + ' mm (' + mInfoBake.distCmStr + ' cm)');
+                    var mMidPt = baseVp.convertToPdfPoint((mx1 + mx2) / 2, (my1 + my2) / 2 - 4);
+                    page.drawText(mLabelTxt, {
+                        x: mMidPt[0],
+                        y: mMidPt[1],
+                        size: 9,
+                        font: helveticaFont,
+                        color: mPdfCol,
+                        rotate: textRot
                     });
                 } else if (ann.type === 'stamp') {
                     var sw = ann.w || 150;
@@ -9995,6 +10199,9 @@
             case 'toggle-contrast-overlay':
                 await toggleContrastCanvasOverlay();
                 break;
+            case 'open-table-extract-modal':
+                await openTableExtractorModal();
+                break;
             case 'open-crop-modal':
                 if (!doc) await createNewBlankPdfTab();
                 openModal('modalCrop');
@@ -13928,6 +14135,351 @@
     }
 
     // =========================================================================
+    // 11. Intelligenter Tabellen-Extraktor (PDF-Tabelle -> Excel / CSV / TSV)
+    // =========================================================================
+    var extractedTableRowsCache = [];
+
+    async function extractFineCellsFromPage(page, baseViewport) {
+        var tc = await page.getTextContent();
+        var items = (tc && tc.items) ? tc.items : [];
+        var raw = [];
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            if (!it || typeof it.str !== 'string' || it.str.trim() === '') continue;
+            var tr = it.transform || [12, 0, 0, 12, 0, 0];
+            var fSize = Math.sqrt(tr[0] * tr[0] + tr[1] * tr[1]) || Math.sqrt(tr[2] * tr[2] + tr[3] * tr[3]) || it.height || 11;
+            fSize = Math.max(7, Math.min(72, Math.round(fSize * 10) / 10));
+            var vpPt = baseViewport.convertToViewportPoint(tr[4], tr[5]);
+            var vx = vpPt[0];
+            var vy = vpPt[1];
+            var topY = vy - (fSize * 0.88);
+            var w = (it.width && it.width > 0) ? it.width : (it.str.length * fSize * 0.52);
+            var h = Math.max(fSize * 1.2, (it.height || fSize) * 1.15);
+            raw.push({
+                text: it.str.trim(),
+                x: vx,
+                y: topY,
+                w: w,
+                h: h,
+                fontSize: fSize
+            });
+        }
+
+        // Sort top-to-bottom, then left-to-right
+        raw.sort(function (a, b) {
+            var tol = Math.max(a.fontSize, b.fontSize) * 0.45;
+            if (Math.abs(a.y - b.y) > tol) return a.y - b.y;
+            return a.x - b.x;
+        });
+
+        // Merge only tightly adjacent word tokens within the SAME cell (gap <= fontSize * 0.72)
+        // so separate table columns remain separate cell objects!
+        var cells = [];
+        for (var j = 0; j < raw.length; j++) {
+            var cur = raw[j];
+            if (cells.length > 0) {
+                var prev = cells[cells.length - 1];
+                var sameLine = Math.abs(cur.y - prev.y) <= Math.max(prev.fontSize, cur.fontSize) * 0.48;
+                var gap = cur.x - (prev.x + prev.w);
+                var maxIntraCellGap = Math.max(7.5, Math.max(prev.fontSize, cur.fontSize) * 0.72);
+                if (sameLine && gap >= -4 && gap <= maxIntraCellGap) {
+                    var needsSpace = gap > (prev.fontSize * 0.14) && prev.text.slice(-1) !== ' ' && cur.text.charAt(0) !== ' ';
+                    prev.text = prev.text + (needsSpace ? ' ' : '') + cur.text;
+                    var rightEdge = Math.max(prev.x + prev.w, cur.x + cur.w);
+                    prev.x = Math.min(prev.x, cur.x);
+                    prev.y = Math.min(prev.y, cur.y);
+                    prev.w = rightEdge - prev.x;
+                    prev.h = Math.max(prev.h, cur.h);
+                    continue;
+                }
+            }
+            cells.push({
+                text: cur.text,
+                x: cur.x,
+                y: cur.y,
+                w: cur.w,
+                h: cur.h,
+                fontSize: cur.fontSize
+            });
+        }
+        return cells;
+    }
+
+    async function extractStructuredTableFromPdf() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        var scopeEl = document.getElementById('tableExtractScope');
+        var colTolEl = document.getElementById('tableExtractColTolerance');
+        var multiColEl = document.getElementById('chkTableOnlyMultiCol');
+
+        var scope = scopeEl ? scopeEl.value : 'current';
+        var colTolerance = colTolEl ? (parseFloat(colTolEl.value) || 24) : 24;
+        var onlyMultiCol = multiColEl ? !!multiColEl.checked : true;
+
+        try {
+            var pdfJsDoc = await loadPdfJsDocument(doc.bytes);
+            var startPage = (scope === 'all') ? 0 : doc.currentPage;
+            var endPage = (scope === 'all') ? (pdfJsDoc.numPages - 1) : doc.currentPage;
+
+            var allRawRows = [];
+            for (var p = startPage; p <= endPage; p++) {
+                var page = await pdfJsDoc.getPage(p + 1);
+                var baseVp = page.getViewport({ scale: 1.0 });
+                var pageCells = await extractFineCellsFromPage(page, baseVp);
+
+                // Group pageCells into horizontal rows by Y coordinate
+                var pageRows = [];
+                for (var c = 0; c < pageCells.length; c++) {
+                    var cell = pageCells[c];
+                    var placed = false;
+                    for (var r = pageRows.length - 1; r >= 0; r--) {
+                        var rowObj = pageRows[r];
+                        var rowTol = Math.max(5.5, Math.max(rowObj.avgFontSize, cell.fontSize) * 0.55);
+                        if (Math.abs(cell.y - rowObj.y) <= rowTol) {
+                            rowObj.cells.push(cell);
+                            rowObj.y = (rowObj.y * (rowObj.cells.length - 1) + cell.y) / rowObj.cells.length;
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if (!placed) {
+                        pageRows.push({
+                            pageIndex: p,
+                            y: cell.y,
+                            avgFontSize: cell.fontSize,
+                            cells: [cell]
+                        });
+                    }
+                }
+
+                pageRows.sort(function (a, b) { return a.y - b.y; });
+                for (var pr = 0; pr < pageRows.length; pr++) {
+                    pageRows[pr].cells.sort(function (a, b) { return a.x - b.x; });
+                    allRawRows.push(pageRows[pr]);
+                }
+            }
+
+            // Filter rows if onlyMultiCol is checked (fall back to all rows if no multi-col rows exist)
+            var candidateRows = onlyMultiCol
+                ? allRawRows.filter(function (r) { return r.cells.length >= 2; })
+                : allRawRows;
+            if (candidateRows.length === 0 && allRawRows.length > 0) {
+                candidateRows = allRawRows;
+            }
+
+            // Discover global vertical column X anchors by clustering cell left-X coordinates
+            var colAnchors = [];
+            for (var ri = 0; ri < candidateRows.length; ri++) {
+                var rCells = candidateRows[ri].cells;
+                for (var ci = 0; ci < rCells.length; ci++) {
+                    var cx = rCells[ci].x;
+                    var bestAnchor = -1;
+                    var bestDist = colTolerance + 1;
+                    for (var ai = 0; ai < colAnchors.length; ai++) {
+                        var d = Math.abs(cx - colAnchors[ai].x);
+                        if (d <= colTolerance && d < bestDist) {
+                            bestDist = d;
+                            bestAnchor = ai;
+                        }
+                    }
+                    if (bestAnchor !== -1) {
+                        var anc = colAnchors[bestAnchor];
+                        anc.x = (anc.x * anc.count + cx) / (anc.count + 1);
+                        anc.count++;
+                    } else {
+                        colAnchors.push({ x: cx, count: 1 });
+                    }
+                }
+            }
+
+            colAnchors.sort(function (a, b) { return a.x - b.x; });
+
+            // Merge anchors that drifted closer than colTolerance * 0.75
+            var mergedAnchors = [];
+            for (var ma = 0; ma < colAnchors.length; ma++) {
+                if (mergedAnchors.length > 0 && Math.abs(colAnchors[ma].x - mergedAnchors[mergedAnchors.length - 1].x) <= colTolerance * 0.75) {
+                    var prevA = mergedAnchors[mergedAnchors.length - 1];
+                    prevA.x = (prevA.x * prevA.count + colAnchors[ma].x * colAnchors[ma].count) / (prevA.count + colAnchors[ma].count);
+                    prevA.count += colAnchors[ma].count;
+                } else {
+                    mergedAnchors.push({ x: colAnchors[ma].x, count: colAnchors[ma].count });
+                }
+            }
+
+            var numCols = Math.max(1, mergedAnchors.length);
+            var matrix = [];
+            for (var mr = 0; mr < candidateRows.length; mr++) {
+                var rowArr = new Array(numCols);
+                for (var k = 0; k < numCols; k++) rowArr[k] = '';
+                var rowCells = candidateRows[mr].cells;
+                for (var rc = 0; rc < rowCells.length; rc++) {
+                    var item = rowCells[rc];
+                    var bestCol = 0;
+                    var minDiff = Infinity;
+                    for (var colIdx = 0; colIdx < mergedAnchors.length; colIdx++) {
+                        var diff = Math.abs(item.x - mergedAnchors[colIdx].x);
+                        if (diff < minDiff) {
+                            minDiff = diff;
+                            bestCol = colIdx;
+                        }
+                    }
+                    if (rowArr[bestCol] !== '') {
+                        rowArr[bestCol] += ' ' + item.text;
+                    } else {
+                        rowArr[bestCol] = item.text;
+                    }
+                }
+                matrix.push(rowArr);
+            }
+
+            // Remove completely empty columns
+            if (matrix.length > 0 && numCols > 1) {
+                var nonEmptyCols = [];
+                for (var col = 0; col < numCols; col++) {
+                    var hasVal = false;
+                    for (var rIdx = 0; rIdx < matrix.length; rIdx++) {
+                        if (matrix[rIdx][col] && matrix[rIdx][col].trim() !== '') {
+                            hasVal = true;
+                            break;
+                        }
+                    }
+                    if (hasVal) nonEmptyCols.push(col);
+                }
+                matrix = matrix.map(function (row) {
+                    return nonEmptyCols.map(function (cIdx) { return row[cIdx] || ''; });
+                });
+            }
+
+            extractedTableRowsCache = matrix;
+            renderTableExtractorPreviewUI();
+        } catch (err) {
+            console.error(err);
+            showToast('Fehler bei der Tabellenerkennung: ' + err.message, 'error');
+        }
+    }
+
+    function renderTableExtractorPreviewUI() {
+        var box = document.getElementById('tableExtractorPreviewBox');
+        var pill = document.getElementById('tableExtractorStatsPill');
+        var rows = extractedTableRowsCache || [];
+        var numRows = rows.length;
+        var numCols = numRows > 0 ? (rows[0].length || 0) : 0;
+
+        if (pill) {
+            pill.textContent = numRows + (numRows === 1 ? ' Zeile' : ' Zeilen') + ' × ' + numCols + (numCols === 1 ? ' Spalte' : ' Spalten');
+        }
+        if (!box) return;
+
+        if (numRows === 0 || numCols === 0) {
+            box.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-secondary);font-size:12.5px;">Keine mehrspaltige Tabelle auf dieser Seite gefunden. Tipp: Deaktivieren Sie oben den Haken <strong>„Nur mehrspaltige Zeilen“</strong> oder führen Sie bei Scans zuerst die <strong>🔎 Sandwich-OCR</strong> aus.</div>';
+            return;
+        }
+
+        var html = '<table id="extractedEditableTable" style="width:100%;border-collapse:collapse;font-size:12px;">';
+        html += '<thead><tr style="background:var(--bg-input);border-bottom:2px solid var(--border-strong);">';
+        html += '<th style="padding:6px 8px;text-align:center;color:var(--text-muted);width:36px;border-right:1px solid var(--border-subtle);">#</th>';
+        for (var c = 0; c < numCols; c++) {
+            var colLetter = String.fromCharCode(65 + (c % 26));
+            html += '<th style="padding:6px 10px;text-align:left;color:var(--accent-primary);font-weight:700;border-right:1px solid var(--border-subtle);">Spalte ' + colLetter + '</th>';
+        }
+        html += '</tr></thead><tbody>';
+
+        for (var r = 0; r < numRows; r++) {
+            var isHeaderLike = (r === 0);
+            html += '<tr data-row-idx="' + r + '" style="border-bottom:1px solid var(--border-subtle);background:' + (r % 2 === 0 ? 'transparent' : 'rgba(148,163,184,0.04)') + ';">';
+            html += '<td style="padding:5px 6px;text-align:center;color:var(--text-muted);font-size:11px;border-right:1px solid var(--border-subtle);user-select:none;">' + (r + 1) + '</td>';
+            for (var col = 0; col < numCols; col++) {
+                var val = rows[r][col] || '';
+                html += '<td contenteditable="true" data-col-idx="' + col + '" style="padding:6px 10px;border-right:1px solid var(--border-subtle);color:var(--text-primary);' + (isHeaderLike ? 'font-weight:700;' : '') + 'outline:none;min-width:70px;">' + escapeHtml(val) + '</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        box.innerHTML = html;
+    }
+
+    function readCurrentTableMatrixFromUI() {
+        var tbl = document.getElementById('extractedEditableTable');
+        if (!tbl) return extractedTableRowsCache || [];
+        var trs = tbl.querySelectorAll('tbody tr');
+        var out = [];
+        for (var i = 0; i < trs.length; i++) {
+            var tds = trs[i].querySelectorAll('td[data-col-idx]');
+            var row = [];
+            for (var j = 0; j < tds.length; j++) {
+                row.push((tds[j].textContent || '').replace(/\r?\n/g, ' ').trim());
+            }
+            out.push(row);
+        }
+        return out;
+    }
+
+    async function copyExtractedTableForExcel() {
+        var matrix = readCurrentTableMatrixFromUI();
+        if (!matrix || matrix.length === 0) {
+            showToast('Keine Tabellendaten zum Kopieren vorhanden.', 'error');
+            return;
+        }
+        var tsvLines = matrix.map(function (row) {
+            return row.map(function (cell) {
+                return String(cell || '').replace(/\t/g, ' ');
+            }).join('\t');
+        });
+        var tsvText = tsvLines.join('\r\n');
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(tsvText);
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = tsvText;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
+            showToast('Tabelle (' + matrix.length + ' Zeilen) für Excel in die Zwischenablage kopiert — einfach mit Strg+V in Excel einfügen!', 'success');
+        } catch (err) {
+            showToast('Kopieren fehlgeschlagen: ' + err.message, 'error');
+        }
+    }
+
+    function downloadExtractedTableCsv() {
+        var doc = getActiveDoc();
+        var matrix = readCurrentTableMatrixFromUI();
+        if (!matrix || matrix.length === 0) {
+            showToast('Keine Tabellendaten zum Exportieren vorhanden.', 'error');
+            return;
+        }
+        var csvLines = matrix.map(function (row) {
+            return row.map(function (cell) {
+                var s = String(cell || '');
+                if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1) {
+                    return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            }).join(';');
+        });
+        // Prepend UTF-8 BOM (\uFEFF) so Microsoft Excel on Windows opens German umlauts and semicolon columns immediately
+        var csvContent = '\uFEFF' + csvLines.join('\r\n');
+        var baseName = doc ? doc.name.replace(/\.pdf$/i, '') : 'PDF-Tabelle';
+        downloadBlob(csvContent, baseName + '_Tabelle.csv', 'text/csv;charset=utf-8');
+        trackUsageEvent('table_exported_csv');
+        showToast('Excel-CSV-Datei (' + matrix.length + ' Zeilen) erfolgreich heruntergeladen!', 'success');
+    }
+
+    async function openTableExtractorModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            await createNewBlankPdfTab();
+        }
+        openModal('modalTableExtractor');
+        await extractStructuredTableFromPdf();
+    }
+
+    // =========================================================================
     // Event Listeners Setup
     // =========================================================================
     function initEventListeners() {
@@ -14778,6 +15330,26 @@
             btnAutoFixAllLowContrast.addEventListener('click', function () {
                 fixAllLowContrastBlocks();
             });
+        }
+
+        // v1.9.0: Intelligent Table Extractor (PDF -> Excel / CSV) Listeners
+        var btnRunTableExtract = document.getElementById('btnRunTableExtract');
+        if (btnRunTableExtract) {
+            btnRunTableExtract.addEventListener('click', extractStructuredTableFromPdf);
+        }
+        ['tableExtractScope', 'tableExtractColTolerance', 'chkTableOnlyMultiCol'].forEach(function (id) {
+            var ctrl = document.getElementById(id);
+            if (ctrl) {
+                ctrl.addEventListener('change', extractStructuredTableFromPdf);
+            }
+        });
+        var btnCopyTableForExcel = document.getElementById('btnCopyTableForExcel');
+        if (btnCopyTableForExcel) {
+            btnCopyTableForExcel.addEventListener('click', copyExtractedTableForExcel);
+        }
+        var btnDownloadTableCsv = document.getElementById('btnDownloadTableCsv');
+        if (btnDownloadTableCsv) {
+            btnDownloadTableCsv.addEventListener('click', downloadExtractedTableCsv);
         }
 
         // Keyboard shortcuts (Desktop feel)
