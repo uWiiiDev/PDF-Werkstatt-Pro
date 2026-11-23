@@ -654,8 +654,16 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">🔊👆</span>
                         <span class="rb-label">Klick-Vorlesen</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-contrast-modal" title="Automatischer BITV 2.0 / WCAG 2.1 Farbkontrast-Prüfer für Textblöcke auf farbigem Hintergrund">
+                        <span class="rb-icon">🎨</span>
+                        <span class="rb-label">Farbkontrast</span>
+                    </button>
+                    <button type="button" class="ribbon-btn" id="btnRibbonContrastOverlay" data-cmd="toggle-contrast-overlay" title="WCAG-Farbkontrast-Badges (z. B. 12.4:1 AAA / 2.8:1 Fehler) direkt auf der PDF-Seite ein-/ausblenden">
+                        <span class="rb-icon">👁️</span>
+                        <span class="rb-label">Kontrast-Badges</span>
+                    </button>
                 </div>
-                <div class="ribbon-section-title">Prüfung, Auto-Reparatur &amp; Vorlesen</div>
+                <div class="ribbon-section-title">Prüfung, Kontrast, Auto-Reparatur &amp; Vorlesen</div>
             </div>
 
             <div class="ribbon-sep"></div>
@@ -1046,9 +1054,12 @@ $serverInfo = pdfstudio_get_server_info();
                 <p style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px;line-height:1.4;">
                     Prüft Dokumenttitel, Sprache (<code>/Lang</code>), Tagged-PDF-Struktur (<code>/StructTreeRoot</code>), <code>DisplayDocTitle</code> &amp; Textzugänglichkeit.
                 </p>
-                <div style="display:flex;gap:6px;">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button type="button" class="tool-btn btn-primary" data-cmd="open-a11y-modal" style="flex:1;">
                         ♿ Prüfbericht &amp; Auto-Fix
+                    </button>
+                    <button type="button" class="tool-btn" data-cmd="open-contrast-modal" style="flex:1;" title="BITV / WCAG 2.1 Farbkontrast-Prüfer öffnen">
+                        🎨 Farbkontrast
                     </button>
                 </div>
             </div>
@@ -1321,6 +1332,7 @@ $serverInfo = pdfstudio_get_server_info();
         <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button type="button" class="tool-btn" id="btnReRunA11yAudit">↻ Erneut prüfen</button>
+                <button type="button" class="tool-btn" data-cmd="open-contrast-modal" title="Pixelgenaue BITV / WCAG 2.1 Farbkontrast-Analyse aller Textblöcke starten">🎨 Farbkontrast-Scanner</button>
                 <button type="button" class="tool-btn" id="btnExportA11yReportPdf">📄 Prüfbericht als PDF öffnen</button>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -2502,6 +2514,79 @@ $serverInfo = pdfstudio_get_server_info();
         <div class="modal-footer" style="justify-content:space-between;">
             <span style="font-size:11.5px;color:var(--text-muted);">100 % lokaler In-Memory-Test — Ihre geöffneten Dokumente bleiben unverändert.</span>
             <button type="button" class="tool-btn" data-close-modal="modalSelfTest">Schließen</button>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================
+     MODAL 10: BITV 2.0 / WCAG 2.1 AUTOMATISCHER FARBKONTRAST-PRÜFER
+     ====================================================================== -->
+<div class="modal-backdrop" id="modalContrastChecker">
+    <div class="modal-window" style="max-width:860px;">
+        <div class="modal-header">
+            <span>🎨 Automatischer BITV 2.0 / WCAG 2.1 Farbkontrast-Prüfer (Pixel-Analyse auf dem Dokument)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalContrastChecker">✕</button>
+        </div>
+        <div class="modal-body" style="max-height:78vh;overflow-y:auto;">
+            <!-- Summary Banner -->
+            <div id="contrastSummaryBanner" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+                <div style="flex:1;min-width:250px;">
+                    <div id="contrastSummaryTitle" style="font-size:14px;font-weight:800;color:var(--text-primary);margin-bottom:3px;">
+                        BITV 2.0 / WCAG 2.1 Kontrast-Analyse (Kriterium 1.4.3 AA &amp; 1.4.6 AAA)
+                    </div>
+                    <div id="contrastSummarySub" style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;">
+                        Misst auf dem gerenderten PDF-Canvas für jeden Textblock die tatsächliche Schriftfarbe gegen den lokalen Hintergrund (inkl. farbiger Infokästen). Mindestkontrast: <strong>4,5 : 1</strong> (Normaltext) bzw. <strong>3,0 : 1</strong> (Großtext ab 18 pt / 14 pt fett).
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span id="contrastPassBadge" style="font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:rgba(16,185,129,0.14);border:1px solid rgba(16,185,129,0.35);color:#10b981;">
+                        AA/AAA: —
+                    </span>
+                    <span id="contrastFailBadge" style="font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:rgba(239,68,68,0.14);border:1px solid rgba(239,68,68,0.35);color:#ef4444;">
+                        Kritisch: —
+                    </span>
+                    <span id="contrastScorePill" style="font-size:16px;font-weight:800;padding:4px 12px;border-radius:999px;background:var(--accent-soft);color:var(--accent-primary);">
+                        — %
+                    </span>
+                </div>
+            </div>
+
+            <!-- Controls & Overlay Toggle Toolbar -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="tool-btn btn-primary" id="btnScanContrastCurrentPage">
+                        🔍 Aktuelle Seite prüfen
+                    </button>
+                    <button type="button" class="tool-btn" id="btnScanContrastAllPages">
+                        📑 Alle Seiten prüfen
+                    </button>
+                    <select id="contrastFilterSelect" class="form-control" style="width:auto;height:30px;font-size:12px;padding:0 8px;">
+                        <option value="all">Alle Textblöcke anzeigen</option>
+                        <option value="fail">⚠️ Nur kritische Kontraste (&lt; AA)</option>
+                        <option value="aa">✔ Nur bestandene (AA &amp; AAA)</option>
+                    </select>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text-primary);cursor:pointer;">
+                        <input type="checkbox" id="chkContrastCanvasOverlay">
+                        <span>👁️ Kontrast-Badges direkt im PDF anzeigen</span>
+                    </label>
+                    <button type="button" class="tool-btn btn-success" id="btnAutoFixAllLowContrast" title="Erhöht bei allen als kritisch erkannten Textblöcken der geprüften Seiten automatisch den Kontrast auf AAA-Niveau">
+                        🛠️ Schwache Kontraste automatisch korrigieren
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results Table / List -->
+            <div id="contrastResultsContainer" style="display:flex;flex-direction:column;gap:6px;max-height:410px;overflow-y:auto;padding-right:4px;">
+                <div style="padding:18px;text-align:center;color:var(--text-secondary);font-size:12.5px;background:var(--bg-card);border:1px dashed var(--border-subtle);border-radius:8px;">
+                    Klicken Sie auf <strong>„🔍 Aktuelle Seite prüfen“</strong> oder <strong>„📑 Alle Seiten prüfen“</strong>, um alle Textstellen pixelgenau auf ihren WCAG-Farbkontrast zu untersuchen.
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span style="font-size:11.5px;color:var(--text-muted);">Tipp: Klicken Sie auf eine Zeile in der Ergebnisliste, um direkt zur Textstelle im PDF zu springen.</span>
+            <button type="button" class="tool-btn" data-close-modal="modalContrastChecker">Schließen</button>
         </div>
     </div>
 </div>

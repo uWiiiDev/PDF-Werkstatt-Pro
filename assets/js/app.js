@@ -29,6 +29,10 @@
         ttsPaused: false,          // Text-to-Speech paused flag
         ttsActiveBlockIndex: -1,   // Index in currentPageTextBlocks currently being spoken
         ttsSessionId: 0,           // Monotonic counter to cancel stale TTS callbacks
+        contrastOverlayEnabled: false, // Live WCAG contrast badges on PDF canvas
+        contrastFilterMode: 'all',     // 'all' | 'fail' | 'aa'
+        contrastResults: [],           // Computed WCAG contrast blocks
+        contrastActiveHighlight: null, // Highlighted block jumped to from contrast table
         isDrawing: false,
         dragMode: null,        // 'draw' | 'move-ann'
         dragStart: { x: 0, y: 0 },
@@ -763,6 +767,9 @@
             if (el.zoomSlider) el.zoomSlider.value = Math.round(state.zoom * 100);
             updateStatusBarInfo();
             highlightActiveThumbnail();
+            if (state.contrastOverlayEnabled) {
+                analyzeCurrentPageContrast(true);
+            }
             redrawAnnotationOverlay();
             if (!state.isRestoringSession) {
                 scheduleLocalSessionSave(600);
@@ -977,6 +984,66 @@
             ctx.restore();
         }
 
+        // BITV 2.0 / WCAG 2.1 Live Contrast Overlay Badges on Canvas
+        if (state.contrastOverlayEnabled && state.contrastResults && state.contrastResults.length > 0) {
+            ctx.save();
+            for (var cIdx = 0; cIdx < state.contrastResults.length; cIdx++) {
+                var cr = state.contrastResults[cIdx];
+                if (cr.pageIndex !== doc.currentPage) continue;
+                if (state.contrastFilterMode === 'fail' && cr.level !== 'FAIL') continue;
+                if (state.contrastFilterMode === 'aa' && cr.level === 'FAIL') continue;
+
+                var cx = Math.max(0, (cr.x - 2) * scale);
+                var cy = Math.max(0, (cr.y - 1.5) * scale);
+                var cw = (cr.w + 4) * scale;
+                var ch = (cr.h + 3) * scale;
+
+                var isFail = (cr.level === 'FAIL');
+                var isAaa = (cr.level === 'AAA');
+                var borderCol = isFail ? '#ef4444' : (isAaa ? '#10b981' : '#3b82f6');
+                var fillCol = isFail ? 'rgba(239, 68, 68, 0.16)' : (isAaa ? 'rgba(16, 185, 129, 0.08)' : 'rgba(59, 130, 246, 0.09)');
+
+                ctx.fillStyle = fillCol;
+                ctx.strokeStyle = borderCol;
+                ctx.lineWidth = isFail ? 2 : 1.3;
+                ctx.setLineDash([]);
+                ctx.fillRect(cx, cy, cw, ch);
+                ctx.strokeRect(cx, cy, cw, ch);
+
+                var badgeTxt = (isFail ? '⚠ ' : '✓ ') + cr.ratio.toFixed(1) + ':1 ' + (isFail ? '<AA' : cr.level);
+                var badgeFontPx = Math.max(9, Math.round(9.5 * scale));
+                ctx.font = '700 ' + badgeFontPx + 'px sans-serif';
+                var badgeW = ctx.measureText(badgeTxt).width + 8 * scale;
+                var badgeH = Math.max(13, Math.round(13.5 * scale));
+                var badgeX = Math.min(Math.max(2, cx + cw - badgeW), el.annCanvas.width - badgeW - 2);
+                var badgeY = Math.max(1, cy - badgeH);
+
+                ctx.fillStyle = borderCol;
+                ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+                ctx.fillStyle = '#ffffff';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(badgeTxt, badgeX + 4 * scale, badgeY + badgeH / 2);
+            }
+            ctx.restore();
+        }
+
+        // Focused contrast block highlight when user clicks a row in the Contrast Checker modal
+        if (state.contrastActiveHighlight && state.contrastActiveHighlight.pageIndex === doc.currentPage) {
+            ctx.save();
+            var hl = state.contrastActiveHighlight;
+            var hx = Math.max(0, (hl.x - 4) * scale);
+            var hy = Math.max(0, (hl.y - 3) * scale);
+            var hw = (hl.w + 8) * scale;
+            var hh = (hl.h + 6) * scale;
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.22)';
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([5, 3]);
+            ctx.fillRect(hx, hy, hw, hh);
+            ctx.strokeRect(hx, hy, hw, hh);
+            ctx.restore();
+        }
+
         for (var i = 0; i < list.length; i++) {
             drawSingleAnnotation(ctx, list[i], scale, i === state.selectedAnnotationIndex);
         }
@@ -997,8 +1064,8 @@
             var oy = (ann.origY !== undefined ? ann.origY : ann.y) * scale;
             var ow = (ann.origW !== undefined ? ann.origW : (ann.w || 60)) * scale;
             var oh = (ann.origH !== undefined ? ann.origH : (ann.h || 20)) * scale;
-            // Whiteout mask covering original embedded PDF text
-            ctx.fillStyle = '#ffffff';
+            // Background mask covering original embedded PDF text (defaults to #ffffff or matched background color)
+            ctx.fillStyle = ann.bgColor || '#ffffff';
             ctx.fillRect(ox - 1.5 * scale, oy - 1 * scale, ow + 3 * scale, oh + 2 * scale);
 
             var editFontSize = (ann.fontSize || 12) * scale;
@@ -1660,12 +1727,13 @@
                     var ow = ann.origW !== undefined ? ann.origW : (ann.w || 60);
                     var oh = ann.origH !== undefined ? ann.origH : (ann.h || 20);
                     var maskRect = visualRectToRawPdfRect(baseVp, Math.max(0, ox - 1.5), oy - 1, ow + 3, oh + 2);
+                    var maskBgRgb = hexToRgbNormalized(ann.bgColor || '#ffffff');
                     page.drawRectangle({
                         x: maskRect.x,
                         y: maskRect.y,
                         width: maskRect.width,
                         height: maskRect.height,
-                        color: PDFLib.rgb(1, 1, 1)
+                        color: PDFLib.rgb(maskBgRgb.r, maskBgRgb.g, maskBgRgb.b)
                     });
                     if (ann.text && String(ann.text).length > 0) {
                         var efSize = ann.fontSize || 12;
@@ -9921,6 +9989,12 @@
                 if (!doc) await createNewBlankPdfTab();
                 await exportAccessibilityReportPdf();
                 break;
+            case 'open-contrast-modal':
+                await openContrastCheckerModal();
+                break;
+            case 'toggle-contrast-overlay':
+                await toggleContrastCanvasOverlay();
+                break;
             case 'open-crop-modal':
                 if (!doc) await createNewBlankPdfTab();
                 openModal('modalCrop');
@@ -13329,6 +13403,531 @@
     }
 
     // =========================================================================
+    // 10. BITV 2.0 / WCAG 2.1 Automatic Color Contrast Analyzer & Canvas Overlay
+    // =========================================================================
+    function srgbChannelToLinear(c) {
+        var v = Math.max(0, Math.min(255, c)) / 255;
+        return v <= 0.04045 ? (v / 12.92) : Math.pow((v + 0.055) / 1.055, 2.4);
+    }
+
+    function wcagRelativeLuminance(r, g, b) {
+        return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
+    }
+
+    function rgbToHexString(r, g, b) {
+        function toHex(n) {
+            var h = Math.max(0, Math.min(255, Math.round(n))).toString(16);
+            return h.length === 1 ? ('0' + h) : h;
+        }
+        return '#' + toHex(r) + toHex(g) + toHex(b);
+    }
+
+    function hexToRgbBytes(hex) {
+        var clean = String(hex || '#000000').replace('#', '').trim();
+        if (clean.length === 3) {
+            clean = clean.charAt(0) + clean.charAt(0) + clean.charAt(1) + clean.charAt(1) + clean.charAt(2) + clean.charAt(2);
+        }
+        var num = parseInt(clean, 16);
+        if (isNaN(num)) return { r: 0, g: 0, b: 0 };
+        return {
+            r: (num >> 16) & 255,
+            g: (num >> 8) & 255,
+            b: num & 255
+        };
+    }
+
+    function measureBlockContrastFromCanvas(ctx, canvasWidth, canvasHeight, blk, scale, pageIndex, blockIndex, pageAnnotations) {
+        var isLargeText = (blk.fontSize >= 18);
+        var minAa = isLargeText ? 3.0 : 4.5;
+        var minAaa = isLargeText ? 4.5 : 7.0;
+
+        // Check if an edit-text annotation already overrides this text block's colors
+        if (pageAnnotations && pageAnnotations.length > 0) {
+            for (var aIdx = pageAnnotations.length - 1; aIdx >= 0; aIdx--) {
+                var ann = pageAnnotations[aIdx];
+                if (ann && ann.type === 'edit-text') {
+                    var ox = ann.origX !== undefined ? ann.origX : ann.x;
+                    var oy = ann.origY !== undefined ? ann.origY : ann.y;
+                    if (Math.abs(ox - blk.x) <= 8 && Math.abs(oy - blk.y) <= 8) {
+                        var fgRgbObj = hexToRgbBytes(ann.color || '#0f172a');
+                        var bgRgbObj = hexToRgbBytes(ann.bgColor || '#ffffff');
+                        var fgLumAnn = wcagRelativeLuminance(fgRgbObj.r, fgRgbObj.g, fgRgbObj.b);
+                        var bgLumAnn = wcagRelativeLuminance(bgRgbObj.r, bgRgbObj.g, bgRgbObj.b);
+                        var ratioAnn = (Math.max(fgLumAnn, bgLumAnn) + 0.05) / (Math.min(fgLumAnn, bgLumAnn) + 0.05);
+                        ratioAnn = Math.round(ratioAnn * 100) / 100;
+                        return {
+                            pageIndex: pageIndex,
+                            blockIndex: blockIndex,
+                            text: ann.text || blk.text,
+                            x: blk.x,
+                            y: blk.y,
+                            w: blk.w,
+                            h: blk.h,
+                            fontSize: blk.fontSize,
+                            isLargeText: isLargeText,
+                            fgHex: rgbToHexString(fgRgbObj.r, fgRgbObj.g, fgRgbObj.b),
+                            bgHex: rgbToHexString(bgRgbObj.r, bgRgbObj.g, bgRgbObj.b),
+                            fgLum: fgLumAnn,
+                            bgLum: bgLumAnn,
+                            ratio: ratioAnn,
+                            minAa: minAa,
+                            minAaa: minAaa,
+                            level: ratioAnn >= minAaa ? 'AAA' : (ratioAnn >= minAa ? 'AA' : 'FAIL')
+                        };
+                    }
+                }
+            }
+        }
+
+        var px = Math.max(0, Math.floor((blk.x - 3) * scale));
+        var py = Math.max(0, Math.floor((blk.y - 2) * scale));
+        var pw = Math.min(canvasWidth - px, Math.max(4, Math.ceil((blk.w + 6) * scale)));
+        var ph = Math.min(canvasHeight - py, Math.max(4, Math.ceil((blk.h + 4) * scale)));
+
+        if (pw <= 2 || ph <= 2) {
+            return null;
+        }
+
+        var imgData;
+        try {
+            imgData = ctx.getImageData(px, py, pw, ph).data;
+        } catch (e) {
+            return null;
+        }
+
+        // 1. Sample outer perimeter pixels + histogram bins to determine dominant local background color
+        var borderSamples = [];
+        var bins = [[], [], [], [], [], [], [], []];
+        var stepX = pw > 140 ? 2 : 1;
+        var stepY = ph > 45 ? 2 : 1;
+
+        for (var y = 0; y < ph; y += stepY) {
+            for (var x = 0; x < pw; x += stepX) {
+                var idx = (y * pw + x) * 4;
+                var r = imgData[idx];
+                var g = imgData[idx + 1];
+                var b = imgData[idx + 2];
+                var lum = wcagRelativeLuminance(r, g, b);
+                var bIdx = Math.min(7, Math.floor(lum * 8));
+                var sample = { r: r, g: g, b: b, lum: lum };
+                bins[bIdx].push(sample);
+                if (y <= 1 || y >= ph - 2 || x <= 1 || x >= pw - 2) {
+                    borderSamples.push(sample);
+                }
+            }
+        }
+
+        // Choose dominant background cluster
+        var dominantBin = bins[0];
+        for (var bi = 1; bi < 8; bi++) {
+            if (bins[bi].length > dominantBin.length) {
+                dominantBin = bins[bi];
+            }
+        }
+        var bgSource = dominantBin.length > 0 ? dominantBin : borderSamples;
+        if (!bgSource || bgSource.length === 0) return null;
+
+        var bgR = 0, bgG = 0, bgB = 0;
+        for (var s = 0; s < bgSource.length; s++) {
+            bgR += bgSource[s].r;
+            bgG += bgSource[s].g;
+            bgB += bgSource[s].b;
+        }
+        bgR = Math.round(bgR / bgSource.length);
+        bgG = Math.round(bgG / bgSource.length);
+        bgB = Math.round(bgB / bgSource.length);
+        var bgLum = wcagRelativeLuminance(bgR, bgG, bgB);
+
+        // 2. Find core glyph pixels (top 10% furthest from background luminance & RGB)
+        var allSamples = [];
+        for (var k = 0; k < 8; k++) {
+            for (var m = 0; m < bins[k].length; m++) {
+                var sp = bins[k][m];
+                var lumDiff = Math.abs(sp.lum - bgLum);
+                var rgbDiff = (Math.abs(sp.r - bgR) + Math.abs(sp.g - bgG) + Math.abs(sp.b - bgB)) / 765;
+                sp.dist = lumDiff + rgbDiff * 0.35;
+                allSamples.push(sp);
+            }
+        }
+        if (allSamples.length === 0) return null;
+
+        allSamples.sort(function (a, b) { return b.dist - a.dist; });
+        var coreCount = Math.max(3, Math.min(90, Math.floor(allSamples.length * 0.09)));
+        var fgR = 0, fgG = 0, fgB = 0;
+        for (var c = 0; c < coreCount; c++) {
+            fgR += allSamples[c].r;
+            fgG += allSamples[c].g;
+            fgB += allSamples[c].b;
+        }
+        fgR = Math.round(fgR / coreCount);
+        fgG = Math.round(fgG / coreCount);
+        fgB = Math.round(fgB / coreCount);
+        var fgLum = wcagRelativeLuminance(fgR, fgG, fgB);
+
+        var ratio = (Math.max(fgLum, bgLum) + 0.05) / (Math.min(fgLum, bgLum) + 0.05);
+        ratio = Math.round(ratio * 100) / 100;
+
+        var level = ratio >= minAaa ? 'AAA' : (ratio >= minAa ? 'AA' : 'FAIL');
+        return {
+            pageIndex: pageIndex,
+            blockIndex: blockIndex,
+            text: blk.text,
+            x: blk.x,
+            y: blk.y,
+            w: blk.w,
+            h: blk.h,
+            fontSize: blk.fontSize,
+            isLargeText: isLargeText,
+            fgHex: rgbToHexString(fgR, fgG, fgB),
+            bgHex: rgbToHexString(bgR, bgG, bgB),
+            fgLum: fgLum,
+            bgLum: bgLum,
+            ratio: ratio,
+            minAa: minAa,
+            minAaa: minAaa,
+            level: level
+        };
+    }
+
+    async function openContrastCheckerModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            await createNewBlankPdfTab();
+        }
+        if (state.viewMode !== 'editor') {
+            switchView('editor');
+        }
+        openModal('modalContrastChecker');
+        var chk = document.getElementById('chkContrastCanvasOverlay');
+        if (chk) chk.checked = !!state.contrastOverlayEnabled;
+        await analyzeCurrentPageContrast(false);
+    }
+
+    async function toggleContrastCanvasOverlay(forceVal) {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        if (state.viewMode !== 'editor') {
+            switchView('editor');
+        }
+        state.contrastOverlayEnabled = (typeof forceVal === 'boolean') ? forceVal : !state.contrastOverlayEnabled;
+        var chk = document.getElementById('chkContrastCanvasOverlay');
+        if (chk) chk.checked = state.contrastOverlayEnabled;
+        var ribbonBtn = document.getElementById('btnRibbonContrastOverlay');
+        if (ribbonBtn) {
+            if (state.contrastOverlayEnabled) {
+                ribbonBtn.classList.add('active');
+            } else {
+                ribbonBtn.classList.remove('active');
+            }
+        }
+        if (state.contrastOverlayEnabled) {
+            await analyzeCurrentPageContrast(true);
+            showToast('WCAG-Farbkontrast-Badges direkt auf der PDF-Seite eingeblendet!', 'success');
+        } else {
+            state.contrastActiveHighlight = null;
+            showToast('Kontrast-Badges auf der PDF-Seite ausgeblendet.');
+        }
+        redrawAnnotationOverlay();
+    }
+
+    function analyzeCurrentPageContrast(silent) {
+        var doc = getActiveDoc();
+        if (!doc || !el.pdfCanvas || el.pdfCanvas.width === 0) {
+            if (!silent) showToast('Keine gerenderte PDF-Seite zum Prüfen vorhanden.', 'error');
+            return [];
+        }
+        var ctx = el.pdfCanvas.getContext('2d');
+        var blocks = state.currentPageTextBlocks || [];
+        var pageAnns = getPageAnnotations(doc, doc.currentPage);
+        var pageResults = [];
+
+        for (var i = 0; i < blocks.length; i++) {
+            var blk = blocks[i];
+            if (!blk || !blk.text || blk.text.trim() === '') continue;
+            var res = measureBlockContrastFromCanvas(
+                ctx,
+                el.pdfCanvas.width,
+                el.pdfCanvas.height,
+                blk,
+                state.zoom,
+                doc.currentPage,
+                i,
+                pageAnns
+            );
+            if (res) {
+                pageResults.push(res);
+            }
+        }
+
+        // Replace results for current page or store as active list
+        state.contrastResults = pageResults;
+        renderContrastResultsUI();
+        redrawAnnotationOverlay();
+        if (!silent) {
+            var failCnt = pageResults.filter(function (r) { return r.level === 'FAIL'; }).length;
+            setStatus('Farbkontrast-Analyse (Seite ' + (doc.currentPage + 1) + '): ' + pageResults.length + ' Textblöcke geprüft, ' + failCnt + ' kritisch.');
+        }
+        return pageResults;
+    }
+
+    async function analyzeAllPagesContrast() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            return;
+        }
+        var btnAll = document.getElementById('btnScanContrastAllPages');
+        if (btnAll) btnAll.disabled = true;
+
+        try {
+            var pdfJsDoc = await loadPdfJsDocument(doc.bytes);
+            var numPages = pdfJsDoc.numPages;
+            var allResults = [];
+            var scanScale = 1.5;
+            var offCanvas = document.createElement('canvas');
+            var offCtx = offCanvas.getContext('2d');
+
+            for (var p = 0; p < numPages; p++) {
+                var page = await pdfJsDoc.getPage(p + 1);
+                var vp = page.getViewport({ scale: scanScale });
+                var baseVp = page.getViewport({ scale: 1.0 });
+                offCanvas.width = vp.width;
+                offCanvas.height = vp.height;
+                await page.render({ canvasContext: offCtx, viewport: vp }).promise;
+
+                var blocks = await extractPageTextBlocks(page, baseVp);
+                var pageAnns = getPageAnnotations(doc, p);
+                for (var i = 0; i < blocks.length; i++) {
+                    var blk = blocks[i];
+                    if (!blk || !blk.text || blk.text.trim() === '') continue;
+                    var res = measureBlockContrastFromCanvas(
+                        offCtx,
+                        offCanvas.width,
+                        offCanvas.height,
+                        blk,
+                        scanScale,
+                        p,
+                        i,
+                        pageAnns
+                    );
+                    if (res) {
+                        allResults.push(res);
+                    }
+                }
+            }
+
+            state.contrastResults = allResults;
+            renderContrastResultsUI();
+            redrawAnnotationOverlay();
+            var failCnt = allResults.filter(function (r) { return r.level === 'FAIL'; }).length;
+            showToast('Alle ' + numPages + ' Seiten geprüft: ' + allResults.length + ' Textblöcke (' + failCnt + ' kritische Kontraste).', failCnt === 0 ? 'success' : 'error');
+        } catch (err) {
+            console.error(err);
+            showToast('Fehler bei der Mehrseiten-Kontrastanalyse: ' + err.message, 'error');
+        } finally {
+            if (btnAll) btnAll.disabled = false;
+        }
+    }
+
+    function renderContrastResultsUI() {
+        var container = document.getElementById('contrastResultsContainer');
+        var passBadge = document.getElementById('contrastPassBadge');
+        var failBadge = document.getElementById('contrastFailBadge');
+        var scorePill = document.getElementById('contrastScorePill');
+        var sumTitle = document.getElementById('contrastSummaryTitle');
+
+        var all = state.contrastResults || [];
+        var passCount = 0;
+        var aaaCount = 0;
+        var failCount = 0;
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].level === 'FAIL') {
+                failCount++;
+            } else {
+                passCount++;
+                if (all[i].level === 'AAA') aaaCount++;
+            }
+        }
+
+        var pct = all.length > 0 ? Math.round((passCount / all.length) * 100) : 100;
+        if (passBadge) passBadge.textContent = 'AA/AAA: ' + passCount + ' (' + aaaCount + ' AAA)';
+        if (failBadge) failBadge.textContent = 'Kritisch: ' + failCount;
+        if (scorePill) {
+            scorePill.textContent = all.length > 0 ? (pct + ' %') : '— %';
+            scorePill.style.background = failCount === 0 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(239, 68, 68, 0.16)';
+            scorePill.style.color = failCount === 0 ? '#10b981' : '#ef4444';
+        }
+        if (sumTitle && all.length > 0) {
+            sumTitle.textContent = failCount === 0
+                ? ('✔ Alle ' + all.length + ' geprüften Textblöcke erfüllen den BITV 2.0 / WCAG 2.1 AA-Mindestkontrast!')
+                : ('⚠️ ' + failCount + ' von ' + all.length + ' Textblöcken unterschreiten den erforderlichen WCAG-Mindestkontrast');
+        }
+
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (all.length === 0) {
+            container.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-secondary);font-size:12.5px;background:var(--bg-card);border:1px dashed var(--border-subtle);border-radius:8px;">Keine Textblöcke auf der geprüften Seite gefunden. Bei gescannten Dokumenten führen Sie bitte zuerst die <strong>🔎 Sandwich-OCR</strong> durch.</div>';
+            return;
+        }
+
+        var filtered = all.filter(function (item) {
+            if (state.contrastFilterMode === 'fail') return item.level === 'FAIL';
+            if (state.contrastFilterMode === 'aa') return item.level !== 'FAIL';
+            return true;
+        });
+
+        if (filtered.length === 0) {
+            container.innerHTML = '<div style="padding:16px;text-align:center;color:#10b981;font-weight:600;font-size:12.5px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:8px;">✔ Keine Einträge für diesen Filter gefunden (0 kritische Kontraste).</div>';
+            return;
+        }
+
+        filtered.forEach(function (item) {
+            var isFail = item.level === 'FAIL';
+            var isAaa = item.level === 'AAA';
+            var statusColor = isFail ? '#ef4444' : (isAaa ? '#10b981' : '#3b82f6');
+            var statusBg = isFail ? 'rgba(239,68,68,0.14)' : (isAaa ? 'rgba(16,185,129,0.14)' : 'rgba(59,130,246,0.14)');
+            var statusText = isFail
+                ? ('⚠️ ' + item.ratio.toFixed(2) + ' : 1 (< AA ' + item.minAa.toFixed(1) + ':1)')
+                : ('✔ ' + item.ratio.toFixed(2) + ' : 1 (' + item.level + ')');
+
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-radius:7px;background:var(--bg-card);border:1px solid ' + (isFail ? 'rgba(239,68,68,0.45)' : 'var(--border-subtle)') + ';cursor:pointer;transition:background 0.15s ease;';
+            row.innerHTML =
+                '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">' +
+                    '<div title="Schrift ' + escapeHtml(item.fgHex) + ' auf Hintergrund ' + escapeHtml(item.bgHex) + '" style="width:34px;height:26px;border-radius:5px;background:' + escapeHtml(item.bgHex) + ';color:' + escapeHtml(item.fgHex) + ';border:1px solid rgba(148,163,184,0.4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex-shrink:0;">Aa</div>' +
+                    '<div style="min-width:0;flex:1;">' +
+                        '<div style="font-size:12.5px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(item.text) + '</div>' +
+                        '<div style="font-size:11px;color:var(--text-secondary);margin-top:1px;">' +
+                            'Seite ' + (item.pageIndex + 1) + ' • ' + item.fontSize + ' pt (' + (item.isLargeText ? 'Großtext ≥3,0:1' : 'Normaltext ≥4,5:1') + ') • Schrift <code>' + escapeHtml(item.fgHex) + '</code> auf <code>' + escapeHtml(item.bgHex) + '</code>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">' +
+                    '<span style="font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:6px;background:' + statusBg + ';color:' + statusColor + ';white-space:nowrap;">' + statusText + '</span>' +
+                    (isFail ? '<button type="button" class="tool-btn btn-success btn-fix-single-contrast" style="height:26px;font-size:11px;padding:0 8px;" title="Schriftfarbe dieser Textstelle automatisch auf maximalen AAA-Kontrast setzen">🛠️ Korrigieren</button>' : '') +
+                '</div>';
+
+            row.addEventListener('click', function (e) {
+                if (e.target && e.target.closest('.btn-fix-single-contrast')) {
+                    e.stopPropagation();
+                    fixSingleLowContrastBlock(item, false);
+                    return;
+                }
+                jumpToContrastBlock(item);
+            });
+            container.appendChild(row);
+        });
+    }
+
+    async function jumpToContrastBlock(item) {
+        var doc = getActiveDoc();
+        if (!doc || !item) return;
+        state.contrastActiveHighlight = {
+            pageIndex: item.pageIndex,
+            x: item.x,
+            y: item.y,
+            w: item.w,
+            h: item.h
+        };
+        state.contrastOverlayEnabled = true;
+        var chk = document.getElementById('chkContrastCanvasOverlay');
+        if (chk) chk.checked = true;
+        if (doc.currentPage !== item.pageIndex) {
+            doc.currentPage = item.pageIndex;
+            await renderCurrentEditorPage();
+        } else {
+            redrawAnnotationOverlay();
+        }
+        showToast('Textstelle auf Seite ' + (item.pageIndex + 1) + ' markiert (' + item.ratio.toFixed(1) + ':1).', 'success');
+    }
+
+    function fixSingleLowContrastBlock(item, skipRefresh) {
+        var doc = getActiveDoc();
+        if (!doc || !item) return false;
+        var list = getPageAnnotations(doc, item.pageIndex);
+
+        // Choose maximum contrast foreground (#000000 on light backgrounds, #ffffff on dark backgrounds)
+        var targetFg = (item.bgLum >= 0.18) ? '#000000' : '#ffffff';
+        var targetBg = item.bgHex || (item.bgLum >= 0.18 ? '#ffffff' : '#0f172a');
+
+        // Check if an edit-text annotation already exists for this block
+        var existing = null;
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i];
+            if (a && a.type === 'edit-text') {
+                var ox = a.origX !== undefined ? a.origX : a.x;
+                var oy = a.origY !== undefined ? a.origY : a.y;
+                if (Math.abs(ox - item.x) <= 8 && Math.abs(oy - item.y) <= 8) {
+                    existing = a;
+                    break;
+                }
+            }
+        }
+
+        if (existing) {
+            existing.color = targetFg;
+            existing.bgColor = targetBg;
+        } else {
+            list.push({
+                id: uid(),
+                type: 'edit-text',
+                x: item.x,
+                y: item.y,
+                w: item.w,
+                h: item.h,
+                origX: item.x,
+                origY: item.y,
+                origW: item.w,
+                origH: item.h,
+                text: item.text,
+                fontSize: item.fontSize || 12,
+                color: targetFg,
+                bgColor: targetBg
+            });
+        }
+
+        // Update item in state.contrastResults immediately
+        var newFgRgb = hexToRgbBytes(targetFg);
+        var newFgLum = wcagRelativeLuminance(newFgRgb.r, newFgRgb.g, newFgRgb.b);
+        var newRatio = (Math.max(newFgLum, item.bgLum) + 0.05) / (Math.min(newFgLum, item.bgLum) + 0.05);
+        item.fgHex = targetFg;
+        item.fgLum = newFgLum;
+        item.ratio = Math.round(newRatio * 100) / 100;
+        item.level = item.ratio >= item.minAaa ? 'AAA' : (item.ratio >= item.minAa ? 'AA' : 'FAIL');
+
+        doc.modified = true;
+        if (!skipRefresh) {
+            renderTabsBar();
+            renderContrastResultsUI();
+            redrawAnnotationOverlay();
+            showToast('Kontrast der Textstelle auf ' + item.ratio.toFixed(1) + ':1 (' + item.level + ') erhöht!', 'success');
+        }
+        return true;
+    }
+
+    function fixAllLowContrastBlocks() {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        var all = state.contrastResults || [];
+        var fails = all.filter(function (item) { return item.level === 'FAIL'; });
+        if (fails.length === 0) {
+            showToast('Alle geprüften Textblöcke erfüllen bereits den BITV / WCAG AA-Mindestkontrast!', 'success');
+            return;
+        }
+        for (var i = 0; i < fails.length; i++) {
+            fixSingleLowContrastBlock(fails[i], true);
+        }
+        renderTabsBar();
+        renderContrastResultsUI();
+        redrawAnnotationOverlay();
+        showToast(fails.length + ' kontrastschwache Textstelle(n) automatisch auf AAA-Kontrast korrigiert!', 'success');
+    }
+
+    // =========================================================================
     // Event Listeners Setup
     // =========================================================================
     function initEventListeners() {
@@ -14145,6 +14744,40 @@
         var btnExportSelfTestReportPdf = document.getElementById('btnExportSelfTestReportPdf');
         if (btnExportSelfTestReportPdf) {
             btnExportSelfTestReportPdf.addEventListener('click', exportSelfTestReportPdf);
+        }
+
+        // v1.8.0: BITV 2.0 / WCAG 2.1 Color Contrast Analyzer Listeners
+        var btnScanContrastCurrentPage = document.getElementById('btnScanContrastCurrentPage');
+        if (btnScanContrastCurrentPage) {
+            btnScanContrastCurrentPage.addEventListener('click', function () {
+                analyzeCurrentPageContrast(false);
+            });
+        }
+        var btnScanContrastAllPages = document.getElementById('btnScanContrastAllPages');
+        if (btnScanContrastAllPages) {
+            btnScanContrastAllPages.addEventListener('click', function () {
+                analyzeAllPagesContrast();
+            });
+        }
+        var contrastFilterSelect = document.getElementById('contrastFilterSelect');
+        if (contrastFilterSelect) {
+            contrastFilterSelect.addEventListener('change', function () {
+                state.contrastFilterMode = contrastFilterSelect.value || 'all';
+                renderContrastResultsUI();
+                redrawAnnotationOverlay();
+            });
+        }
+        var chkContrastCanvasOverlay = document.getElementById('chkContrastCanvasOverlay');
+        if (chkContrastCanvasOverlay) {
+            chkContrastCanvasOverlay.addEventListener('change', function () {
+                toggleContrastCanvasOverlay(chkContrastCanvasOverlay.checked);
+            });
+        }
+        var btnAutoFixAllLowContrast = document.getElementById('btnAutoFixAllLowContrast');
+        if (btnAutoFixAllLowContrast) {
+            btnAutoFixAllLowContrast.addEventListener('click', function () {
+                fixAllLowContrastBlocks();
+            });
         }
 
         // Keyboard shortcuts (Desktop feel)
