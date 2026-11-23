@@ -40,10 +40,12 @@
         quota: null,           // Workspace storage quota info from config.php
         csrfToken: window.PDFSTUDIO_CSRF_TOKEN || '',
         workspaceFiles: [],    // Cached list of files in current workspace/vault
-        autoSaveEnabled: true, // Automatic 5-minute document backup
+        autoSaveEnabled: true, // Automatic local browser session & 5-minute document backup
         autoSaveIntervalMs: 300000, // 5 minutes (300,000 ms)
         autoSaveTimer: null,
-        isAutoSaving: false
+        isAutoSaving: false,
+        isRestoringSession: false,
+        sessionSaveDebounceTimer: null
     };
 
     // DOM Elements cache
@@ -370,6 +372,9 @@
 
             updateStatusBarInfo();
             setStatus('Dokument geladen: ' + newTab.name + ' (' + pageCount + ' Seiten)');
+            if (!state.isRestoringSession) {
+                scheduleLocalSessionSave(250);
+            }
             return newTab;
         } catch (err) {
             console.error(err);
@@ -412,6 +417,9 @@
             });
             el.tabsList.appendChild(btn);
         });
+        if (!state.isRestoringSession && state.tabs.length > 0) {
+            scheduleLocalSessionSave(500);
+        }
     }
 
     async function activateDocumentTab(tabId) {
@@ -429,6 +437,9 @@
             }
             updateStatusBarInfo();
             setStatus('Dokument geladen: ' + doc.name + ' (' + doc.pageCount + (doc.pageCount === 1 ? ' Seite' : ' Seiten') + ')');
+            if (!state.isRestoringSession) {
+                scheduleLocalSessionSave(350);
+            }
         }
     }
 
@@ -465,9 +476,11 @@
             switchView('launcher');
             updateStatusBarInfo();
             setStatus('Bereit — Kein Dokument geladen');
+            clearLocalAutoSaveSnapshot();
         } else {
             var nextTab = state.tabs[Math.max(0, idx - 1)];
             activateDocumentTab(nextTab.id);
+            scheduleLocalSessionSave(250);
         }
     }
 
@@ -751,6 +764,9 @@
             updateStatusBarInfo();
             highlightActiveThumbnail();
             redrawAnnotationOverlay();
+            if (!state.isRestoringSession) {
+                scheduleLocalSessionSave(600);
+            }
         } catch (err) {
             console.error('Editor render error:', err);
         }
@@ -8518,10 +8534,10 @@
     }
 
     // =========================================================================
-    // 5-Minute Automatic Document Backup (Auto-Save to Server Vault & IndexedDB)
+    // Local Browser Session Persistence & 5-Minute Backup (100% Client-Side IndexedDB)
     // =========================================================================
     function openAutoSaveDb() {
-        return new Promise(function (resolve, reject) {
+        return new Promise(function (resolve) {
             if (!window.indexedDB) {
                 resolve(null);
                 return;
@@ -8538,28 +8554,92 @@
         });
     }
 
-    async function saveLocalAutoSaveSnapshot(doc) {
-        if (!doc) return false;
+    async function clearLocalAutoSaveSnapshot() {
         try {
             var db = await openAutoSaveDb();
             if (!db) return false;
+            var restoreBtn = document.getElementById('btnRestoreAutoSave');
+            if (restoreBtn) restoreBtn.classList.add('hidden');
+            return await new Promise(function (resolve) {
+                var tx = db.transaction('snapshots', 'readwrite');
+                var store = tx.objectStore('snapshots');
+                store.delete('latest');
+                tx.oncomplete = function () { resolve(true); };
+                tx.onerror = function () { resolve(false); };
+            });
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function scheduleLocalSessionSave(delayMs) {
+        if (!state.autoSaveEnabled || state.isRestoringSession) return;
+        if (state.sessionSaveDebounceTimer) {
+            clearTimeout(state.sessionSaveDebounceTimer);
+        }
+        state.sessionSaveDebounceTimer = setTimeout(function () {
+            state.sessionSaveDebounceTimer = null;
+            if (!state.autoSaveEnabled || state.isRestoringSession) return;
+            var activeDoc = getActiveDoc();
+            if (activeDoc && state.tabs.length > 0) {
+                saveLocalAutoSaveSnapshot(activeDoc);
+            }
+        }, typeof delayMs === 'number' ? delayMs : 450);
+    }
+
+    async function saveLocalAutoSaveSnapshot(doc) {
+        var activeDoc = doc || getActiveDoc();
+        if (!activeDoc || state.tabs.length === 0) return false;
+        try {
+            var db = await openAutoSaveDb();
+            if (!db) return false;
+            var timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            var activeTabIndex = 0;
+            var serializedTabs = [];
+            for (var i = 0; i < state.tabs.length; i++) {
+                var t = state.tabs[i];
+                if (!t || !t.bytes) continue;
+                if (t.id === state.activeTabId) {
+                    activeTabIndex = serializedTabs.length;
+                }
+                serializedTabs.push({
+                    name: t.name,
+                    bytes: new Uint8Array(t.bytes),
+                    currentPage: t.currentPage || 0,
+                    meta: t.meta || {},
+                    modified: !!t.modified,
+                    ocrApplied: !!t.ocrApplied,
+                    savedA11yTags: t.savedA11yTags || null,
+                    annotations: serializeAnnotationsMap(t.annotations)
+                });
+            }
             var payload = {
                 key: 'latest',
-                name: doc.name,
-                bytes: new Uint8Array(doc.bytes),
-                currentPage: doc.currentPage || 0,
-                meta: doc.meta || {},
-                annotations: serializeAnnotationsMap(doc.annotations),
-                savedAt: new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+                name: activeDoc.name,
+                bytes: new Uint8Array(activeDoc.bytes),
+                currentPage: activeDoc.currentPage || 0,
+                meta: activeDoc.meta || {},
+                modified: !!activeDoc.modified,
+                ocrApplied: !!activeDoc.ocrApplied,
+                savedA11yTags: activeDoc.savedA11yTags || null,
+                annotations: serializeAnnotationsMap(activeDoc.annotations),
+                tabs: serializedTabs,
+                activeTabIndex: activeTabIndex,
+                viewMode: (state.viewMode === 'organizer' || state.viewMode === 'editor') ? state.viewMode : 'editor',
+                savedAt: timeStr,
                 timestamp: Date.now()
             };
-            return await new Promise(function (resolve) {
+            var ok = await new Promise(function (resolve) {
                 var tx = db.transaction('snapshots', 'readwrite');
                 var store = tx.objectStore('snapshots');
                 store.put(payload);
                 tx.oncomplete = function () { resolve(true); };
                 tx.onerror = function () { resolve(false); };
             });
+            if (ok) {
+                updateAutoSaveStatusUI(timeStr, 'Lokal');
+            }
+            return ok;
         } catch (e) {
             return false;
         }
@@ -8583,58 +8663,129 @@
 
     async function checkLocalAutoSaveOnStartup() {
         var snap = await loadLocalAutoSaveSnapshot();
+        var hasTabs = snap && Array.isArray(snap.tabs) && snap.tabs.length > 0;
+        var hasLegacyDoc = snap && snap.bytes && snap.bytes.byteLength > 8;
+        if (!hasTabs && !hasLegacyDoc) return;
+
+        // If no document is open on startup and auto-save is active, automatically restore the user's open session
+        if (state.autoSaveEnabled && state.tabs.length === 0) {
+            await restoreLocalAutoSaveSnapshot(true);
+            return;
+        }
+
         var restoreBtn = document.getElementById('btnRestoreAutoSave');
-        if (snap && snap.bytes && snap.bytes.byteLength > 8 && restoreBtn) {
+        if (restoreBtn) {
             restoreBtn.classList.remove('hidden');
-            restoreBtn.textContent = '🔄 Auto-Save (' + snap.name + ', ' + (snap.savedAt || '') + ')';
-            restoreBtn.title = 'Zuletzt automatisch gesichertes Dokument "' + snap.name + '" (' + (snap.savedAt || '') + ' Uhr) wiederherstellen';
+            restoreBtn.textContent = '🔄 Auto-Save (' + (snap.name || 'Sitzung') + ', ' + (snap.savedAt || '') + ')';
+            restoreBtn.title = 'Zuletzt lokal im Browser gesichertes Dokument "' + (snap.name || 'Sitzung') + '" (' + (snap.savedAt || '') + ' Uhr) wiederherstellen';
         }
     }
 
-    async function restoreLocalAutoSaveSnapshot() {
+    async function restoreLocalAutoSaveSnapshot(isAutoStartup) {
+        var autoRestore = (isAutoStartup === true);
         var snap = await loadLocalAutoSaveSnapshot();
-        if (!snap || !snap.bytes) {
-            showToast('Kein gespeicherter Auto-Save-Stand gefunden.', 'error');
+        var hasTabs = snap && Array.isArray(snap.tabs) && snap.tabs.length > 0;
+        var hasLegacyDoc = snap && snap.bytes && snap.bytes.byteLength > 8;
+        if (!hasTabs && !hasLegacyDoc) {
+            if (!autoRestore) {
+                showToast('Kein gespeicherter Auto-Save-Stand gefunden.', 'error');
+            }
             return;
         }
-        var bytes = new Uint8Array(snap.bytes);
-        await addDocumentTab(snap.name || 'Wiederhergestellt.pdf', bytes, 'editor');
-        var doc = getActiveDoc();
-        if (doc) {
-            if (snap.annotations) {
-                doc.annotations = await hydrateAnnotationsMap(snap.annotations);
+
+        state.isRestoringSession = true;
+        try {
+            if (hasTabs) {
+                for (var i = 0; i < snap.tabs.length; i++) {
+                    var st = snap.tabs[i];
+                    if (!st || !st.bytes || st.bytes.byteLength <= 8) continue;
+                    var tabBytes = new Uint8Array(st.bytes);
+                    var restoredTab = await addDocumentTab(st.name || 'Wiederhergestellt.pdf', tabBytes, 'editor');
+                    if (restoredTab) {
+                        if (st.annotations) {
+                            restoredTab.annotations = await hydrateAnnotationsMap(st.annotations);
+                        }
+                        if (typeof st.currentPage === 'number' && st.currentPage < restoredTab.pageCount) {
+                            restoredTab.currentPage = st.currentPage;
+                        }
+                        if (st.meta) {
+                            restoredTab.meta = st.meta;
+                        }
+                        restoredTab.modified = !!st.modified;
+                        restoredTab.ocrApplied = !!st.ocrApplied;
+                        if (st.savedA11yTags) {
+                            restoredTab.savedA11yTags = st.savedA11yTags;
+                        }
+                    }
+                }
+                var targetIdx = (typeof snap.activeTabIndex === 'number' && state.tabs[snap.activeTabIndex])
+                    ? snap.activeTabIndex
+                    : (state.tabs.length - 1);
+                if (targetIdx >= 0 && state.tabs[targetIdx]) {
+                    await activateDocumentTab(state.tabs[targetIdx].id);
+                } else {
+                    await refreshDocumentViews();
+                }
+                if (snap.viewMode === 'organizer' || snap.viewMode === 'editor') {
+                    switchView(snap.viewMode);
+                }
+            } else if (hasLegacyDoc) {
+                var bytes = new Uint8Array(snap.bytes);
+                var doc = await addDocumentTab(snap.name || 'Wiederhergestellt.pdf', bytes, 'editor');
+                if (doc) {
+                    if (snap.annotations) {
+                        doc.annotations = await hydrateAnnotationsMap(snap.annotations);
+                    }
+                    if (typeof snap.currentPage === 'number' && snap.currentPage < doc.pageCount) {
+                        doc.currentPage = snap.currentPage;
+                    }
+                    if (snap.meta) {
+                        doc.meta = snap.meta;
+                    }
+                    doc.modified = !!snap.modified;
+                    doc.ocrApplied = !!snap.ocrApplied;
+                    if (snap.savedA11yTags) {
+                        doc.savedA11yTags = snap.savedA11yTags;
+                    }
+                    await refreshDocumentViews();
+                }
             }
-            if (typeof snap.currentPage === 'number' && snap.currentPage < doc.pageCount) {
-                doc.currentPage = snap.currentPage;
+
+            renderTabsBar();
+            var restoreBtn = document.getElementById('btnRestoreAutoSave');
+            if (restoreBtn) restoreBtn.classList.add('hidden');
+            if (snap.savedAt) {
+                updateAutoSaveStatusUI(snap.savedAt, 'Lokal');
             }
-            if (snap.meta) {
-                doc.meta = snap.meta;
+            if (autoRestore) {
+                var count = state.tabs.length;
+                showToast('Zuletzt geöffnete Sitzung lokal aus dem Browser wiederhergestellt (' + count + (count === 1 ? ' Dokument' : ' Dokumente') + ').', 'success');
+            } else {
+                showToast('Auto-Save-Stand von "' + (snap.name || 'Sitzung') + '" (' + (snap.savedAt || '') + ' Uhr) erfolgreich wiederhergestellt!', 'success');
             }
-            await refreshDocumentViews();
+        } finally {
+            state.isRestoringSession = false;
         }
-        var restoreBtn = document.getElementById('btnRestoreAutoSave');
-        if (restoreBtn) restoreBtn.classList.add('hidden');
-        showToast('Auto-Save-Stand von "' + snap.name + '" (' + (snap.savedAt || '') + ' Uhr) erfolgreich wiederhergestellt!', 'success');
     }
 
     function updateAutoSaveStatusUI(lastTimeStr, targetLabel) {
         var btn = document.getElementById('statusAutoSaveBtn');
         if (!btn) return;
         if (!state.autoSaveEnabled) {
-            btn.textContent = '⏸️ Auto-Save (5 Min.): Aus';
+            btn.textContent = '⏸️ Auto-Save (Lokal): Aus';
             btn.style.color = 'var(--text-muted)';
             return;
         }
         btn.style.color = 'var(--accent-success)';
         if (lastTimeStr) {
-            btn.textContent = '💾 Auto-Save: ' + lastTimeStr + ' Uhr (' + (targetLabel || 'Gesichert') + ')';
+            btn.textContent = '💾 Auto-Save: ' + lastTimeStr + ' Uhr (' + (targetLabel || 'Lokal') + ')';
         } else {
-            btn.textContent = '⏱️ Auto-Save (5 Min.): Aktiv';
+            btn.textContent = '⏱️ Auto-Save (Lokal): Aktiv';
         }
     }
 
     async function runPeriodicAutoSave() {
-        if (!state.autoSaveEnabled || state.isAutoSaving) return;
+        if (!state.autoSaveEnabled || state.isAutoSaving || state.isRestoringSession) return;
         var doc = getActiveDoc();
         if (!doc) return;
 
@@ -8644,7 +8795,7 @@
             var savedLocal = await saveLocalAutoSaveSnapshot(doc);
             var targetLabel = savedLocal ? 'Lokal' : 'Aktiv';
             updateAutoSaveStatusUI(timeStr, targetLabel);
-            setStatus('Automatische 5-Minuten-Sicherung durchgeführt (' + timeStr + ' Uhr — ' + targetLabel + ')');
+            setStatus('Lokale Browser-Sitzung gesichert (' + timeStr + ' Uhr — ' + targetLabel + ')');
         } catch (e) {
             console.error(e);
         } finally {
@@ -8656,10 +8807,10 @@
         state.autoSaveEnabled = !state.autoSaveEnabled;
         updateAutoSaveStatusUI(null, null);
         if (state.autoSaveEnabled) {
-            showToast('Automatische Dokumentensicherung (alle 5 Minuten) aktiviert!', 'success');
+            showToast('Automatische lokale Browser-Sitzungssicherung aktiviert!', 'success');
             runPeriodicAutoSave();
         } else {
-            showToast('Automatische 5-Minuten-Sicherung pausiert.');
+            showToast('Automatische lokale Browser-Sitzungssicherung pausiert.');
         }
     }
 
@@ -8667,10 +8818,23 @@
         if (state.autoSaveTimer) {
             clearInterval(state.autoSaveTimer);
         }
-        // Automatically save active document every 5 minutes (300,000 ms)
+        // Periodically refresh snapshot every 5 minutes in addition to instant change saves
         state.autoSaveTimer = setInterval(function () {
             runPeriodicAutoSave();
         }, state.autoSaveIntervalMs);
+
+        // Immediately persist session when tab loses visibility or page is closed/reloaded
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'hidden' && state.autoSaveEnabled && !state.isRestoringSession && state.tabs.length > 0) {
+                saveLocalAutoSaveSnapshot(getActiveDoc());
+            }
+        });
+        window.addEventListener('pagehide', function () {
+            if (state.autoSaveEnabled && !state.isRestoringSession && state.tabs.length > 0) {
+                saveLocalAutoSaveSnapshot(getActiveDoc());
+            }
+        });
+
         updateAutoSaveStatusUI(null, null);
         checkLocalAutoSaveOnStartup();
     }
