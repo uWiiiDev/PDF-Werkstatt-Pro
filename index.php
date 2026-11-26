@@ -992,9 +992,9 @@ $serverInfo = pdfstudio_get_server_info();
                     <div class="form-row">
                         <label for="ocrLang">Sprache (Offline-OCR)</label>
                         <select id="ocrLang" class="form-control">
+                            <option value="deu+eng" selected>Deutsch + Englisch (Empfohlen)</option>
                             <option value="deu">Deutsch (deu)</option>
                             <option value="eng">Englisch (eng)</option>
-                            <option value="deu+eng">Deutsch + Englisch</option>
                         </select>
                     </div>
                     <div class="form-row">
@@ -1004,6 +1004,14 @@ $serverInfo = pdfstudio_get_server_info();
                             <option value="current">Aktuelle Seite</option>
                         </select>
                     </div>
+                </div>
+                <div class="form-row" style="margin-bottom:8px;">
+                    <label for="ocrQualityMode">Erkennungs-Leistung &amp; Bildvorverarbeitung</label>
+                    <select id="ocrQualityMode" class="form-control" title="Verbessert die Texterkennung bei blassen Scans, grauem Hintergrund, Tabellen und kleiner Schrift">
+                        <option value="enhanced" selected>✨ Hoch (216 DPI + Kontrast- &amp; Kantenschärfung)</option>
+                        <option value="ultra">🚀 Maximum (288 DPI + Adaptive Hintergrund-Bereinigung)</option>
+                        <option value="fast">⚡ Schnell (180 DPI ohne Bildvorverarbeitung)</option>
+                    </select>
                 </div>
                 <button type="button" class="tool-btn btn-success" data-cmd="make-searchable-pdf" style="width:100%;margin-bottom:6px;" title="Erkennt Text in Bildern/Scans und bettet ihn unsichtbar an den exakten Wortpositionen direkt in das PDF ein">
                     🔎 In durchsuchbares PDF umwandeln

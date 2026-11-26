@@ -797,9 +797,9 @@
                 var vpPt = baseViewport.convertToViewportPoint(tr[4], tr[5]);
                 var vx = vpPt[0];
                 var vy = vpPt[1];
-                var topY = vy - (fSize * 0.88);
+                var topY = vy - (fSize * 0.75);
                 var w = (it.width && it.width > 0) ? it.width : (it.str.length * fSize * 0.52);
-                var h = Math.max(fSize * 1.18, (it.height || fSize) * 1.12);
+                var h = Math.max(fSize * 0.98, (it.height || fSize) * 0.96);
                 raw.push({
                     text: it.str,
                     x: vx,
@@ -1923,7 +1923,7 @@
                     if (ann.text && String(ann.text).length > 0) {
                         var efSize = ann.fontSize || 12;
                         var eRgb = hexToRgbNormalized(ann.color || '#0f172a');
-                        var ePt = baseVp.convertToPdfPoint(ann.x, ann.y + (efSize * 0.88));
+                        var ePt = baseVp.convertToPdfPoint(ann.x, ann.y + (efSize * 0.76));
                         page.drawText(String(ann.text), {
                             x: ePt[0],
                             y: ePt[1],
@@ -2884,7 +2884,168 @@
         revealRightDockSection('inspectorOcrSection');
     }
 
-    async function createOfflineTesseractWorker(lang, labelPrefix) {
+    function getOcrQualityConfig() {
+        var modeEl = document.getElementById('ocrQualityMode');
+        var mode = modeEl ? (modeEl.value || 'enhanced') : 'enhanced';
+        if (mode === 'ultra') {
+            return { mode: 'ultra', scale: 4.0, dpi: 288 };
+        }
+        if (mode === 'fast') {
+            return { mode: 'fast', scale: 2.5, dpi: 180 };
+        }
+        return { mode: 'enhanced', scale: 3.0, dpi: 216 };
+    }
+
+    /**
+     * Zero-phase in-place OCR image preprocessor:
+     * Enhances contrast, normalizes gray/colored paper & box backgrounds, sharpens character strokes
+     * via a symmetric 3x3 cross Unsharp Mask (0.000 px coordinate shift), and cleans outer 4px scanner frame dirt.
+     */
+    function preprocessCanvasForOcr(canvas, mode, vpScale) {
+        if (!canvas || mode === 'fast') return;
+        try {
+            var w = canvas.width;
+            var h = canvas.height;
+            if (w < 16 || h < 16) return;
+            var ctx = canvas.getContext('2d');
+            var imgData = ctx.getImageData(0, 0, w, h);
+            var data = imgData.data;
+            var totalPx = w * h;
+            var lum = new Uint8Array(totalPx);
+            var hist = new Uint32Array(256);
+            var border = 6;
+            var histCount = 0;
+
+            for (var y = 0; y < h; y++) {
+                var rowOff = y * w;
+                var inY = (y >= border && y < h - border);
+                for (var x = 0; x < w; x++) {
+                    var idx = rowOff + x;
+                    var p = idx << 2;
+                    var yVal = (77 * data[p] + 150 * data[p + 1] + 29 * data[p + 2]) >> 8;
+                    lum[idx] = yVal;
+                    if (inY && x >= border && x < w - border) {
+                        hist[yVal]++;
+                        histCount++;
+                    }
+                }
+            }
+
+            if (histCount < 100) return;
+
+            // Optional local integral-image background normalization in 'ultra' mode
+            // (removes gray/colored table cell shading, shadows, and uneven scan illumination)
+            if (mode === 'ultra') {
+                var integral = new Float64Array((w + 1) * (h + 1));
+                var iw = w + 1;
+                for (var iy = 1; iy <= h; iy++) {
+                    var rowSum = 0;
+                    var srcRow = (iy - 1) * w;
+                    var curIntRow = iy * iw;
+                    var prevIntRow = (iy - 1) * iw;
+                    for (var ix = 1; ix <= w; ix++) {
+                        rowSum += lum[srcRow + (ix - 1)];
+                        integral[curIntRow + ix] = integral[prevIntRow + ix] + rowSum;
+                    }
+                }
+                var rad = Math.max(18, Math.round(22 * (vpScale || 3.0)));
+                hist.fill(0);
+                histCount = 0;
+                for (var ny = 0; ny < h; ny++) {
+                    var y0 = Math.max(0, ny - rad);
+                    var y1 = Math.min(h, ny + rad + 1);
+                    var nRow = ny * w;
+                    var inNY = (ny >= border && ny < h - border);
+                    for (var nx = 0; nx < w; nx++) {
+                        var x0 = Math.max(0, nx - rad);
+                        var x1 = Math.min(w, nx + rad + 1);
+                        var area = (x1 - x0) * (y1 - y0);
+                        var sum = integral[y1 * iw + x1] - integral[y0 * iw + x1] - integral[y1 * iw + x0] + integral[y0 * iw + x0];
+                        var localMean = sum / area;
+                        var rawL = lum[nRow + nx];
+                        var normL = rawL;
+                        // Only normalize against local background if region isn't a solid dark block
+                        if (localMean > 105) {
+                            normL = Math.min(255, Math.max(0, Math.round((rawL / Math.max(110, localMean)) * 248)));
+                        }
+                        lum[nRow + nx] = normL;
+                        if (inNY && nx >= border && nx < w - border) {
+                            hist[normL]++;
+                            histCount++;
+                        }
+                    }
+                }
+            }
+
+            // Compute 1.5th percentile (dark ink) and 82nd percentile (paper white background)
+            var lowTarget = histCount * 0.015;
+            var highTarget = histCount * 0.82;
+            var acc = 0;
+            var blackPt = 0;
+            var whitePt = 240;
+            var foundLow = false;
+            for (var b = 0; b < 256; b++) {
+                acc += hist[b];
+                if (!foundLow && acc >= lowTarget) {
+                    blackPt = Math.min(95, b);
+                    foundLow = true;
+                }
+                if (acc >= highTarget) {
+                    whitePt = Math.max(165, Math.min(252, b));
+                    break;
+                }
+            }
+            var span = Math.max(35, whitePt - blackPt);
+
+            // Build lookup table for contrast stretch + clean paper white snap
+            var lut = new Uint8Array(256);
+            for (var v = 0; v < 256; v++) {
+                var lin = ((v - blackPt) / span) * 255;
+                if (lin <= 0) {
+                    lut[v] = 0;
+                } else if (lin >= 232) {
+                    lut[v] = 255;
+                } else {
+                    lut[v] = Math.min(255, Math.max(0, Math.round(Math.pow(lin / 255, 1.15) * 255)));
+                }
+            }
+
+            var stretched = new Uint8Array(totalPx);
+            for (var si = 0; si < totalPx; si++) {
+                stretched[si] = lut[lum[si]];
+            }
+
+            // Symmetric 3x3 cross Unsharp Mask (zero phase shift) + 4px white outer border cleanup
+            var edgeClear = 4;
+            for (var sy = 0; sy < h; sy++) {
+                var sRow = sy * w;
+                var isEdgeY = (sy < edgeClear || sy >= h - edgeClear);
+                for (var sx = 0; sx < w; sx++) {
+                    var sIdx = sRow + sx;
+                    var outVal = 255;
+                    if (!isEdgeY && sx >= edgeClear && sx < w - edgeClear) {
+                        var cVal = stretched[sIdx];
+                        if (cVal < 250) {
+                            var nbrMean = (stretched[sIdx - 1] + stretched[sIdx + 1] + stretched[sIdx - w] + stretched[sIdx + w]) * 0.25;
+                            var sharp = Math.round(cVal + 0.55 * (cVal - nbrMean));
+                            outVal = sharp < 0 ? 0 : (sharp > 255 ? 255 : sharp);
+                        }
+                    }
+                    var pIdx = sIdx << 2;
+                    data[pIdx] = outVal;
+                    data[pIdx + 1] = outVal;
+                    data[pIdx + 2] = outVal;
+                    data[pIdx + 3] = 255;
+                }
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+        } catch (preErr) {
+            console.warn('preprocessCanvasForOcr warning:', preErr);
+        }
+    }
+
+    async function createOfflineTesseractWorker(lang, labelPrefix, dpiValue) {
         var baseDir = getAppBaseDirUrl();
         var workerUrl = baseDir + 'assets/vendor/tesseract/worker.min.js';
         var coreUrl = baseDir + 'assets/vendor/tesseract/tesseract-core-lstm.wasm.js';
@@ -2913,12 +3074,13 @@
         });
 
         // Use PSM.AUTO ('3' = Fully automatic page segmentation) instead of Tesseract.js default PSM.SINGLE_BLOCK ('6')
-        // so headers, footers, multi-column layouts, tables, and side boxes are recognized completely without dropping blocks
+        // and pass explicit user_defined_dpi so Tesseract's layout & character height models match the exact render scale
         if (worker && typeof worker.setParameters === 'function') {
             try {
                 await worker.setParameters({
                     tessedit_pageseg_mode: '3',
-                    preserve_interword_spaces: '1'
+                    preserve_interword_spaces: '1',
+                    user_defined_dpi: String(dpiValue || 216)
                 });
             } catch (paramErr) {
                 console.warn('Tesseract setParameters warning:', paramErr);
@@ -3282,19 +3444,24 @@
 
         var worker = null;
         try {
-            // Render current PDF page at high resolution (scale 2.5 = 180 DPI) for sharp OCR recognition
+            var qCfg = getOcrQualityConfig();
             var pdfJsDoc = await loadPdfJsDocument(doc.bytes);
             var jsPage = await pdfJsDoc.getPage(pageNum);
-            var renderVp = jsPage.getViewport({ scale: 2.5 });
+            var baseVpCheck = jsPage.getViewport({ scale: 1.0 });
+            var maxDim = Math.max(baseVpCheck.width || 600, baseVpCheck.height || 842);
+            var vpScale = Math.min(qCfg.scale, Math.max(2.2, Math.floor((3600 / maxDim) * 10) / 10));
+            var actualDpi = Math.round(72 * vpScale);
+            var renderVp = jsPage.getViewport({ scale: vpScale });
             var offCanvas = document.createElement('canvas');
-            offCanvas.width = renderVp.width;
-            offCanvas.height = renderVp.height;
+            offCanvas.width = Math.round(renderVp.width);
+            offCanvas.height = Math.round(renderVp.height);
             var offCtx = offCanvas.getContext('2d');
             offCtx.fillStyle = '#ffffff';
             offCtx.fillRect(0, 0, offCanvas.width, offCanvas.height);
             await jsPage.render({ canvasContext: offCtx, viewport: renderVp }).promise;
+            preprocessCanvasForOcr(offCanvas, qCfg.mode, vpScale);
 
-            worker = await createOfflineTesseractWorker(lang, 'Seiten-OCR (S. ' + pageNum + ')');
+            worker = await createOfflineTesseractWorker(lang, 'Seiten-OCR (S. ' + pageNum + ')', actualDpi);
             var result = await worker.recognize(offCanvas);
             await worker.terminate();
             worker = null;
@@ -3375,7 +3542,8 @@
 
         var worker = null;
         try {
-            worker = await createOfflineTesseractWorker(lang, 'Sandwich-OCR');
+            var qCfg = getOcrQualityConfig();
+            worker = await createOfflineTesseractWorker(lang, 'Sandwich-OCR', qCfg.dpi);
 
             var fullExtractedText = [];
             var totalEmbeddedItems = 0;
@@ -3387,16 +3555,25 @@
                 setOcrStatusBox('⏳ <strong>Sandwich-OCR:</strong> Analysiere ' + escapeHtml(stepLabel) + '…', 'info');
 
                 var jsPage = await pdfJsDoc.getPage(pIdx + 1);
-                var vpScale = 2.5;
+                var baseVpCheck = jsPage.getViewport({ scale: 1.0 });
+                var maxDim = Math.max(baseVpCheck.width || 600, baseVpCheck.height || 842);
+                var vpScale = Math.min(qCfg.scale, Math.max(2.2, Math.floor((3600 / maxDim) * 10) / 10));
+                var actualDpi = Math.round(72 * vpScale);
+                if (worker && typeof worker.setParameters === 'function') {
+                    try {
+                        await worker.setParameters({ user_defined_dpi: String(actualDpi) });
+                    } catch (dpiErr) {}
+                }
                 var renderVp = jsPage.getViewport({ scale: vpScale });
 
                 var offCanvas = document.createElement('canvas');
-                offCanvas.width = renderVp.width;
-                offCanvas.height = renderVp.height;
+                offCanvas.width = Math.round(renderVp.width);
+                offCanvas.height = Math.round(renderVp.height);
                 var offCtx = offCanvas.getContext('2d');
                 offCtx.fillStyle = '#ffffff';
                 offCtx.fillRect(0, 0, offCanvas.width, offCanvas.height);
                 await jsPage.render({ canvasContext: offCtx, viewport: renderVp }).promise;
+                preprocessCanvasForOcr(offCanvas, qCfg.mode, vpScale);
 
                 var ocrRes = await worker.recognize(offCanvas);
                 var ocrData = (ocrRes && ocrRes.data) ? ocrRes.data : {};
@@ -3405,10 +3582,28 @@
 
                 var pdfPage = pdfPages[pIdx];
 
-                // If this page previously had an invisible 3 Tr OCR text layer (e.g. from scanner or earlier OCR run),
+                // If this page previously had an invisible OCR text layer (either 3 Tr or low-opacity ca: 0.005),
                 // strip old invisible OCR text objects before embedding the new 1:1 calibrated OCR layer
                 try {
                     var pNode = pdfPage.node;
+                    var hasLowOpacityGs = false;
+                    var resDict = pNode.Resources ? pNode.Resources() : pNode.lookup(PDFLib.PDFName.of('Resources'));
+                    if (resDict && resDict.lookup) {
+                        var extGsDict = resDict.lookup(PDFLib.PDFName.of('ExtGState'));
+                        if (extGsDict && extGsDict.entries) {
+                            var gsEnts = extGsDict.entries();
+                            for (var ge = 0; ge < gsEnts.length; ge++) {
+                                var gsObj = pdfDoc.context.lookup(gsEnts[ge][1]);
+                                if (gsObj && gsObj.get) {
+                                    var caVal = gsObj.get(PDFLib.PDFName.of('ca'));
+                                    if (caVal && parseFloat(String(caVal)) > 0 && parseFloat(String(caVal)) < 0.05) {
+                                        hasLowOpacityGs = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     var cObj = pNode.get(PDFLib.PDFName.of('Contents'));
                     if (cObj && PDFLib.decodePDFRawStream) {
                         var lookedC = pdfDoc.context.lookup(cObj);
@@ -3416,12 +3611,15 @@
                         for (var cs = 0; cs < cRefs.length; cs++) {
                             var rawSt = pdfDoc.context.lookup(cRefs[cs]);
                             var decStr = decodeRawPdfStreamToString(rawSt);
-                            if (decStr && /\b3\s+Tr\b/.test(decStr)) {
-                                // Remove previous invisible OCR text blocks
-                                var cleanedStr = decStr
-                                    .replace(/\b3\s+Tr\b[\s\S]*$/g, function (tail) {
+                            if (decStr && (/\b3\s+Tr\b/.test(decStr) || (hasLowOpacityGs && /\bBT\b/.test(decStr)))) {
+                                var cleanedStr = decStr;
+                                if (/\b3\s+Tr\b/.test(cleanedStr)) {
+                                    cleanedStr = cleanedStr.replace(/\b3\s+Tr\b[\s\S]*$/g, function (tail) {
                                         return tail.replace(/q\s+BT[\s\S]*?ET\s+Q/g, '').replace(/BT[\s\S]*?ET/g, '');
                                     });
+                                } else if (hasLowOpacityGs) {
+                                    cleanedStr = cleanedStr.replace(/q\s+\/GS[^\s]+\s+gs\s+BT[\s\S]*?ET\s+Q/g, '');
+                                }
                                 if (cleanedStr !== decStr) {
                                     var cleanFlate = pdfDoc.context.flateStream(stringToLatin1Bytes(cleanedStr));
                                     pdfDoc.context.assign(cRefs[cs], cleanFlate);
@@ -3430,13 +3628,16 @@
                         }
                     }
                 } catch (stripErr) {
-                    console.warn('Strip previous 3 Tr OCR layer warning:', stripErr);
+                    console.warn('Strip previous OCR layer warning:', stripErr);
                 }
 
                 // Isolate the page's original scanned image stream in /Artifact BMC q ... Q EMC
                 // so any unclosed rotation/scaling cm matrix from scanner drivers is reset AND PAC 2026
                 // recognizes the scan background as an Artifact while the OCR text layer is real content
                 isolatePageGraphicsState(pdfPage, pdfDoc, true);
+
+                // Register single shared Helvetica font on this page so drawText reuses one font resource
+                pdfPage.setFont(helvFont);
 
                 // Activate PDF Text Rendering Mode 3 (3 Tr = Invisible OCR Text according to ISO 32000-1 / PDF/UA-1)
                 if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
@@ -3446,11 +3647,11 @@
                 var pageRot = ((renderVp.rotation % 360) + 360) % 360;
                 var textRotation = PDFLib.degrees(pageRot);
 
-                var words = Array.isArray(ocrData.words) ? ocrData.words : [];
-                var lines = Array.isArray(ocrData.lines) ? ocrData.lines : [];
+                var words = [];
+                var lines = [];
 
-                // Fallback: harvest words/lines from ocrData.blocks hierarchy if top-level arrays are empty
-                if (words.length === 0 && Array.isArray(ocrData.blocks)) {
+                // Harvest words with their parent line baseline from ocrData.blocks hierarchy first
+                if (Array.isArray(ocrData.blocks) && ocrData.blocks.length > 0) {
                     for (var bi = 0; bi < ocrData.blocks.length; bi++) {
                         var blkObj = ocrData.blocks[bi];
                         var paras = (blkObj && Array.isArray(blkObj.paragraphs)) ? blkObj.paragraphs : [];
@@ -3461,16 +3662,28 @@
                                 lines.push(lnObj);
                                 var lWords = Array.isArray(lnObj.words) ? lnObj.words : [];
                                 for (var wi = 0; wi < lWords.length; wi++) {
-                                    words.push(lWords[wi]);
+                                    var wItem = lWords[wi];
+                                    if (wItem && !wItem.lineBaseline && lnObj.baseline) {
+                                        wItem.lineBaseline = lnObj.baseline;
+                                    }
+                                    words.push(wItem);
                                 }
                             }
                         }
                     }
                 }
+                if (words.length === 0 && Array.isArray(ocrData.words)) {
+                    words = ocrData.words;
+                }
+                if (lines.length === 0 && Array.isArray(ocrData.lines)) {
+                    lines = ocrData.lines;
+                }
 
                 if (words.length > 0) {
-                    // Pre-calculate each word's individual visual geometry (in PDF points)
+                    var canvasW = offCanvas.width;
+                    var canvasH = offCanvas.height;
                     var preparedWords = [];
+
                     for (var w = 0; w < words.length; w++) {
                         var wordObj = words[w];
                         var wText = sanitizeOcrTextForPdf(wordObj.text);
@@ -3480,26 +3693,44 @@
                         var wy0 = wordObj.bbox.y0;
                         var wx1 = wordObj.bbox.x1;
                         var wy1 = wordObj.bbox.y1;
-                        var wBoxW = Math.max(4, wx1 - wx0);
-                        var wBoxH = Math.max(8, wy1 - wy0);
+                        var wBoxW = Math.max(3, wx1 - wx0);
+                        var wBoxH = Math.max(4, wy1 - wy0);
+
+                        // Filter out 1-character scanner border/punch-hole speckle noise (e.g. '|', '~', '_') with low confidence
+                        var wConf = (typeof wordObj.confidence === 'number') ? wordObj.confidence : 80;
+                        var isNearEdge = (wx0 < 10 * vpScale || wx1 > canvasW - 10 * vpScale || wy0 < 8 * vpScale || wy1 > canvasH - 8 * vpScale);
+                        if (wText.length === 1 && !/[A-Za-zÄÖÜäöüß0-9]/.test(wText) && (wConf < 42 || (isNearEdge && wConf < 68))) {
+                            continue;
+                        }
 
                         // Determine word's true baseline Y in canvas pixels:
-                        // Prefer Tesseract's word-level baseline (interpolated at word's center),
-                        // clamped safely inside the word's bounding box
-                        var hasDescender = /[gjpqy,;()\[\]{}Q]/.test(wText);
-                        var defaultBaseY = wy1 - (wBoxH * (hasDescender ? 0.18 : 0.04));
-                        var wordBaseY = defaultBaseY;
-                        if (wordObj.baseline && typeof wordObj.baseline.y0 === 'number' && typeof wordObj.baseline.y1 === 'number') {
+                        // 1. Prefer Tesseract's C++ fitted word baseline (which accurately sits on the line baseline even for '-' or 'vom')
+                        // 2. Fallback to parent line baseline interpolated at word's X center
+                        // 3. Fallback to bottom ink edge wy1 (for non-descender words) or wy1 - 0.21 * height (for descender words)
+                        var hasDescender = /[gjpqy,;()\[\]{}Q§]/.test(wText);
+                        var wordBaseY = wy1 - (hasDescender ? (wBoxH * 0.21) : 0);
+                        if (wordObj.baseline && wordObj.baseline.has_baseline !== false &&
+                            typeof wordObj.baseline.y0 === 'number' && typeof wordObj.baseline.y1 === 'number') {
                             var blMidY = (wordObj.baseline.y0 + wordObj.baseline.y1) * 0.5;
-                            if (blMidY >= wy0 + wBoxH * 0.45 && blMidY <= wy1 + wBoxH * 0.15) {
+                            if (blMidY >= wy0 && blMidY <= wy1 + Math.max(wBoxH * 2.5, 24 * vpScale)) {
                                 wordBaseY = blMidY;
+                            }
+                        } else if (wordObj.lineBaseline && wordObj.lineBaseline.has_baseline !== false &&
+                                   typeof wordObj.lineBaseline.y0 === 'number' && typeof wordObj.lineBaseline.y1 === 'number') {
+                            var lb = wordObj.lineBaseline;
+                            var lbSpan = Math.max(1, lb.x1 - lb.x0);
+                            var lbRatio = Math.max(0, Math.min(1, (((wx0 + wx1) * 0.5) - lb.x0) / lbSpan));
+                            var lbY = lb.y0 + (lb.y1 - lb.y0) * lbRatio;
+                            if (lbY >= wy0 && lbY <= wy1 + Math.max(wBoxH * 2.5, 24 * vpScale)) {
+                                wordBaseY = lbY;
                             }
                         }
 
-                        var hasAscender = /[A-ZÄÖÜbdfhkl0-9!?"§$%&/()=?]/.test(wText);
-                        var rawAscenderPx = Math.max(6, wordBaseY - wy0);
-                        // For lowercase words without ascenders (e.g. "am", "in", "es"), x-height is ~0.73 of cap height
-                        var estCapHeightPx = hasAscender ? rawAscenderPx : (rawAscenderPx / 0.74);
+                        var hasAscender = /[A-ZÄÖÜbdfhklt0-9!?"§$%&/()=?]/.test(wText);
+                        var hasXHeight = /[acemnorsuvwxzäöü]/.test(wText);
+                        var rawAboveBasePx = Math.max(4, wordBaseY - wy0);
+                        // Capital/ascender height above baseline; for x-height-only words ("vom", "in"), x-height is ~0.73 of cap height
+                        var estCapHeightPx = hasAscender ? rawAboveBasePx : (hasXHeight ? (rawAboveBasePx / 0.73) : null);
 
                         preparedWords.push({
                             text: wText,
@@ -3515,60 +3746,60 @@
                         });
                     }
 
-                    // Smooth cap height & baseline across immediately adjacent words on the same horizontal row
-                    // (within 90 pt horizontally and 0.45 * height vertically) so x-height words ("in", "zu")
-                    // align 100% seamlessly with adjacent capitalized words without being affected by distant page skew
+                    // Calibrate each word's CapHeight across local same-line neighbors (within 130 pt horizontally)
+                    // and place the PDF text matrix baseline DIRECTLY on curW.baseY (vy = curW.baseY)
                     for (var pw = 0; pw < preparedWords.length; pw++) {
                         var curW = preparedWords[pw];
-                        var localCaps = [curW.estCapHeightPx];
-                        var localTops = [];
-                        if (curW.hasAscender) localTops.push(curW.wy0);
+                        var localAscCaps = [];
+                        var localAllCaps = [];
+                        if (curW.estCapHeightPx !== null) {
+                            localAllCaps.push(curW.estCapHeightPx);
+                            if (curW.hasAscender) localAscCaps.push(curW.estCapHeightPx);
+                        }
 
-                        for (var nw = Math.max(0, pw - 6); nw <= Math.min(preparedWords.length - 1, pw + 6); nw++) {
+                        for (var nw = Math.max(0, pw - 8); nw <= Math.min(preparedWords.length - 1, pw + 8); nw++) {
                             if (nw === pw) continue;
                             var nb = preparedWords[nw];
                             var vDiff = Math.abs(nb.baseY - curW.baseY);
                             var hGap = Math.max(0, Math.max(curW.wx0 - nb.wx1, nb.wx0 - curW.wx1));
-                            if (vDiff <= Math.max(curW.wBoxH, nb.wBoxH) * 0.45 && hGap <= 90 * vpScale) {
-                                localCaps.push(nb.estCapHeightPx);
+                            if (vDiff <= Math.max(curW.wBoxH, nb.wBoxH, 16) * 0.55 && hGap <= 130 * vpScale && nb.estCapHeightPx !== null) {
+                                localAllCaps.push(nb.estCapHeightPx);
                                 if (nb.hasAscender) {
-                                    localTops.push(nb.wy0);
+                                    localAscCaps.push(nb.estCapHeightPx);
                                 }
                             }
                         }
 
-                        localCaps.sort(function (a, b) { return a - b; });
-                        var medianCapPx = localCaps[Math.floor(localCaps.length * 0.6)];
-                        var targetTopY = (!curW.hasAscender && localTops.length > 0)
-                            ? (curW.baseY - medianCapPx)
-                            : curW.wy0;
-                        var effectiveBoxHPt = Math.max(6, (curW.wy1 - targetTopY) / vpScale);
+                        var capPool = localAscCaps.length > 0
+                            ? localAscCaps
+                            : (localAllCaps.length > 0 ? localAllCaps : [Math.max(8, curW.wBoxH * 0.78)]);
+                        capPool.sort(function (a, b) { return a - b; });
+                        var medianCapPx = capPool[Math.floor(capPool.length * 0.5)];
+                        var capHeightPt = medianCapPx / vpScale;
 
-                        // Choose fontSize and baseline vy so that extractPageTextBlocks:
-                        //   topY = (vy / vpScale) - (fontSize * 0.88) === targetTopY / vpScale
-                        //   and height === effectiveBoxHPt
-                        var fontSize = Math.max(5.5, Math.min(48, Math.round((effectiveBoxHPt / 1.14) * 10) / 10));
+                        // In Helvetica, CapHeight/Ascender is 0.73 * fontSize above the baseline.
+                        // Placing vy directly at curW.baseY aligns the baseline at curW.baseY and the top of capitals at curW.wy0!
+                        var fontSize = Math.max(5.0, Math.min(64, Math.round((capHeightPt / 0.73) * 100) / 100));
                         var vx = curW.wx0;
-                        var vy = targetTopY + (fontSize * 0.88 * vpScale);
+                        var vy = curW.baseY;
 
                         // Calculate exact horizontal scaling Tz (%) so Helvetica word width matches scanned word width 1:1
-                        var targetWidthPt = Math.max(2, curW.wBoxW / vpScale);
+                        var targetWidthPt = Math.max(1.5, curW.wBoxW / vpScale);
                         var naturalWidthPt = Math.max(1, helvFont.widthOfTextAtSize(curW.text, fontSize));
-                        var tzPercent = Math.max(40, Math.min(240, Math.round((targetWidthPt / naturalWidthPt) * 1000) / 10));
+                        var tzPercent = Math.max(35, Math.min(260, Math.round((targetWidthPt / naturalWidthPt) * 1000) / 10));
 
                         if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
                             pdfPage.pushOperators(PDFLib.PDFOperator.of('Tz', [PDFLib.PDFNumber.of(tzPercent)]));
                         }
 
-                        // Transform visual canvas coordinates into raw PDF space (handles /Rotate 0, 90, 180, 270 & CropBox)
+                        // Transform visual canvas baseline coordinates into raw PDF space (handles /Rotate 0, 90, 180, 270 & CropBox)
                         var pdfPt = renderVp.convertToPdfPoint(vx, vy);
 
-                        // Invisible OCR text layer via 3 Tr + exact Tz width calibration
+                        // Invisible OCR text layer via 3 Tr + exact Tz width calibration (reuses page's shared Helvetica font)
                         pdfPage.drawText(curW.text + ' ', {
                             x: pdfPt[0],
                             y: pdfPt[1],
                             size: fontSize,
-                            font: helvFont,
                             color: PDFLib.rgb(0, 0, 0),
                             rotate: textRotation
                         });
@@ -3586,14 +3817,17 @@
                         if (!lText || !lineObj.bbox) continue;
 
                         var lVBoxW = Math.max(8, lineObj.bbox.x1 - lineObj.bbox.x0);
-                        var lVBoxH = Math.max(12, lineObj.bbox.y1 - lineObj.bbox.y0);
-                        var lPtBoxH = lVBoxH / vpScale;
-                        var lFontSize = Math.max(6, Math.min(36, Math.round((lPtBoxH / 1.14) * 10) / 10));
+                        var lVBoxH = Math.max(10, lineObj.bbox.y1 - lineObj.bbox.y0);
+                        var lBaseY = (lineObj.baseline && lineObj.baseline.has_baseline !== false && typeof lineObj.baseline.y0 === 'number')
+                            ? ((lineObj.baseline.y0 + lineObj.baseline.y1) * 0.5)
+                            : (lineObj.bbox.y1 - lVBoxH * 0.16);
+                        var lCapPt = Math.max(5, (lBaseY - lineObj.bbox.y0) / vpScale);
+                        var lFontSize = Math.max(5.5, Math.min(42, Math.round((lCapPt / 0.73) * 100) / 100));
                         var lVx = lineObj.bbox.x0;
-                        var lVy = lineObj.bbox.y0 + (lFontSize * 0.88 * vpScale);
+                        var lVy = lBaseY;
                         var lTargetWidthPt = Math.max(4, lVBoxW / vpScale);
                         var lNaturalWidthPt = Math.max(1, helvFont.widthOfTextAtSize(lText, lFontSize));
-                        var lTzPercent = Math.max(40, Math.min(240, Math.round((lTargetWidthPt / lNaturalWidthPt) * 1000) / 10));
+                        var lTzPercent = Math.max(35, Math.min(260, Math.round((lTargetWidthPt / lNaturalWidthPt) * 1000) / 10));
 
                         if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
                             pdfPage.pushOperators(PDFLib.PDFOperator.of('Tz', [PDFLib.PDFNumber.of(lTzPercent)]));
@@ -3605,7 +3839,6 @@
                             x: lPdfPt[0],
                             y: lPdfPt[1],
                             size: lFontSize,
-                            font: helvFont,
                             color: PDFLib.rgb(0, 0, 0),
                             rotate: textRotation
                         });
@@ -3625,7 +3858,6 @@
                             x: rPdfPt[0],
                             y: rPdfPt[1],
                             size: 10.5,
-                            font: helvFont,
                             color: PDFLib.rgb(0, 0, 0),
                             rotate: textRotation
                         });
@@ -14312,9 +14544,9 @@
             var vpPt = baseViewport.convertToViewportPoint(tr[4], tr[5]);
             var vx = vpPt[0];
             var vy = vpPt[1];
-            var topY = vy - (fSize * 0.88);
+            var topY = vy - (fSize * 0.75);
             var w = (it.width && it.width > 0) ? it.width : (it.str.length * fSize * 0.52);
-            var h = Math.max(fSize * 1.2, (it.height || fSize) * 1.15);
+            var h = Math.max(fSize * 0.98, (it.height || fSize) * 0.96);
             raw.push({
                 text: it.str.trim(),
                 x: vx,
