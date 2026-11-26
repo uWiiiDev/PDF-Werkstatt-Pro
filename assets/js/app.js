@@ -456,30 +456,62 @@
             state.activeTabId = null;
             state.selectedAnnotationIndex = -1;
             state.currentPageTextBlocks = [];
-            el.thumbList.innerHTML = '';
-            el.organizerGrid.innerHTML = '';
-            el.leftPageSummary.textContent = 'Keine Datei geladen';
+            state.contrastOverlayEnabled = false;
+            state.contrastResults = [];
+            state.contrastActiveHighlight = null;
+            stopTtsReading(true);
+
+            if (el.thumbList) el.thumbList.innerHTML = '';
+            if (el.organizerGrid) el.organizerGrid.innerHTML = '';
+            if (el.leftPageSummary) el.leftPageSummary.textContent = 'Keine Datei geladen';
+
             if (el.pdfCanvas) {
                 var ctx = el.pdfCanvas.getContext('2d');
                 if (ctx) ctx.clearRect(0, 0, el.pdfCanvas.width, el.pdfCanvas.height);
                 el.pdfCanvas.width = 0;
                 el.pdfCanvas.height = 0;
             }
+            if (el.annCanvas) {
+                var actx = el.annCanvas.getContext('2d');
+                if (actx) actx.clearRect(0, 0, el.annCanvas.width, el.annCanvas.height);
+                el.annCanvas.width = 0;
+                el.annCanvas.height = 0;
+            }
+            if (el.stageWrapper) {
+                el.stageWrapper.style.width = '';
+                el.stageWrapper.style.height = '';
+            }
             if (el.overlayLayer) {
                 el.overlayLayer.innerHTML = '';
             }
+
             var mTitle = document.getElementById('metaTitle');
             var mAuthor = document.getElementById('metaAuthor');
             var mSubject = document.getElementById('metaSubject');
+            var a11yFixTitle = document.getElementById('a11yFixTitle');
+            var ocrOut = document.getElementById('ocrOutputText');
+            var ocrStatus = document.getElementById('ocrStatusBox');
+            var sideBadge = document.getElementById('inspectorA11yScoreBadge');
             if (mTitle) mTitle.value = '';
             if (mAuthor) mAuthor.value = '';
             if (mSubject) mSubject.value = '';
+            if (a11yFixTitle) a11yFixTitle.value = '';
+            if (ocrOut) ocrOut.value = '';
+            if (ocrStatus) {
+                ocrStatus.innerHTML = '';
+                ocrStatus.classList.add('hidden');
+            }
+            if (sideBadge) {
+                sideBadge.textContent = '—';
+                sideBadge.style.color = 'var(--text-secondary)';
+            }
+
             clearPdfFullTextSearch();
-            updateAccessibilityUI(false);
+            setActiveTool('select');
             renderTabsBar();
             switchView('launcher');
             updateStatusBarInfo();
-            setStatus('Bereit — Kein Dokument geladen');
+            setStatus('Bereit — PDF-Werkstatt Pro v' + (window.PDFSTUDIO_VERSION || '1.9.4'));
             clearLocalAutoSaveSnapshot();
         } else {
             var nextTab = state.tabs[Math.max(0, idx - 1)];
@@ -4848,6 +4880,14 @@
     async function updateAccessibilityUI(openModalWindow) {
         var doc = getActiveDoc();
         if (!doc) {
+            if (!openModalWindow) {
+                var sideBadgeReset = document.getElementById('inspectorA11yScoreBadge');
+                if (sideBadgeReset) {
+                    sideBadgeReset.textContent = '—';
+                    sideBadgeReset.style.color = 'var(--text-secondary)';
+                }
+                return;
+            }
             await createNewBlankPdfTab();
             doc = getActiveDoc();
         }
