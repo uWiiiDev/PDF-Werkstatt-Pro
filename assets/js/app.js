@@ -788,8 +788,9 @@
                 var it = items[i];
                 if (!it || typeof it.str !== 'string' || it.str.trim() === '') continue;
                 var tr = it.transform || [12, 0, 0, 12, 0, 0];
-                var fSize = Math.sqrt(tr[0] * tr[0] + tr[1] * tr[1]) || Math.sqrt(tr[2] * tr[2] + tr[3] * tr[3]) || it.height || 12;
-                fSize = Math.max(7, Math.min(96, Math.round(fSize * 10) / 10));
+                // Use the vertical glyph axis (tr[2], tr[3]) or it.height so horizontal scaling (Tz) never distorts vertical fontSize/topY
+                var fSize = Math.sqrt(tr[2] * tr[2] + tr[3] * tr[3]) || it.height || Math.sqrt(tr[0] * tr[0] + tr[1] * tr[1]) || 12;
+                fSize = Math.max(6, Math.min(96, Math.round(fSize * 10) / 10));
 
                 // Convert raw PDF text coordinates (tr[4], tr[5]) into visual viewport coordinates
                 // so rotated pages (/Rotate 90, 180, 270) and non-zero MediaBox/CropBox origins map 100% accurately
@@ -798,7 +799,7 @@
                 var vy = vpPt[1];
                 var topY = vy - (fSize * 0.88);
                 var w = (it.width && it.width > 0) ? it.width : (it.str.length * fSize * 0.52);
-                var h = Math.max(fSize * 1.26, (it.height || fSize) * 1.15);
+                var h = Math.max(fSize * 1.18, (it.height || fSize) * 1.12);
                 raw.push({
                     text: it.str,
                     x: vx,
@@ -823,16 +824,22 @@
                 var cur = raw[j];
                 if (merged.length > 0) {
                     var prev = merged[merged.length - 1];
-                    var sameLine = Math.abs(cur.y - prev.y) <= Math.max(prev.fontSize, cur.fontSize) * 0.45;
+                    var sameLine = Math.abs(cur.y - prev.y) <= Math.max(prev.fontSize, cur.fontSize) * 0.52 ||
+                                   Math.abs((cur.y + cur.h) - (prev.y + prev.h)) <= Math.max(prev.fontSize, cur.fontSize) * 0.48;
                     var gap = cur.x - (prev.x + prev.w);
-                    if (sameLine && gap >= -4 && gap <= Math.max(prev.fontSize, cur.fontSize) * 1.6) {
-                        var needsSpace = gap > (prev.fontSize * 0.18) && prev.text.slice(-1) !== ' ' && cur.text.charAt(0) !== ' ';
+                    // Skip exact duplicate overlapping word at the same coordinate (e.g. hybrid PDF with dual text layer)
+                    if (sameLine && Math.abs(cur.x - prev.x) < 4 && prev.text.trim() === cur.text.trim()) {
+                        continue;
+                    }
+                    if (sameLine && gap >= -6 && gap <= Math.max(prev.fontSize, cur.fontSize) * 1.65) {
+                        var needsSpace = gap > (prev.fontSize * 0.14) && prev.text.slice(-1) !== ' ' && cur.text.charAt(0) !== ' ';
                         prev.text = prev.text + (needsSpace ? ' ' : '') + cur.text;
                         var rightEdge = Math.max(prev.x + prev.w, cur.x + cur.w);
+                        var bottomEdge = Math.max(prev.y + prev.h, cur.y + cur.h);
                         prev.x = Math.min(prev.x, cur.x);
                         prev.y = Math.min(prev.y, cur.y);
                         prev.w = rightEdge - prev.x;
-                        prev.h = Math.max(prev.h, cur.h);
+                        prev.h = bottomEdge - prev.y;
                         continue;
                     }
                 }
@@ -2883,7 +2890,7 @@
         var coreUrl = baseDir + 'assets/vendor/tesseract/tesseract-core-lstm.wasm.js';
         var langUrl = baseDir + 'assets/vendor/tesseract/lang';
 
-        return await window.Tesseract.createWorker(lang, 1, {
+        var worker = await window.Tesseract.createWorker(lang, 1, {
             workerPath: workerUrl,
             corePath: coreUrl,
             langPath: langUrl,
@@ -2904,6 +2911,20 @@
                 console.error('Tesseract Worker Error:', err);
             }
         });
+
+        // Use PSM.AUTO ('3' = Fully automatic page segmentation) instead of Tesseract.js default PSM.SINGLE_BLOCK ('6')
+        // so headers, footers, multi-column layouts, tables, and side boxes are recognized completely without dropping blocks
+        if (worker && typeof worker.setParameters === 'function') {
+            try {
+                await worker.setParameters({
+                    tessedit_pageseg_mode: '3',
+                    preserve_interword_spaces: '1'
+                });
+            } catch (paramErr) {
+                console.warn('Tesseract setParameters warning:', paramErr);
+            }
+        }
+        return worker;
     }
 
     async function extractEmbeddedPageText(allPages) {
@@ -3261,10 +3282,10 @@
 
         var worker = null;
         try {
-            // Render current PDF page at high resolution (scale 2.0 = 144 DPI) for sharp OCR recognition
+            // Render current PDF page at high resolution (scale 2.5 = 180 DPI) for sharp OCR recognition
             var pdfJsDoc = await loadPdfJsDocument(doc.bytes);
             var jsPage = await pdfJsDoc.getPage(pageNum);
-            var renderVp = jsPage.getViewport({ scale: 2.0 });
+            var renderVp = jsPage.getViewport({ scale: 2.5 });
             var offCanvas = document.createElement('canvas');
             offCanvas.width = renderVp.width;
             offCanvas.height = renderVp.height;
@@ -3366,7 +3387,8 @@
                 setOcrStatusBox('⏳ <strong>Sandwich-OCR:</strong> Analysiere ' + escapeHtml(stepLabel) + '…', 'info');
 
                 var jsPage = await pdfJsDoc.getPage(pIdx + 1);
-                var renderVp = jsPage.getViewport({ scale: 2.0 });
+                var vpScale = 2.5;
+                var renderVp = jsPage.getViewport({ scale: vpScale });
 
                 var offCanvas = document.createElement('canvas');
                 offCanvas.width = renderVp.width;
@@ -3383,6 +3405,34 @@
 
                 var pdfPage = pdfPages[pIdx];
 
+                // If this page previously had an invisible 3 Tr OCR text layer (e.g. from scanner or earlier OCR run),
+                // strip old invisible OCR text objects before embedding the new 1:1 calibrated OCR layer
+                try {
+                    var pNode = pdfPage.node;
+                    var cObj = pNode.get(PDFLib.PDFName.of('Contents'));
+                    if (cObj && PDFLib.decodePDFRawStream) {
+                        var lookedC = pdfDoc.context.lookup(cObj);
+                        var cRefs = (lookedC && typeof lookedC.asArray === 'function') ? lookedC.asArray() : [cObj];
+                        for (var cs = 0; cs < cRefs.length; cs++) {
+                            var rawSt = pdfDoc.context.lookup(cRefs[cs]);
+                            var decStr = decodeRawPdfStreamToString(rawSt);
+                            if (decStr && /\b3\s+Tr\b/.test(decStr)) {
+                                // Remove previous invisible OCR text blocks
+                                var cleanedStr = decStr
+                                    .replace(/\b3\s+Tr\b[\s\S]*$/g, function (tail) {
+                                        return tail.replace(/q\s+BT[\s\S]*?ET\s+Q/g, '').replace(/BT[\s\S]*?ET/g, '');
+                                    });
+                                if (cleanedStr !== decStr) {
+                                    var cleanFlate = pdfDoc.context.flateStream(stringToLatin1Bytes(cleanedStr));
+                                    pdfDoc.context.assign(cRefs[cs], cleanFlate);
+                                }
+                            }
+                        }
+                    }
+                } catch (stripErr) {
+                    console.warn('Strip previous 3 Tr OCR layer warning:', stripErr);
+                }
+
                 // Isolate the page's original scanned image stream in /Artifact BMC q ... Q EMC
                 // so any unclosed rotation/scaling cm matrix from scanner drivers is reset AND PAC 2026
                 // recognizes the scan background as an Artifact while the OCR text layer is real content
@@ -3395,33 +3445,126 @@
 
                 var pageRot = ((renderVp.rotation % 360) + 360) % 360;
                 var textRotation = PDFLib.degrees(pageRot);
-                var vpScale = renderVp.scale || 2.0;
 
                 var words = Array.isArray(ocrData.words) ? ocrData.words : [];
                 var lines = Array.isArray(ocrData.lines) ? ocrData.lines : [];
 
+                // Fallback: harvest words/lines from ocrData.blocks hierarchy if top-level arrays are empty
+                if (words.length === 0 && Array.isArray(ocrData.blocks)) {
+                    for (var bi = 0; bi < ocrData.blocks.length; bi++) {
+                        var blkObj = ocrData.blocks[bi];
+                        var paras = (blkObj && Array.isArray(blkObj.paragraphs)) ? blkObj.paragraphs : [];
+                        for (var pi = 0; pi < paras.length; pi++) {
+                            var pLines = Array.isArray(paras[pi].lines) ? paras[pi].lines : [];
+                            for (var li = 0; li < pLines.length; li++) {
+                                var lnObj = pLines[li];
+                                lines.push(lnObj);
+                                var lWords = Array.isArray(lnObj.words) ? lnObj.words : [];
+                                for (var wi = 0; wi < lWords.length; wi++) {
+                                    words.push(lWords[wi]);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (words.length > 0) {
+                    // Pre-calculate each word's individual visual geometry (in PDF points)
+                    var preparedWords = [];
                     for (var w = 0; w < words.length; w++) {
                         var wordObj = words[w];
                         var wText = sanitizeOcrTextForPdf(wordObj.text);
                         if (!wText || !wordObj.bbox) continue;
 
-                        // Align all words on the same line to the line's vertical bounding box so PDF viewers
-                        // and PDF.js group them cleanly as coherent horizontal text lines
-                        var lineBbox = (wordObj.line && wordObj.line.bbox) ? wordObj.line.bbox : wordObj.bbox;
-                        var vBoxH = Math.max(12, lineBbox.y1 - lineBbox.y0);
-                        var ptBoxH = vBoxH / vpScale;
-                        var fontSize = Math.max(6, Math.min(32, Math.round(ptBoxH * 0.78 * 10) / 10));
+                        var wx0 = wordObj.bbox.x0;
+                        var wy0 = wordObj.bbox.y0;
+                        var wx1 = wordObj.bbox.x1;
+                        var wy1 = wordObj.bbox.y1;
+                        var wBoxW = Math.max(4, wx1 - wx0);
+                        var wBoxH = Math.max(8, wy1 - wy0);
 
-                        // Visual canvas coordinates (vx, vy) of the word's left baseline start
-                        var vx = wordObj.bbox.x0;
-                        var vy = lineBbox.y1 - (vBoxH * 0.15);
+                        // Determine word's true baseline Y in canvas pixels:
+                        // Prefer Tesseract's word-level baseline (interpolated at word's center),
+                        // clamped safely inside the word's bounding box
+                        var hasDescender = /[gjpqy,;()\[\]{}Q]/.test(wText);
+                        var defaultBaseY = wy1 - (wBoxH * (hasDescender ? 0.18 : 0.04));
+                        var wordBaseY = defaultBaseY;
+                        if (wordObj.baseline && typeof wordObj.baseline.y0 === 'number' && typeof wordObj.baseline.y1 === 'number') {
+                            var blMidY = (wordObj.baseline.y0 + wordObj.baseline.y1) * 0.5;
+                            if (blMidY >= wy0 + wBoxH * 0.45 && blMidY <= wy1 + wBoxH * 0.15) {
+                                wordBaseY = blMidY;
+                            }
+                        }
+
+                        var hasAscender = /[A-ZÄÖÜbdfhkl0-9!?"§$%&/()=?]/.test(wText);
+                        var rawAscenderPx = Math.max(6, wordBaseY - wy0);
+                        // For lowercase words without ascenders (e.g. "am", "in", "es"), x-height is ~0.73 of cap height
+                        var estCapHeightPx = hasAscender ? rawAscenderPx : (rawAscenderPx / 0.74);
+
+                        preparedWords.push({
+                            text: wText,
+                            wx0: wx0,
+                            wy0: wy0,
+                            wx1: wx1,
+                            wy1: wy1,
+                            wBoxW: wBoxW,
+                            wBoxH: wBoxH,
+                            baseY: wordBaseY,
+                            hasAscender: hasAscender,
+                            estCapHeightPx: estCapHeightPx
+                        });
+                    }
+
+                    // Smooth cap height & baseline across immediately adjacent words on the same horizontal row
+                    // (within 90 pt horizontally and 0.45 * height vertically) so x-height words ("in", "zu")
+                    // align 100% seamlessly with adjacent capitalized words without being affected by distant page skew
+                    for (var pw = 0; pw < preparedWords.length; pw++) {
+                        var curW = preparedWords[pw];
+                        var localCaps = [curW.estCapHeightPx];
+                        var localTops = [];
+                        if (curW.hasAscender) localTops.push(curW.wy0);
+
+                        for (var nw = Math.max(0, pw - 6); nw <= Math.min(preparedWords.length - 1, pw + 6); nw++) {
+                            if (nw === pw) continue;
+                            var nb = preparedWords[nw];
+                            var vDiff = Math.abs(nb.baseY - curW.baseY);
+                            var hGap = Math.max(0, Math.max(curW.wx0 - nb.wx1, nb.wx0 - curW.wx1));
+                            if (vDiff <= Math.max(curW.wBoxH, nb.wBoxH) * 0.45 && hGap <= 90 * vpScale) {
+                                localCaps.push(nb.estCapHeightPx);
+                                if (nb.hasAscender) {
+                                    localTops.push(nb.wy0);
+                                }
+                            }
+                        }
+
+                        localCaps.sort(function (a, b) { return a - b; });
+                        var medianCapPx = localCaps[Math.floor(localCaps.length * 0.6)];
+                        var targetTopY = (!curW.hasAscender && localTops.length > 0)
+                            ? (curW.baseY - medianCapPx)
+                            : curW.wy0;
+                        var effectiveBoxHPt = Math.max(6, (curW.wy1 - targetTopY) / vpScale);
+
+                        // Choose fontSize and baseline vy so that extractPageTextBlocks:
+                        //   topY = (vy / vpScale) - (fontSize * 0.88) === targetTopY / vpScale
+                        //   and height === effectiveBoxHPt
+                        var fontSize = Math.max(5.5, Math.min(48, Math.round((effectiveBoxHPt / 1.14) * 10) / 10));
+                        var vx = curW.wx0;
+                        var vy = targetTopY + (fontSize * 0.88 * vpScale);
+
+                        // Calculate exact horizontal scaling Tz (%) so Helvetica word width matches scanned word width 1:1
+                        var targetWidthPt = Math.max(2, curW.wBoxW / vpScale);
+                        var naturalWidthPt = Math.max(1, helvFont.widthOfTextAtSize(curW.text, fontSize));
+                        var tzPercent = Math.max(40, Math.min(240, Math.round((targetWidthPt / naturalWidthPt) * 1000) / 10));
+
+                        if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
+                            pdfPage.pushOperators(PDFLib.PDFOperator.of('Tz', [PDFLib.PDFNumber.of(tzPercent)]));
+                        }
 
                         // Transform visual canvas coordinates into raw PDF space (handles /Rotate 0, 90, 180, 270 & CropBox)
                         var pdfPt = renderVp.convertToPdfPoint(vx, vy);
 
-                        // Invisible OCR text layer via 3 Tr — preserves original visual scan 100% and passes PAC 2026 contrast checks!
-                        pdfPage.drawText(wText + ' ', {
+                        // Invisible OCR text layer via 3 Tr + exact Tz width calibration
+                        pdfPage.drawText(curW.text + ' ', {
                             x: pdfPt[0],
                             y: pdfPt[1],
                             size: fontSize,
@@ -3431,17 +3574,31 @@
                         });
                         totalEmbeddedItems++;
                     }
+
+                    // Reset horizontal text scaling to 100% after embedding OCR words
+                    if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
+                        pdfPage.pushOperators(PDFLib.PDFOperator.of('Tz', [PDFLib.PDFNumber.of(100)]));
+                    }
                 } else if (lines.length > 0) {
                     for (var l = 0; l < lines.length; l++) {
                         var lineObj = lines[l];
                         var lText = sanitizeOcrTextForPdf(lineObj.text);
                         if (!lText || !lineObj.bbox) continue;
 
-                        var lVBoxH = Math.max(14, lineObj.bbox.y1 - lineObj.bbox.y0);
+                        var lVBoxW = Math.max(8, lineObj.bbox.x1 - lineObj.bbox.x0);
+                        var lVBoxH = Math.max(12, lineObj.bbox.y1 - lineObj.bbox.y0);
                         var lPtBoxH = lVBoxH / vpScale;
-                        var lFontSize = Math.max(7, Math.min(32, Math.round(lPtBoxH * 0.78 * 10) / 10));
+                        var lFontSize = Math.max(6, Math.min(36, Math.round((lPtBoxH / 1.14) * 10) / 10));
                         var lVx = lineObj.bbox.x0;
-                        var lVy = lineObj.bbox.y1 - (lVBoxH * 0.15);
+                        var lVy = lineObj.bbox.y0 + (lFontSize * 0.88 * vpScale);
+                        var lTargetWidthPt = Math.max(4, lVBoxW / vpScale);
+                        var lNaturalWidthPt = Math.max(1, helvFont.widthOfTextAtSize(lText, lFontSize));
+                        var lTzPercent = Math.max(40, Math.min(240, Math.round((lTargetWidthPt / lNaturalWidthPt) * 1000) / 10));
+
+                        if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
+                            pdfPage.pushOperators(PDFLib.PDFOperator.of('Tz', [PDFLib.PDFNumber.of(lTzPercent)]));
+                        }
+
                         var lPdfPt = renderVp.convertToPdfPoint(lVx, lVy);
 
                         pdfPage.drawText(lText, {
@@ -3453,6 +3610,9 @@
                             rotate: textRotation
                         });
                         totalEmbeddedItems++;
+                    }
+                    if (typeof pdfPage.pushOperators === 'function' && PDFLib.PDFOperator && PDFLib.PDFNumber) {
+                        pdfPage.pushOperators(PDFLib.PDFOperator.of('Tz', [PDFLib.PDFNumber.of(100)]));
                     }
                 } else if (pageText) {
                     var rawLines = pageText.split(/\r?\n/);
@@ -14147,7 +14307,7 @@
             var it = items[i];
             if (!it || typeof it.str !== 'string' || it.str.trim() === '') continue;
             var tr = it.transform || [12, 0, 0, 12, 0, 0];
-            var fSize = Math.sqrt(tr[0] * tr[0] + tr[1] * tr[1]) || Math.sqrt(tr[2] * tr[2] + tr[3] * tr[3]) || it.height || 11;
+            var fSize = Math.sqrt(tr[2] * tr[2] + tr[3] * tr[3]) || it.height || Math.sqrt(tr[0] * tr[0] + tr[1] * tr[1]) || 11;
             fSize = Math.max(7, Math.min(72, Math.round(fSize * 10) / 10));
             var vpPt = baseViewport.convertToViewportPoint(tr[4], tr[5]);
             var vx = vpPt[0];
