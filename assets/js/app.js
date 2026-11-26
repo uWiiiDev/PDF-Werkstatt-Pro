@@ -6794,23 +6794,59 @@
                 }
 
                 // Demote any MCID that consists of ONLY whitespace (e.g. CID <0003> space on blank lines)
-                // to /Artifact BMC and compact remaining MCIDs (0 .. nextCleanMcid - 1) so PAC never flags
-                // "Tagged text consists of only whitespace"
+                // or merge inline word-space MCIDs directly into the preceding text MCID so Word's native spaces
+                // are preserved 1:1 in PAC 2026 Screenreader Preview without triggering "Tagged text consists of only whitespace"
                 var pStateForClean = pageTagStates[pIdx0];
                 if (pStateForClean && pStateForClean.pageMcidCount > 0 && anyMcidDecoded) {
+                    // First, merge any whitespace-only MCID block that immediately follows a non-whitespace MCID
+                    // inside the same BT..ET stream directly into that preceding MCID
+                    var mergedInlineWs = false;
+                    pStateForClean.taggedContentStr = pStateForClean.taggedContentStr.replace(
+                        /(\/[A-Za-z0-9]+\s*<<\/MCID\s+(\d+)>>\s*BDC\n[\s\S]*?)\nEMC((?:\n\/[A-Za-z0-9]+\s*<<\/MCID\s+\d+>>\s*BDC\n[\s\S]*?\nEMC)+)/g,
+                        function (fullGroup, firstPart, firstMcidStr, trailingChain) {
+                            var firstM = parseInt(firstMcidStr, 10);
+                            var fTagCandidate = (pStateForClean.pageMcidTags && pStateForClean.pageMcidTags[firstM]) || 'P';
+                            var fIsFig = fTagCandidate === 'Figure' || Boolean(pStateForClean.mcidFigureInfos && pStateForClean.mcidFigureInfos[firstM]);
+                            if (!mcidHasNonWs[firstM] || fIsFig) return fullGroup;
+
+                            var chainRe = /\n\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC\n([\s\S]*?)\nEMC/g;
+                            var cMatch;
+                            var mergedPrefix = firstPart;
+                            var restParts = [];
+                            var stillMerging = true;
+                            while ((cMatch = chainRe.exec(trailingChain)) !== null) {
+                                var cTag = cMatch[1];
+                                var cMcid = parseInt(cMatch[2], 10);
+                                var cBody = cMatch[3];
+                                var cIsFig = cTag === 'Figure' || Boolean(pStateForClean.mcidFigureInfos && pStateForClean.mcidFigureInfos[cMcid]);
+                                if (stillMerging && !mcidHasNonWs[cMcid] && !cIsFig) {
+                                    mergedPrefix += '\n' + cBody;
+                                    mergedInlineWs = true;
+                                } else {
+                                    stillMerging = false;
+                                    restParts.push('\n/' + cTag + ' <</MCID ' + cMcid + '>> BDC\n' + cBody + '\nEMC');
+                                }
+                            }
+                            return mergedPrefix + '\nEMC' + restParts.join('');
+                        }
+                    );
+
                     var oldToNewMcid = {};
                     var newMcidTags = [];
                     var newMcidRawTexts = [];
                     var newMcidFontStates = {};
                     var newMcidFigureInfos = {};
+                    var hadDemotedWhitespaceAfter = {};
                     var nextCleanMcid = 0;
-                    var hadWhitespaceMcid = false;
+                    var lastKeptNewMcid = null;
+                    var hadWhitespaceMcid = mergedInlineWs;
                     for (var om = 0; om < pStateForClean.pageMcidCount; om++) {
                         var origTagCandidate = (pStateForClean.pageMcidTags && pStateForClean.pageMcidTags[om]) || 'P';
                         var isFigureMcid = origTagCandidate === 'Figure' || Boolean(pStateForClean.mcidFigureInfos && pStateForClean.mcidFigureInfos[om]);
                         if (mcidHasNonWs[om] || isFigureMcid) {
                             var newM = nextCleanMcid++;
                             oldToNewMcid[om] = newM;
+                            lastKeptNewMcid = newM;
                             var origTag = isFigureMcid ? 'Figure' : origTagCandidate;
                             if (newM === 0 && origTag === 'P') {
                                 origTag = pIdx0 === 0 ? 'H1' : 'H2';
@@ -6826,8 +6862,12 @@
                         } else {
                             oldToNewMcid[om] = null;
                             hadWhitespaceMcid = true;
+                            if (lastKeptNewMcid !== null) {
+                                hadDemotedWhitespaceAfter[lastKeptNewMcid] = true;
+                            }
                         }
                     }
+                    pStateForClean.hadDemotedWhitespaceAfter = hadDemotedWhitespaceAfter;
                     if (hadWhitespaceMcid) {
                         pStateForClean.taggedContentStr = pStateForClean.taggedContentStr.replace(
                             /\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC/g,
@@ -7101,7 +7141,11 @@
                     var mTextParts = [];
                     var firstRawStr = mRunsList[0].str || '';
                     var lastRawStr = mRunsList[mRunsList.length - 1].str || '';
-                    var startsWithWs = /^[\s\u00A0]/.test(firstRawStr);
+                    var hadPrecedingDemotedWs = Boolean(mGeo > 0 && preState.hadDemotedWhitespaceAfter && preState.hadDemotedWhitespaceAfter[mGeo - 1]);
+                    var hadFollowingDemotedWs = Boolean(preState.hadDemotedWhitespaceAfter && preState.hadDemotedWhitespaceAfter[mGeo]);
+                    // If the preceding MCID was a whitespace MCID that got demoted to /Artifact, PDF.js attached its space
+                    // to firstRawStr via saveLastChar(" "), so ignore that phantom leading whitespace flag
+                    var startsWithWs = !hadPrecedingDemotedWs && /^[\s\u00A0]/.test(firstRawStr);
                     var endsWithWs = /[\s\u00A0]$/.test(lastRawStr);
 
                     for (var mrI = 0; mrI < mRunsList.length; mrI++) {
@@ -7114,7 +7158,7 @@
                         mBaseYSum += mr.baseY;
                         if (mrI > 0) {
                             var prevMr = mRunsList[mrI - 1];
-                            if ((mr.x1 - prevMr.x2) > Math.min(mr.fontH, prevMr.fontH) * 0.18 &&
+                            if ((mr.x1 - prevMr.x2) > Math.min(mr.fontH, prevMr.fontH) * 0.14 &&
                                 !/\s$/.test(prevMr.str) && !/^\s/.test(mr.str)) {
                                 mTextParts.push(' ');
                             }
@@ -7129,6 +7173,7 @@
                         rawText: combinedRaw,
                         startsWithWs: startsWithWs,
                         endsWithWs: endsWithWs,
+                        hadFollowingWsMcid: hadFollowingDemotedWs,
                         x1: mx1,
                         y1: my1,
                         x2: mx2,
@@ -7226,15 +7271,18 @@
                     } else {
                         var prevIt = activeSeg.items[activeSeg.items.length - 1];
                         var gapX = curIt.x1 - prevIt.x2;
-                        var isCrossCenterColJump = gapX > Math.max(22, vRow.fontH * 2.2) &&
-                            prevIt.x2 <= preW * 0.54 && curIt.x1 >= preW * 0.46;
-                        var isFarRightJump = gapX > Math.max(32, vRow.fontH * 3.0) && curIt.x1 >= preW * 0.64;
-                        var isHugeGap = gapX > preW * 0.28;
+                        var isCrossCenterColJump = gapX > Math.max(18, vRow.fontH * 1.8) &&
+                            prevIt.x2 <= preW * 0.65 && curIt.x1 >= preW * 0.33;
+                        var isContactColSplit = gapX > Math.max(14, vRow.fontH * 1.4) &&
+                            (/^Personalfragen$|^Fachfragen$|^Frau\b|^Herr\b|\+49\s*\d/i.test(curTrim)) &&
+                            curIt.x1 >= preW * 0.30;
+                        var isFarRightJump = gapX > Math.max(26, vRow.fontH * 2.5) && curIt.x1 >= preW * 0.50;
+                        var isHugeGap = gapX > preW * 0.22;
                         // Isolate "Seite 1 / 3" from preceding footer text on the same row
                         var isPageNumBoundary = (startsPageNumToken && !activeSeg.startsWithPageWord) ||
                             (activeSeg.startsWithPageWord && !/^(?:\d+|\/|von|\d+\s*\/\s*\d+)$/i.test(curTrim));
 
-                        if (isCrossCenterColJump || isFarRightJump || isHugeGap || isPageNumBoundary) {
+                        if (isCrossCenterColJump || isContactColSplit || isFarRightJump || isHugeGap || isPageNumBoundary) {
                             rowSegs.push(activeSeg);
                             activeSeg = {
                                 isFigure: false,
@@ -7266,15 +7314,28 @@
                         if (si > 0) {
                             var pIt = sObj.items[si - 1];
                             var sGap = sIt.x1 - pIt.x2;
-                            if (sGap > Math.min(sIt.fontH, pIt.fontH) * 0.15 &&
-                                !/[\s\-–\/]$/.test(pIt.text) && !/^[\s,.;:!?)\]]/.test(sIt.text)) {
+                            var needsIntraSegSpace = pIt.hadFollowingWsMcid ||
+                                (sGap > Math.min(sIt.fontH, pIt.fontH) * 0.08 &&
+                                 !/[\s\-–\/]$/.test(pIt.text) && !/^[\s,.;:!?)\]]/.test(sIt.text)) ||
+                                (/[.,;:!?)\]]$/.test(pIt.text) && /^[A-Za-zÄÖÜäöüß0-9(]/.test(sIt.text)) ||
+                                (/[a-zäöüß]$/.test(pIt.text) && /^[A-ZÄÖÜ]/.test(sIt.text)) ||
+                                (/\d$/.test(pIt.text) && /^[A-Za-zÄÖÜäöüß]/.test(sIt.text));
+                            if (needsIntraSegSpace) {
                                 sTextArr.push(' ');
                             }
                         }
                         sTextArr.push(sIt.text);
                     }
                     sObj.text = sTextArr.join('').replace(/\s+/g, ' ').trim();
-                    sObj.colBand = (sObj.x2 <= preW * 0.54) ? 'left' : ((sObj.x1 >= preW * 0.46) ? 'right' : 'full');
+                    if (rowSegs.length >= 2) {
+                        sObj.colBand = (rsI === 0 && sObj.x1 < preW * 0.34) ? 'left' : 'right';
+                    } else if (sObj.x1 < preW * 0.34 && sObj.x2 <= preW * 0.65) {
+                        sObj.colBand = 'left';
+                    } else if (sObj.x1 >= preW * 0.33 && (sObj.x2 - sObj.x1) <= preW * 0.64) {
+                        sObj.colBand = 'right';
+                    } else {
+                        sObj.colBand = 'full';
+                    }
                 }
                 vRow.segments = rowSegs;
             }
@@ -7299,13 +7360,13 @@
                         for (var bs = 0; bs < bRow.segments.length; bs++) {
                             var bSeg = bRow.segments[bs];
                             if (bSeg.colBand === 'left') bandHasLeft = true;
-                            if (bSeg.colBand === 'right' && bSeg.x1 <= preW * 0.72 && !/^Seite\b|^\d+\s*\/\s*\d+$/i.test(bSeg.text)) {
+                            if (bSeg.colBand === 'right' && bSeg.x1 <= preW * 0.78 && !/^Seite\b|^\d+\s*\/\s*\d+$/i.test(bSeg.text)) {
                                 bandHasMidRight = true;
                             }
                         }
                         bandEnd++;
                     }
-                    if (bandHasLeft && bandHasMidRight && (bandEnd - rowCursor) >= 2) {
+                    if (bandHasLeft && bandHasMidRight && (bandEnd - rowCursor) >= 1) {
                         for (var rLeft = rowCursor; rLeft < bandEnd; rLeft++) {
                             var lSegs = visualRows[rLeft].segments;
                             for (var ls = 0; ls < lSegs.length; ls++) {
@@ -7328,24 +7389,26 @@
                 rowCursor++;
             }
 
-            // Mark page numbers ("Seite 1 / 3", "1 / 3") & vertical margin domain watermarks ("LKA-BW.DE") as Artifact
+            // Mark page numbers ("Seite 1 / 3", "1 / 3"), repeated running headers ("WIR SUCHEN SIE FÜR UNSER TEAM" on pages > 1),
+            // & decorative margin/footer domain watermarks ("LKA-BW.DE") as Artifact
             for (var ovI = 0; ovI < orderedVisualLines.length; ovI++) {
                 var ovSeg = orderedVisualLines[ovI];
                 if (ovSeg.isFigure) continue;
                 var tClean = ovSeg.text.trim();
-                var isPageNum = /^Seite(?:\s*\d+(?:\s*(?:\/|von)\s*\d+)?)?$/i.test(tClean) ||
+                var isPageNumOrWatermark = /^Seite(?:\s*\d+(?:\s*(?:\/|von)\s*\d+)?)?$/i.test(tClean) ||
                     ((ovSeg.baseY < preH * 0.28 || ovSeg.baseY > preH * 0.82) && /^(?:\d+\s*(?:\/|von)\s*\d+|-\s*\d+\s*-)$/i.test(tClean)) ||
-                    /^LKA[\s\-]*BW\.DE$/i.test(tClean);
-                if (isPageNum) {
+                    /^LKA[\s\-\u2010-\u2015]*BW\s*\.\s*DE$/i.test(tClean) ||
+                    (pPre > 0 && /^WIR\s+SUCHEN\s+SIE\s+F[ÜU]R\s+UNSER\s+TEAM\b/i.test(tClean));
+                if (isPageNumOrWatermark) {
                     ovSeg.isArtifact = true;
                     continue;
                 }
                 ovSeg.normKey = tClean.toLowerCase().replace(/\s+/g, ' ');
                 ovSeg.isContactFooterCandidate = (ovSeg.baseY < preH * 0.36) && (
-                    /^Job-ID:\s*\S|Bewerbungsfrist:\s*\d|^Fachfragen$|^Personalfragen$|\+49\s*\d{2,4}\s*\d{2,}/i.test(tClean) ||
+                    /^Job[\-\s]*ID:\s*\S|^Kennziffer:\s*\S|Bewerbungsfrist:\s*\d|^Fachfragen\b|^Personalfragen\b|\+49\s*\d{2,4}\s*\d{2,}/i.test(tClean) ||
                     /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(tClean)
                 );
-                if (ovSeg.baseY > preH * 0.72 && ovSeg.normKey.length >= 4) {
+                if (ovSeg.baseY > preH * 0.58 && ovSeg.normKey.length >= 4) {
                     if (topHeaderFirstPageMap[ovSeg.normKey] === undefined) {
                         topHeaderFirstPageMap[ovSeg.normKey] = pPre;
                     }
@@ -7380,7 +7443,7 @@
                     var segC = pVA.orderedVisualLines[lCheck];
                     if (segC.isArtifact || segC.isFigure) continue;
                     var nk = segC.normKey || '';
-                    if (segC.baseY > pH * 0.72 && nk && topHeaderFirstPageMap[nk] !== undefined && topHeaderFirstPageMap[nk] < pCheck) {
+                    if (segC.baseY > pH * 0.58 && nk && topHeaderFirstPageMap[nk] !== undefined && topHeaderFirstPageMap[nk] < pCheck) {
                         segC.isArtifact = true;
                         continue;
                     }
@@ -7645,19 +7708,26 @@
 
             // On the final page where the contact footer is kept, ensure all main prose/list blocks come FIRST,
             // followed by the contact footer (Job-ID, email, Fachfragen, Personalfragen),
-            // followed by any final certificate <Figure> and "Hinweis zum Datenschutz" at the very bottom!
+            // followed by any final certificate <Figure> and "Hinweis zum Datenschutz" box at the very bottom!
             var bodyLinesPart = [];
             var contactFooterPart = [];
             var closingPrivacyPart = [];
             var seenClosingPrivacy = false;
+            var privacyBoxMinX = null;
             for (var avlI = 0; avlI < activeVisualLines.length; avlI++) {
                 var avLine = activeVisualLines[avlI];
                 var avTxt = (avLine.text || '').trim();
-                var isClosingPrivacyOrCert = /^Hinweis zum Datenschutz\b/i.test(avTxt) ||
-                    (avLine.isFigure && /Zertifikat|Audit\s+Beruf/i.test(avTxt)) ||
-                    (seenClosingPrivacy && !avLine.isFinalContactFooter && !avLine.isContactFooterCandidate);
-                if (isClosingPrivacyOrCert) {
-                    seenClosingPrivacy = true;
+                var isPrivacyHeader = /^Hinweis zum Datenschutz\b/i.test(avTxt);
+                if (isPrivacyHeader && privacyBoxMinX === null) {
+                    privacyBoxMinX = avLine.x1;
+                }
+                var isPrivacyBodyLine = isPrivacyHeader ||
+                    /Informationen zur Erhebung von personenbezogenen Daten|Art\.\s*13\b|DS[\-\s]*GVO|im\.baden[\-\s]*wuerttemberg\.de|Rubrik\s+[„"']?Datenschutz/i.test(avTxt) ||
+                    (seenClosingPrivacy && !avLine.isFigure && privacyBoxMinX !== null && privacyBoxMinX >= pageWidth * 0.44 && avLine.x1 >= privacyBoxMinX - 24);
+                var isClosingCertFig = (avLine.isFigure && /Zertifikat|Audit\s+Beruf/i.test(avTxt));
+
+                if (isPrivacyBodyLine || isClosingCertFig) {
+                    if (isPrivacyBodyLine) seenClosingPrivacy = true;
                     closingPrivacyPart.push(avLine);
                 } else if (avLine.isFinalContactFooter || (pages.length > 1 && i === pages.length - 1 && avLine.isContactFooterCandidate)) {
                     contactFooterPart.push(avLine);
@@ -7665,7 +7735,7 @@
                     bodyLinesPart.push(avLine);
                 }
             }
-            if (contactFooterPart.length > 0) {
+            if (contactFooterPart.length > 0 || closingPrivacyPart.length > 0) {
                 activeVisualLines = bodyLinesPart.concat(contactFooterPart, closingPrivacyPart);
             }
 
@@ -7680,7 +7750,7 @@
                 ? fontHeightsSorted[fontHeightsSorted.length - 1]
                 : bodyFontH;
 
-            // Identify primary <H1> line(s) on Page 1 (largest font size on page 1)
+            // Identify primary <H1> line(s) on Page 1 (largest font size on page 1, up to 4 consecutive wrapped title lines)
             var h1LineIndices = {};
             if (i === 0 && activeVisualLines.length > 0) {
                 var bestH1Idx = -1;
@@ -7703,12 +7773,19 @@
                 }
                 if (bestH1Idx !== -1) {
                     h1LineIndices[bestH1Idx] = true;
-                    if (bestH1Idx + 1 < activeVisualLines.length &&
-                        !activeVisualLines[bestH1Idx + 1].isFigure &&
-                        maxFontH >= bodyFontH * 1.22 &&
-                        Math.abs(activeVisualLines[bestH1Idx + 1].fontH - activeVisualLines[bestH1Idx].fontH) <= 1.0 &&
-                        (activeVisualLines[bestH1Idx].baseY - activeVisualLines[bestH1Idx + 1].baseY) <= activeVisualLines[bestH1Idx].fontH * 1.55) {
-                        h1LineIndices[bestH1Idx + 1] = true;
+                    var prevH1Line = activeVisualLines[bestH1Idx];
+                    for (var hNext = bestH1Idx + 1; hNext < Math.min(activeVisualLines.length, bestH1Idx + 5); hNext++) {
+                        var candH1Line = activeVisualLines[hNext];
+                        if (!candH1Line.isFigure &&
+                            maxFontH >= bodyFontH * 1.22 &&
+                            Math.abs(candH1Line.fontH - activeVisualLines[bestH1Idx].fontH) <= 1.2 &&
+                            (prevH1Line.baseY - candH1Line.baseY) > 0 &&
+                            (prevH1Line.baseY - candH1Line.baseY) <= activeVisualLines[bestH1Idx].fontH * 1.65) {
+                            h1LineIndices[hNext] = true;
+                            prevH1Line = candH1Line;
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
@@ -7877,33 +7954,61 @@
             }
 
             // Determine which MCIDs need an injected trailing space glyph (when two MCIDs in the same block
-            // are separated by a word gap or a line wrap without a trailing/leading space in the PDF font stream)
+            // are separated by a word gap, a demoted whitespace MCID, a lexical boundary, or a line wrap)
             var needsTrailingSpaceOldMcid = {};
+            var bulletLabelOldMcid = {};
             for (var spB = 0; spB < semanticBlocks.length; spB++) {
                 var spBlk = semanticBlocks[spB];
                 if (spBlk.type === 'Figure' || !spBlk.mcids || spBlk.mcids.length < 2) continue;
+                if (spBlk.type === 'LI') {
+                    var firstLiM = spBlk.mcids[0];
+                    var firstLiGeo = mcidGeoById[firstLiM];
+                    if (firstLiGeo && /^[•●▪▫▸►‣⁃◦∙\uF0B7\uF0A7\-–]+$/.test((firstLiGeo.text || '').trim())) {
+                        bulletLabelOldMcid[firstLiM] = true;
+                        needsTrailingSpaceOldMcid[firstLiM] = true;
+                    }
+                }
                 for (var spM = 0; spM < spBlk.mcids.length - 1; spM++) {
                     var mCur = spBlk.mcids[spM];
                     var mNext = spBlk.mcids[spM + 1];
                     var gCur = mcidGeoById[mCur];
                     var gNext = mcidGeoById[mNext];
                     if (!gCur || !gNext || gCur.isFigure || gNext.isFigure) continue;
+
+                    if (gCur.hadFollowingWsMcid) {
+                        needsTrailingSpaceOldMcid[mCur] = true;
+                        continue;
+                    }
+
+                    var curTxt = gCur.text || '';
+                    var nextTxt = gNext.text || '';
+                    var hasLexicalWordBoundary =
+                        (/[.,;:!?)\]]$/.test(curTxt) && /^[A-Za-zÄÖÜäöüß0-9(„"]/.test(nextTxt)) ||
+                        (/[a-zäöüß]$/.test(curTxt) && /^[A-ZÄÖÜ]/.test(nextTxt)) ||
+                        (/\d$/.test(curTxt) && /^[A-Za-zÄÖÜäöüß]/.test(nextTxt)) ||
+                        (/[A-Za-zÄÖÜäöüß0-9]$/.test(curTxt) && /^[(„"]/.test(nextTxt));
+
+                    if (hasLexicalWordBoundary) {
+                        needsTrailingSpaceOldMcid[mCur] = true;
+                        continue;
+                    }
+
                     if (gCur.endsWithWs || gNext.startsWithWs) continue;
 
                     var sameLine = Math.abs(gCur.baseY - gNext.baseY) <= Math.max(gCur.fontH, gNext.fontH) * 0.42;
                     if (sameLine) {
                         var wordGapX = gNext.x1 - gCur.x2;
-                        var curIsBulletChar = /^[•●▪▫▸►‣⁃◦∙\uF0B7\uF0A7\-–]$/.test(gCur.text);
-                        var isWordGap = wordGapX > Math.min(gCur.fontH, gNext.fontH) * 0.14 &&
-                            !/[\-–\/„“"(\[]$/.test(gCur.text) &&
-                            !/^[,.;:!?)”"\]\/]/.test(gNext.text);
+                        var curIsBulletChar = /^[•●▪▫▸►‣⁃◦∙\uF0B7\uF0A7\-–]$/.test(curTxt);
+                        var isWordGap = wordGapX > Math.min(gCur.fontH, gNext.fontH) * 0.08 &&
+                            !/[\-–\/„“"(\[]$/.test(curTxt) &&
+                            !/^[,.;:!?)”"\]\/]/.test(nextTxt);
                         if (curIsBulletChar || isWordGap) {
                             needsTrailingSpaceOldMcid[mCur] = true;
                         }
                     } else {
                         // Line wrap inside a multi-line paragraph, bullet item, or heading
-                        var endsWithHyphenJoin = /[a-zA-ZäöüÄÖÜß][\-‐‑]$/.test(gCur.text) && /^[a-zäöüß]/.test(gNext.text);
-                        var startsWithHyphenJoin = /^[\-‐‑][a-zA-ZäöüÄÖÜß]/.test(gNext.text);
+                        var endsWithHyphenJoin = /[a-zA-ZäöüÄÖÜß][\-‐‑]$/.test(curTxt) && /^[a-zäöüß]/.test(nextTxt);
+                        var startsWithHyphenJoin = /^[\-‐‑][a-zA-ZäöüÄÖÜß]/.test(nextTxt);
                         if (!endsWithHyphenJoin && !startsWithHyphenJoin) {
                             needsTrailingSpaceOldMcid[mCur] = true;
                         }
@@ -7913,12 +8018,17 @@
 
             // Build oldMcid -> newMcid mapping (0 .. finalPageMcidCount - 1) for all non-artifact MCIDs
             var pass3OldToNewMcid = {};
+            var bulletLabelNewMcid = {};
             var nextFinalMcid = 0;
             for (var oldM = 0; oldM < initialPageMcidCount; oldM++) {
                 if (demotedArtifactMcids[oldM]) {
                     pass3OldToNewMcid[oldM] = null;
                 } else {
-                    pass3OldToNewMcid[oldM] = nextFinalMcid++;
+                    var assignedNewM = nextFinalMcid++;
+                    pass3OldToNewMcid[oldM] = assignedNewM;
+                    if (bulletLabelOldMcid[oldM]) {
+                        bulletLabelNewMcid[assignedNewM] = true;
+                    }
                 }
             }
 
@@ -8187,8 +8297,28 @@
                         activeListChildrenRefs = [];
                     }
                     var liElemRef = context.nextRef();
+                    var liChildren = [];
+                    var bodyMcidSlice = sBlk.mcids;
+
+                    // Separate leading bullet symbol MCID into its own PDF/UA-1 <Lbl> element before <LBody>
+                    if (sBlk.mcids.length >= 2 && bulletLabelNewMcid[sBlk.mcids[0]] && !mcidToAnnotInfo[sBlk.mcids[0]]) {
+                        var lblElemRef = context.nextRef();
+                        var lblK = buildBlockKItemsAndBindParent([sBlk.mcids[0]], lblElemRef, 'Lbl');
+                        if (lblK.length > 0) {
+                            context.assign(lblElemRef, context.obj({
+                                Type: 'StructElem',
+                                S: PDFLib.PDFName.of('Lbl'),
+                                P: liElemRef,
+                                Pg: page.ref,
+                                K: lblK.length === 1 ? lblK[0] : lblK
+                            }));
+                            liChildren.push(lblElemRef);
+                            bodyMcidSlice = sBlk.mcids.slice(1);
+                        }
+                    }
+
                     var lBodyElemRef = context.nextRef();
-                    var lBodyK = buildBlockKItemsAndBindParent(sBlk.mcids, lBodyElemRef, 'LBody');
+                    var lBodyK = buildBlockKItemsAndBindParent(bodyMcidSlice, lBodyElemRef, 'LBody');
                     if (lBodyK.length === 0) continue;
 
                     context.assign(lBodyElemRef, context.obj({
@@ -8198,12 +8328,14 @@
                         Pg: page.ref,
                         K: lBodyK.length === 1 ? lBodyK[0] : lBodyK
                     }));
+                    liChildren.push(lBodyElemRef);
+
                     context.assign(liElemRef, context.obj({
                         Type: 'StructElem',
                         S: PDFLib.PDFName.of('LI'),
                         P: activeListRef,
                         Pg: page.ref,
-                        K: [lBodyElemRef]
+                        K: liChildren
                     }));
                     activeListChildrenRefs.push(liElemRef);
                 } else {
@@ -8269,7 +8401,9 @@
                         var fState = (pState.mcidFontStates && pState.mcidFontStates[oldIdx]) || null;
                         var restoreTf = (fState && fState.tf) ? ('\n' + fState.tf) : '';
                         var restoreTr = (fState && fState.tr) ? ('\n' + fState.tr) : '\n0 Tr';
-                        extraSpaceOps = '\n/F_PDFUA 0.01 Tf\n3 Tr\n( ) Tj' + restoreTf + restoreTr;
+                        // Emit a real 8pt U+0020 space glyph for PAC 2026 & screen readers with +278 TJ kerning compensation
+                        // so net horizontal text matrix advance is 0.000 pt (never shifts subsequent relative Td operators!)
+                        extraSpaceOps = '\n/F_PDFUA 8 Tf\n3 Tr\n[( ) 278] TJ' + restoreTf + restoreTr;
                     }
                     return '/' + finalTag + ' <</MCID ' + mappedIdx + '>> BDC\n' + bodyContent + extraSpaceOps + '\nEMC';
                 }
