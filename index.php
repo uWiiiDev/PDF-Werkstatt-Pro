@@ -200,6 +200,10 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">♿</span>
                         <span class="rb-label">PDF/UA Check</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-sr-preview-modal" title="Integrierte PAC 2026 Screenreader-Vorschau &amp; interaktiver Tag-Inspektor (H1, H2, P, L, LI, Lbl, LBody, Figure + Alt, Link)">
+                        <span class="rb-icon">👁️</span>
+                        <span class="rb-label">PAC-Vorschau</span>
+                    </button>
                     <button type="button" class="ribbon-btn" data-cmd="open-batch-modal" title="Mehrere PDF-Dateien gleichzeitig verarbeiten (z. B. Auto-Fix PDF/UA, Wasserzeichen, Seitenzahlen) und als ZIP herunterladen">
                         <span class="rb-icon">🗂️</span>
                         <span class="rb-label">Stapel-Modus</span>
@@ -646,6 +650,10 @@ $serverInfo = pdfstudio_get_server_info();
                         <span class="rb-icon">♿</span>
                         <span class="rb-label">PDF/UA Prüfen</span>
                     </button>
+                    <button type="button" class="ribbon-btn" data-cmd="open-sr-preview-modal" title="Farbige PAC 2026 Screenreader-Vorschau &amp; interaktiver Tag-/Lesereihenfolge-Editor direkt im Browser">
+                        <span class="rb-icon">👁️</span>
+                        <span class="rb-label">PAC-Vorschau</span>
+                    </button>
                     <button type="button" class="ribbon-btn" data-cmd="quick-autofix-a11y">
                         <span class="rb-icon">🛠️</span>
                         <span class="rb-label">Auto-Fix</span>
@@ -1074,7 +1082,7 @@ $serverInfo = pdfstudio_get_server_info();
                 <p style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px;line-height:1.4;">
                     Prüft Dokumenttitel, Sprache (<code>/Lang</code>), Tagged-PDF-Struktur (<code>/StructTreeRoot</code>), <code>DisplayDocTitle</code> &amp; Textzugänglichkeit.
                 </p>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
                     <button type="button" class="tool-btn btn-primary" data-cmd="open-a11y-modal" style="flex:1;">
                         ♿ Prüfbericht &amp; Auto-Fix
                     </button>
@@ -1082,6 +1090,9 @@ $serverInfo = pdfstudio_get_server_info();
                         🎨 Farbkontrast
                     </button>
                 </div>
+                <button type="button" class="tool-btn" data-cmd="open-sr-preview-modal" style="width:100%;" title="Farbige Screenreader-Vorschau analog PAC 2026 mit interaktivem Tag- &amp; Alt-Text-Editor öffnen">
+                    👁️ PAC Screenreader-Vorschau &amp; Tag-Editor
+                </button>
             </div>
 
         </aside>
@@ -1352,6 +1363,7 @@ $serverInfo = pdfstudio_get_server_info();
         <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button type="button" class="tool-btn" id="btnReRunA11yAudit">↻ Erneut prüfen</button>
+                <button type="button" class="tool-btn" data-cmd="open-sr-preview-modal" title="Farbige PAC 2026 Screenreader-Vorschau &amp; Tag-Inspektor öffnen">👁️ Screenreader-Vorschau</button>
                 <button type="button" class="tool-btn" data-cmd="open-contrast-modal" title="Pixelgenaue BITV / WCAG 2.1 Farbkontrast-Analyse aller Textblöcke starten">🎨 Farbkontrast-Scanner</button>
                 <button type="button" class="tool-btn" id="btnExportA11yReportPdf">📄 Prüfbericht als PDF öffnen</button>
             </div>
@@ -2681,6 +2693,78 @@ $serverInfo = pdfstudio_get_server_info();
                     💾 Als Excel-CSV herunterladen (.csv)
                 </button>
                 <button type="button" class="tool-btn" data-close-modal="modalTableExtractor">Schließen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 21. PAC 2026 SCREENREADER PREVIEW & INTERACTIVE TAG INSPECTOR MODAL -->
+<div class="modal-backdrop" id="modalScreenreaderPreview">
+    <div class="modal-window" style="max-width:1060px;width:96vw;">
+        <div class="modal-header">
+            <span>👁️ PAC 2026 Screenreader-Vorschau &amp; Interaktiver Tag-Inspektor (<code>/StructTreeRoot</code>)</span>
+            <button type="button" class="doc-tab-close" data-close-modal="modalScreenreaderPreview">✕</button>
+        </div>
+        <div class="modal-body" style="padding:14px 16px;">
+            <!-- Top Summary & Controls Bar -->
+            <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border-strong);border-radius:8px;padding:10px 14px;margin-bottom:10px;gap:10px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:260px;">
+                    <div id="srPreviewDocTitle" style="font-size:14px;font-weight:700;color:var(--text-primary);">Screenreader-Vorschau</div>
+                    <div id="srPreviewStatsLine" style="font-size:11.5px;color:var(--text-secondary);margin-top:2px;">
+                        Zeigt die exakte Vorlesereihenfolge und Tag-Hierarchie (<code>Document → Sect → H1 / H2 / P / L / LI / Lbl / LBody / Figure + Alt / Link</code>) wie in PAC 2026.
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <label for="srPreviewPageFilter" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Ansicht:</label>
+                    <select id="srPreviewPageFilter" class="form-control" style="width:auto;height:30px;font-size:12px;padding:0 10px;">
+                        <option value="all">Alle Seiten (Komplettes Dokument)</option>
+                    </select>
+                    <button type="button" class="tool-btn" id="btnSrPreviewSpeakAll" title="Komplette Screenreader-Vorschau in der angezeigten Tag-Reihenfolge laut vorlesen">
+                        🔊 Vorschau vorlesen
+                    </button>
+                    <button type="button" class="tool-btn btn-success" id="btnSrPreviewRunAutoFix" title="Führt den PDF/UA-Auto-Fix aus und baut den Strukturbaum neu auf">
+                        🛠️ PDF/UA Auto-Fix &amp; Neu aufbauen
+                    </button>
+                    <button type="button" class="tool-btn" id="btnSrPreviewRefresh" title="Strukturbaum aus dem PDF neu einlesen">
+                        ↻ Aktualisieren
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tag Color Legend & Interactive Editing Hint -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:6px 10px;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:6px;font-size:11px;">
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <span style="font-weight:700;color:var(--text-secondary);">PAC-Farbschema:</span>
+                    <span style="background:#b91c1c;color:#fff;padding:1px 7px;border-radius:4px;font-weight:700;">H1 / H2 Überschrift</span>
+                    <span style="background:#65a30d;color:#fff;padding:1px 7px;border-radius:4px;font-weight:700;">P Absatz</span>
+                    <span style="background:#0284c7;color:#fff;padding:1px 7px;border-radius:4px;font-weight:700;">L / LI / Lbl / LBody Liste</span>
+                    <span style="background:#d97706;color:#fff;padding:1px 7px;border-radius:4px;font-weight:700;">Figure + Alt Abbildung</span>
+                    <span style="background:#334155;color:#fff;padding:1px 7px;border-radius:999px;font-weight:700;">Link Verknüpfung</span>
+                </div>
+                <div style="color:var(--text-secondary);">
+                    💡 <strong>Direkt-Editor:</strong> Rechts an jedem Block können Sie den <strong>Tag ändern</strong> (<code>H1 ↔ H2 ↔ P ↔ Artifact</code>), die <strong>Reihenfolge verschieben</strong> (<code>▲/▼</code>), Blöcke <strong>verbinden</strong> (<code>🔗▲</code>) oder <strong>Alt-Texte</strong> bearbeiten.
+                </div>
+            </div>
+
+            <!-- Main PAC 2026 Screenreader Preview Scroll Area -->
+            <div id="srPreviewTreeContainer" style="max-height:540px;overflow-y:auto;background:#475b63;border:2px solid #334155;border-radius:8px;padding:10px;color:#0f172a;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;">
+                <div style="padding:28px;text-align:center;color:#f8fafc;font-size:13px;">
+                    Lade PDF-Strukturbaum (<code>/StructTreeRoot</code>)…
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span id="srPreviewFooterStatus" style="font-size:11.5px;color:var(--text-secondary);">
+                Alle Änderungen am Tag-Baum werden sofort direkt in das geöffnete PDF-Dokument übernommen.
+            </span>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="tool-btn" id="btnSrPreviewOpenAudit" title="Zurück zur 12-Punkte PAC-Checkliste">
+                    ♿ Zur PAC-Checkliste
+                </button>
+                <button type="button" class="tool-btn btn-primary" id="btnSrPreviewDownloadPdf" title="Barrierefreies PDF mit dem aktuellen Strukturbaum herunterladen">
+                    💾 Barrierefreies PDF herunterladen
+                </button>
+                <button type="button" class="tool-btn" data-close-modal="modalScreenreaderPreview">Schließen</button>
             </div>
         </div>
     </div>

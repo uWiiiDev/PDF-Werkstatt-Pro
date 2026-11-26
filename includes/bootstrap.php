@@ -9,7 +9,7 @@ if (!defined('PDFSTUDIO_INIT')) {
     define('PDFSTUDIO_INIT', true);
 }
 
-define('PDFSTUDIO_VERSION', '1.9.4');
+define('PDFSTUDIO_VERSION', '2.0.0');
 if (!defined('PDFSTUDIO_ROOT')) {
     define('PDFSTUDIO_ROOT', dirname(__DIR__));
 }

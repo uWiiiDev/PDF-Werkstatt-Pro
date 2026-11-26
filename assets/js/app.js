@@ -10447,6 +10447,9 @@
     }
 
     function closeModal(id) {
+        if (id === 'modalScreenreaderPreview') {
+            stopSrPreviewSpeech();
+        }
         var m = document.getElementById(id);
         if (m) {
             m.classList.remove('open');
@@ -10748,6 +10751,9 @@
                 break;
             case 'open-a11y-modal':
                 await updateAccessibilityUI(true);
+                break;
+            case 'open-sr-preview-modal':
+                await openScreenreaderPreviewModal();
                 break;
             case 'quick-autofix-a11y':
                 if (!doc) await createNewBlankPdfTab();
@@ -15046,6 +15052,1399 @@
     }
 
     // =========================================================================
+    // v2.0.0: PAC 2026 Screenreader Preview & Interactive Tag Inspector Engine
+    // =========================================================================
+    var srPreviewState = {
+        speaking: false,
+        sessionId: 0,
+        lastTreeData: null
+    };
+
+    function stopSrPreviewSpeech() {
+        srPreviewState.sessionId++;
+        srPreviewState.speaking = false;
+        if (window.speechSynthesis) {
+            try { window.speechSynthesis.cancel(); } catch (e) {}
+        }
+        var btn = document.getElementById('btnSrPreviewSpeakAll');
+        if (btn) {
+            btn.innerHTML = '🔊 Vorschau vorlesen';
+            btn.classList.remove('btn-danger');
+        }
+        var activeBlocks = document.querySelectorAll('#srPreviewTreeContainer .sr-pac-speaking-active');
+        for (var i = 0; i < activeBlocks.length; i++) {
+            activeBlocks[i].classList.remove('sr-pac-speaking-active');
+            activeBlocks[i].style.boxShadow = '';
+        }
+    }
+
+    function decodePdfStringObject(obj) {
+        if (!obj) return '';
+        try {
+            if (typeof obj.decodeText === 'function') {
+                return String(obj.decodeText() || '').replace(/\x00/g, '').trim();
+            }
+            var raw = String(obj || '');
+            return raw.replace(/^\(|\)$/g, '').replace(/\x00/g, '').trim();
+        } catch (e) {
+            return '';
+        }
+    }
+
+    async function openScreenreaderPreviewModal() {
+        var doc = getActiveDoc();
+        if (!doc) {
+            showToast('Bitte öffnen Sie zuerst ein PDF-Dokument.', 'error');
+            var fInp = document.getElementById('hiddenPdfInput');
+            if (fInp) fInp.click();
+            return;
+        }
+        stopSrPreviewSpeech();
+        openModal('modalScreenreaderPreview');
+
+        // Populate page filter dropdown
+        var filterSel = document.getElementById('srPreviewPageFilter');
+        if (filterSel) {
+            var prevVal = filterSel.value || 'all';
+            filterSel.innerHTML = '<option value="all">Alle Seiten (Komplettes Dokument — ' + doc.pageCount + ' S.)</option>';
+            for (var p = 0; p < doc.pageCount; p++) {
+                var opt = document.createElement('option');
+                opt.value = String(p);
+                opt.textContent = 'Nur Seite ' + (p + 1);
+                filterSel.appendChild(opt);
+            }
+            if (prevVal !== 'all' && parseInt(prevVal, 10) < doc.pageCount) {
+                filterSel.value = prevVal;
+            } else {
+                filterSel.value = 'all';
+            }
+        }
+
+        await buildAndRenderScreenreaderPreview();
+    }
+
+    async function parsePdfStructTreeForPreview(doc) {
+        await bakeAnnotationsIntoDocument(doc);
+        var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
+        var context = pdfDoc.context;
+        var catalog = pdfDoc.catalog;
+        var pages = pdfDoc.getPages();
+        var jsDoc = await loadPdfJsDocument(doc.bytes);
+
+        var pageRefToIndex = {};
+        for (var pi = 0; pi < pages.length; pi++) {
+            pageRefToIndex[String(pages[pi].ref)] = pi;
+        }
+
+        // 1. Extract decoded Unicode text for every (pageIndex, MCID) via PDF.js includeMarkedContent: true
+        var mcidTextByPage = {};
+        for (var lp = 1; lp <= jsDoc.numPages; lp++) {
+            var pIdx0 = lp - 1;
+            mcidTextByPage[pIdx0] = {};
+            var jsPage = await jsDoc.getPage(lp);
+            var jsTc = await jsPage.getTextContent({ includeMarkedContent: true });
+            var mcidStack = [];
+            var bdcCounter = 0;
+            var runsByMcid = {};
+
+            for (var ti = 0; ti < jsTc.items.length; ti++) {
+                var tItem = jsTc.items[ti];
+                if (!tItem) continue;
+                if (tItem.type === 'beginMarkedContentProps') {
+                    var idMatch = tItem.id ? String(tItem.id).match(/_mc(\d+)$/) : null;
+                    var parsedMcid = idMatch ? parseInt(idMatch[1], 10) : bdcCounter;
+                    bdcCounter++;
+                    mcidStack.push(parsedMcid);
+                    continue;
+                }
+                if (tItem.type === 'beginMarkedContent') {
+                    mcidStack.push(null);
+                    continue;
+                }
+                if (tItem.type === 'endMarkedContent') {
+                    if (mcidStack.length > 0) mcidStack.pop();
+                    continue;
+                }
+                var curMcid = null;
+                for (var ms = mcidStack.length - 1; ms >= 0; ms--) {
+                    if (mcidStack[ms] !== null && mcidStack[ms] !== undefined) {
+                        curMcid = mcidStack[ms];
+                        break;
+                    }
+                }
+                if (curMcid === null) continue;
+                var tStr = (typeof tItem.str === 'string') ? tItem.str.replace(/[\u00AD\u200B\uFEFF]/g, '') : '';
+                if (!tStr) continue;
+                var tr = tItem.transform || [10, 0, 0, 10, 72, 700];
+                var fh = Math.max(
+                    Math.sqrt(tr[0] * tr[0] + tr[1] * tr[1]),
+                    Math.sqrt(tr[2] * tr[2] + tr[3] * tr[3]),
+                    tItem.height || 0
+                ) || 10;
+                var iw = Math.max(2, tItem.width || (tStr.length * fh * 0.5));
+                if (!runsByMcid[curMcid]) runsByMcid[curMcid] = [];
+                runsByMcid[curMcid].push({
+                    str: tStr,
+                    x1: tr[4],
+                    x2: tr[4] + iw,
+                    baseY: tr[5],
+                    fontH: fh
+                });
+            }
+
+            for (var mKey in runsByMcid) {
+                var rList = runsByMcid[mKey];
+                var parts = [];
+                for (var r = 0; r < rList.length; r++) {
+                    var curR = rList[r];
+                    if (r > 0) {
+                        var prevR = rList[r - 1];
+                        var sameLine = Math.abs(curR.baseY - prevR.baseY) <= Math.max(curR.fontH, prevR.fontH) * 0.45;
+                        var gap = curR.x1 - prevR.x2;
+                        if ((!sameLine || gap > Math.min(curR.fontH, prevR.fontH) * 0.12) &&
+                            !/\s$/.test(prevR.str) && !/^\s/.test(curR.str)) {
+                            parts.push(' ');
+                        }
+                    }
+                    parts.push(curR.str);
+                }
+                mcidTextByPage[pIdx0][mKey] = parts.join('');
+            }
+        }
+
+        var stRootRef = catalog.get(PDFLib.PDFName.of('StructTreeRoot'));
+        var stRoot = stRootRef ? context.lookup(stRootRef) : null;
+        if (!stRoot || typeof stRoot.get !== 'function') {
+            return {
+                hasStructTree: false,
+                pageCount: pages.length,
+                sections: [],
+                stats: { totalTags: 0, headings: 0, paragraphs: 0, lists: 0, figures: 0, links: 0 }
+            };
+        }
+
+        // Parse optional /RoleMap
+        var roleMap = {};
+        var rmObj = stRoot.lookup ? stRoot.lookup(PDFLib.PDFName.of('RoleMap')) : context.lookup(stRoot.get(PDFLib.PDFName.of('RoleMap')));
+        if (rmObj && typeof rmObj.entries === 'function') {
+            var rmEntries = rmObj.entries();
+            for (var rmi = 0; rmi < rmEntries.length; rmi++) {
+                var kRole = String(rmEntries[rmi][0]).replace(/^\//, '');
+                var vRole = String(rmEntries[rmi][1]).replace(/^\//, '');
+                if (kRole && vRole) roleMap[kRole] = vRole;
+            }
+        }
+
+        function resolveRole(rawS) {
+            var s = String(rawS || '').replace(/^\//, '') || 'P';
+            var visited = {};
+            while (roleMap[s] && !visited[s]) {
+                visited[s] = true;
+                s = roleMap[s];
+            }
+            return s;
+        }
+
+        var stats = {
+            totalTags: 0,
+            headings: 0,
+            paragraphs: 0,
+            lists: 0,
+            figures: 0,
+            links: 0
+        };
+
+        function getKArray(dictObj) {
+            if (!dictObj || typeof dictObj.get !== 'function') return [];
+            var kRaw = dictObj.get(PDFLib.PDFName.of('K'));
+            if (!kRaw) return [];
+            var kLooked = context.lookup(kRaw);
+            if (kLooked && typeof kLooked.asArray === 'function') {
+                return kLooked.asArray();
+            }
+            return [kRaw];
+        }
+
+        function extractElemBBox(dictObj) {
+            var aObj = dictObj.get(PDFLib.PDFName.of('A'));
+            if (!aObj) return null;
+            var aLooked = context.lookup(aObj);
+            var aList = (aLooked && typeof aLooked.asArray === 'function') ? aLooked.asArray() : [aLooked || aObj];
+            for (var i = 0; i < aList.length; i++) {
+                var d = context.lookup(aList[i]) || aList[i];
+                if (d && typeof d.get === 'function') {
+                    var bb = d.lookup ? d.lookup(PDFLib.PDFName.of('BBox')) : context.lookup(d.get(PDFLib.PDFName.of('BBox')));
+                    if (bb && typeof bb.asArray === 'function' && bb.asArray().length >= 4) {
+                        var arr = bb.asArray();
+                        return [
+                            parseFloat(String(arr[0])) || 0,
+                            parseFloat(String(arr[1])) || 0,
+                            parseFloat(String(arr[2])) || 0,
+                            parseFloat(String(arr[3])) || 0
+                        ];
+                    }
+                }
+            }
+            return null;
+        }
+
+        function resolvePageIndex(dictObj, inheritedPageIdx) {
+            if (dictObj && typeof dictObj.get === 'function') {
+                var pgRef = dictObj.get(PDFLib.PDFName.of('Pg'));
+                if (pgRef && pageRefToIndex[String(pgRef)] !== undefined) {
+                    return pageRefToIndex[String(pgRef)];
+                }
+            }
+            return inheritedPageIdx !== undefined && inheritedPageIdx !== null ? inheritedPageIdx : 0;
+        }
+
+        function joinCleanParts(inlineParts) {
+            var out = [];
+            for (var i = 0; i < inlineParts.length; i++) {
+                var p = inlineParts[i];
+                var txt = (p.text || '').replace(/\s+/g, ' ');
+                if (!txt) continue;
+                if (out.length > 0) {
+                    var prevTxt = out[out.length - 1].text || '';
+                    if (!/\s$/.test(prevTxt) && !/^\s/.test(txt) && !/^[,.;:!?)”"\]]/.test(txt)) {
+                        txt = ' ' + txt;
+                    }
+                }
+                out.push({
+                    type: p.type,
+                    text: txt,
+                    uri: p.uri || '',
+                    alt: p.alt || ''
+                });
+            }
+            return out;
+        }
+
+        // Gather MCIDs, inline text, and inline <Link> badges for a leaf/block StructElem
+        function collectLeafContent(dictObj, pageIdx) {
+            var mcids = [];
+            var inlineParts = [];
+            var kItems = getKArray(dictObj);
+
+            function walkK(items, curPg, insideLinkInfo) {
+                for (var ki = 0; ki < items.length; ki++) {
+                    var kRaw = items[ki];
+                    var kVal = context.lookup(kRaw);
+
+                    // 1. Direct integer MCID
+                    if (kRaw instanceof PDFLib.PDFNumber || (kVal && kVal instanceof PDFLib.PDFNumber)) {
+                        var numObj = (kRaw instanceof PDFLib.PDFNumber) ? kRaw : kVal;
+                        var mNum = typeof numObj.asNumber === 'function' ? numObj.asNumber() : parseInt(String(numObj), 10);
+                        if (!isNaN(mNum)) {
+                            mcids.push(mNum);
+                            var mTxt = (mcidTextByPage[curPg] && mcidTextByPage[curPg][mNum]) || '';
+                            if (mTxt) {
+                                inlineParts.push({
+                                    type: insideLinkInfo ? 'link' : 'text',
+                                    text: mTxt,
+                                    uri: insideLinkInfo ? insideLinkInfo.uri : '',
+                                    alt: insideLinkInfo ? insideLinkInfo.alt : ''
+                                });
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (!kVal || typeof kVal.get !== 'function') continue;
+                    var kType = String(kVal.get(PDFLib.PDFName.of('Type')) || '');
+                    var subPg = resolvePageIndex(kVal, curPg);
+
+                    // 2. MCR dictionary (<</Type /MCR /MCID k>>)
+                    if (kType === '/MCR' || (!kVal.get(PDFLib.PDFName.of('S')) && kVal.get(PDFLib.PDFName.of('MCID')))) {
+                        var mcrMcidObj = kVal.get(PDFLib.PDFName.of('MCID'));
+                        var mcrNum = mcrMcidObj ? parseInt(String(mcrMcidObj), 10) : NaN;
+                        if (!isNaN(mcrNum)) {
+                            mcids.push(mcrNum);
+                            var mcrTxt = (mcidTextByPage[subPg] && mcidTextByPage[subPg][mcrNum]) || '';
+                            if (mcrTxt) {
+                                inlineParts.push({
+                                    type: insideLinkInfo ? 'link' : 'text',
+                                    text: mcrTxt,
+                                    uri: insideLinkInfo ? insideLinkInfo.uri : '',
+                                    alt: insideLinkInfo ? insideLinkInfo.alt : ''
+                                });
+                            }
+                        }
+                        continue;
+                    }
+
+                    // 3. OBJR dictionary (<</Type /OBJR /Obj annotRef>>)
+                    if (kType === '/OBJR') {
+                        if (insideLinkInfo && !insideLinkInfo.uri) {
+                            var annotObj = context.lookup(kVal.get(PDFLib.PDFName.of('Obj')));
+                            if (annotObj && typeof annotObj.get === 'function') {
+                                var actObj = context.lookup(annotObj.get(PDFLib.PDFName.of('A')));
+                                if (actObj && typeof actObj.get === 'function') {
+                                    insideLinkInfo.uri = decodePdfStringObject(actObj.get(PDFLib.PDFName.of('URI')));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    // 4. Child StructElem (e.g. <Link>, <Span>, <Quote>)
+                    var childRole = resolveRole(kVal.get(PDFLib.PDFName.of('S')));
+                    stats.totalTags++;
+                    if (childRole === 'Link') {
+                        stats.links++;
+                        var linkAlt = decodePdfStringObject(kVal.get(PDFLib.PDFName.of('Alt')));
+                        var linkInfo = { uri: '', alt: linkAlt };
+                        walkK(getKArray(kVal), subPg, linkInfo);
+                    } else {
+                        walkK(getKArray(kVal), subPg, insideLinkInfo);
+                    }
+                }
+            }
+
+            walkK(kItems, pageIdx, null);
+            var cleanParts = joinCleanParts(inlineParts);
+            var fullText = cleanParts.map(function (p) { return p.text; }).join('').replace(/\s+/g, ' ').trim();
+            return {
+                mcids: mcids,
+                inlineParts: cleanParts,
+                text: fullText
+            };
+        }
+
+        // Traverse tree and organize into sections (one per <Sect> or per page)
+        var sections = [];
+        var defaultSectByPage = {};
+
+        function getOrCreatePageSection(pgIdx, sectRefStr) {
+            if (sectRefStr) {
+                for (var s = 0; s < sections.length; s++) {
+                    if (sections[s].sectRefStr === sectRefStr) return sections[s];
+                }
+            }
+            if (!sectRefStr && defaultSectByPage[pgIdx]) {
+                return defaultSectByPage[pgIdx];
+            }
+            var newSect = {
+                pageIndex: pgIdx,
+                sectRefStr: sectRefStr || null,
+                blocks: []
+            };
+            sections.push(newSect);
+            if (!sectRefStr) defaultSectByPage[pgIdx] = newSect;
+            return newSect;
+        }
+
+        function processStructNode(rawRef, parentRefStr, indexInParent, inheritedPgIdx, currentSectObj) {
+            var dict = context.lookup(rawRef);
+            if (!dict || typeof dict.get !== 'function') return;
+            var sObj = dict.get(PDFLib.PDFName.of('S'));
+            if (!sObj) return;
+
+            var role = resolveRole(sObj);
+            var pgIdx = resolvePageIndex(dict, inheritedPgIdx);
+            var refStr = (rawRef instanceof PDFLib.PDFRef) ? String(rawRef) : null;
+            stats.totalTags++;
+
+            // Container tags: Document, Part, Art, Div, Sect
+            if (role === 'Document' || role === 'Part' || role === 'Art' || role === 'Div') {
+                var docKids = getKArray(dict);
+                for (var dk = 0; dk < docKids.length; dk++) {
+                    processStructNode(docKids[dk], refStr, dk, pgIdx, currentSectObj);
+                }
+                return;
+            }
+
+            if (role === 'Sect') {
+                var sectObj = getOrCreatePageSection(pgIdx, refStr);
+                var sectKids = getKArray(dict);
+                for (var sk = 0; sk < sectKids.length; sk++) {
+                    processStructNode(sectKids[sk], refStr, sk, pgIdx, sectObj);
+                }
+                return;
+            }
+
+            var targetSect = currentSectObj || getOrCreatePageSection(pgIdx, null);
+
+            // List (<L> -> <LI> -> <Lbl> + <LBody>)
+            if (role === 'L') {
+                stats.lists++;
+                var listItems = [];
+                var lKids = getKArray(dict);
+                for (var lk = 0; lk < lKids.length; lk++) {
+                    var liRaw = lKids[lk];
+                    var liDict = context.lookup(liRaw);
+                    if (!liDict || typeof liDict.get !== 'function') continue;
+                    var liRole = resolveRole(liDict.get(PDFLib.PDFName.of('S')));
+                    var liPg = resolvePageIndex(liDict, pgIdx);
+                    var liRefStr = (liRaw instanceof PDFLib.PDFRef) ? String(liRaw) : null;
+                    stats.totalTags++;
+
+                    if (liRole === 'LI') {
+                        var lblText = '';
+                        var bodyParts = [];
+                        var liMcids = [];
+                        var liSubKids = getKArray(liDict);
+                        for (var lsk = 0; lsk < liSubKids.length; lsk++) {
+                            var subRaw = liSubKids[lsk];
+                            var subDict = context.lookup(subRaw);
+                            if (subDict && typeof subDict.get === 'function' && subDict.get(PDFLib.PDFName.of('S'))) {
+                                var subRole = resolveRole(subDict.get(PDFLib.PDFName.of('S')));
+                                var subPg = resolvePageIndex(subDict, liPg);
+                                stats.totalTags++;
+                                var subContent = collectLeafContent(subDict, subPg);
+                                for (var sm = 0; sm < subContent.mcids.length; sm++) liMcids.push(subContent.mcids[sm]);
+                                if (subRole === 'Lbl') {
+                                    lblText = subContent.text || '•';
+                                } else {
+                                    for (var sp = 0; sp < subContent.inlineParts.length; sp++) {
+                                        bodyParts.push(subContent.inlineParts[sp]);
+                                    }
+                                }
+                            } else {
+                                // Direct MCID inside LI
+                                var dirContent = collectLeafContent(liDict, liPg);
+                                liMcids = dirContent.mcids;
+                                bodyParts = dirContent.inlineParts;
+                                break;
+                            }
+                        }
+                        var cleanBodyParts = joinCleanParts(bodyParts);
+                        var bodyText = cleanBodyParts.map(function (p) { return p.text; }).join('').replace(/\s+/g, ' ').trim();
+                        listItems.push({
+                            refStr: liRefStr,
+                            parentRefStr: refStr,
+                            indexInParent: lk,
+                            totalSiblings: lKids.length,
+                            pageIndex: liPg,
+                            lblText: lblText,
+                            inlineParts: cleanBodyParts,
+                            text: bodyText,
+                            mcids: liMcids
+                        });
+                    }
+                }
+                targetSect.blocks.push({
+                    type: 'L',
+                    tag: 'L',
+                    refStr: refStr,
+                    parentRefStr: parentRefStr,
+                    indexInParent: indexInParent,
+                    pageIndex: pgIdx,
+                    items: listItems
+                });
+                return;
+            }
+
+            // Figure (<Figure> with /Alt and /BBox)
+            if (role === 'Figure') {
+                stats.figures++;
+                var altStr = decodePdfStringObject(dict.get(PDFLib.PDFName.of('Alt'))) ||
+                             decodePdfStringObject(dict.get(PDFLib.PDFName.of('ActualText'))) || '';
+                var bbox = extractElemBBox(dict);
+                var figContent = collectLeafContent(dict, pgIdx);
+                targetSect.blocks.push({
+                    type: 'Figure',
+                    tag: 'Figure',
+                    refStr: refStr,
+                    parentRefStr: parentRefStr,
+                    indexInParent: indexInParent,
+                    pageIndex: pgIdx,
+                    altText: altStr,
+                    bbox: bbox,
+                    mcids: figContent.mcids
+                });
+                return;
+            }
+
+            // Headings (H1..H6) and Paragraphs (P, Quote, Note, TD, TH, etc.)
+            var isHeading = /^H[1-6]$/.test(role);
+            if (isHeading) {
+                stats.headings++;
+            } else {
+                stats.paragraphs++;
+            }
+            var leafContent = collectLeafContent(dict, pgIdx);
+            var actualTxtFallback = decodePdfStringObject(dict.get(PDFLib.PDFName.of('ActualText'))) ||
+                                    decodePdfStringObject(dict.get(PDFLib.PDFName.of('Alt')));
+            if (!leafContent.text && actualTxtFallback) {
+                leafContent.text = actualTxtFallback;
+                leafContent.inlineParts = [{ type: 'text', text: actualTxtFallback }];
+            }
+
+            targetSect.blocks.push({
+                type: isHeading ? 'Heading' : 'P',
+                tag: role,
+                refStr: refStr,
+                parentRefStr: parentRefStr,
+                indexInParent: indexInParent,
+                pageIndex: pgIdx,
+                mcids: leafContent.mcids,
+                inlineParts: leafContent.inlineParts,
+                text: leafContent.text
+            });
+        }
+
+        var rootKids = getKArray(stRoot);
+        for (var rk = 0; rk < rootKids.length; rk++) {
+            processStructNode(rootKids[rk], String(stRootRef), rk, 0, null);
+        }
+
+        // Render cropped thumbnails for any <Figure> blocks that have a valid /BBox
+        var pageCanvasCache = {};
+        for (var si = 0; si < sections.length; si++) {
+            var sec = sections[si];
+            for (var bi = 0; bi < sec.blocks.length; bi++) {
+                var blk = sec.blocks[bi];
+                if (blk.type === 'Figure' && blk.bbox && blk.bbox.length >= 4) {
+                    try {
+                        var fPg = blk.pageIndex || 0;
+                        if (!pageCanvasCache[fPg] && fPg >= 0 && fPg < jsDoc.numPages) {
+                            var jsPageForFig = await jsDoc.getPage(fPg + 1);
+                            var figScale = 1.5;
+                            var figVp = jsPageForFig.getViewport({ scale: figScale });
+                            var pCan = document.createElement('canvas');
+                            pCan.width = Math.round(figVp.width);
+                            pCan.height = Math.round(figVp.height);
+                            var pCtx = pCan.getContext('2d');
+                            pCtx.fillStyle = '#ffffff';
+                            pCtx.fillRect(0, 0, pCan.width, pCan.height);
+                            await jsPageForFig.render({ canvasContext: pCtx, viewport: figVp }).promise;
+                            pageCanvasCache[fPg] = { canvas: pCan, vp: figVp };
+                        }
+                        var cachedPg = pageCanvasCache[fPg];
+                        if (cachedPg) {
+                            var vpRect = cachedPg.vp.convertToViewportRectangle(blk.bbox);
+                            var cx1 = Math.max(0, Math.floor(Math.min(vpRect[0], vpRect[2]) - 4));
+                            var cy1 = Math.max(0, Math.floor(Math.min(vpRect[1], vpRect[3]) - 4));
+                            var cx2 = Math.min(cachedPg.canvas.width, Math.ceil(Math.max(vpRect[0], vpRect[2]) + 4));
+                            var cy2 = Math.min(cachedPg.canvas.height, Math.ceil(Math.max(vpRect[1], vpRect[3]) + 4));
+                            var cw = Math.max(24, cx2 - cx1);
+                            var ch = Math.max(18, cy2 - cy1);
+                            if (cw > 10 && ch > 10 && cy1 < cachedPg.canvas.height && cx1 < cachedPg.canvas.width) {
+                                var cropCan = document.createElement('canvas');
+                                cropCan.width = cw;
+                                cropCan.height = ch;
+                                var cropCtx = cropCan.getContext('2d');
+                                cropCtx.fillStyle = '#ffffff';
+                                cropCtx.fillRect(0, 0, cw, ch);
+                                cropCtx.drawImage(cachedPg.canvas, cx1, cy1, cw, ch, 0, 0, cw, ch);
+                                blk.thumbDataUrl = cropCan.toDataURL('image/png');
+                            }
+                        }
+                    } catch (figCropErr) {
+                        console.warn('Figure preview crop warning:', figCropErr);
+                    }
+                }
+            }
+        }
+
+        return {
+            hasStructTree: sections.length > 0,
+            pageCount: pages.length,
+            sections: sections,
+            stats: stats
+        };
+    }
+
+    function parsePdfRefFromString(refStr) {
+        if (!refStr) return null;
+        var m = String(refStr).match(/^(\d+)\s+(\d+)\s+R$/);
+        if (!m) return null;
+        return PDFLib.PDFRef.of(parseInt(m[1], 10), parseInt(m[2], 10));
+    }
+
+    async function changeStructElemTagInPdf(refStr, parentRefStr, indexInParent, newTag, pageIndex, mcids) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
+            var context = pdfDoc.context;
+            var pages = pdfDoc.getPages();
+            var elemRef = parsePdfRefFromString(refStr);
+            var elemDict = elemRef ? context.lookup(elemRef) : null;
+
+            var mcidSet = {};
+            for (var i = 0; i < (mcids || []).length; i++) {
+                mcidSet[mcids[i]] = true;
+            }
+
+            if (newTag === 'Artifact') {
+                // 1. Remove StructElem from parent's /K array
+                var pRef = parsePdfRefFromString(parentRefStr);
+                var pDict = pRef ? context.lookup(pRef) : null;
+                if (pDict && typeof pDict.get === 'function') {
+                    var kRaw = pDict.get(PDFLib.PDFName.of('K'));
+                    var kLooked = context.lookup(kRaw);
+                    if (kLooked && typeof kLooked.asArray === 'function') {
+                        var kArr = kLooked.asArray().slice();
+                        var filtered = kArr.filter(function (itemRef) {
+                            return String(itemRef) !== String(refStr);
+                        });
+                        pDict.set(PDFLib.PDFName.of('K'), context.obj(filtered));
+                    }
+                }
+            } else if (elemDict && typeof elemDict.set === 'function') {
+                elemDict.set(PDFLib.PDFName.of('S'), PDFLib.PDFName.of(newTag));
+            }
+
+            // 2. Update BDC tag (or demote to /Artifact BMC) in page content stream
+            if (pages[pageIndex] && (mcids || []).length > 0 && PDFLib.decodePDFRawStream) {
+                var pageNode = pages[pageIndex].node;
+                var cObj = pageNode.get(PDFLib.PDFName.of('Contents'));
+                if (cObj) {
+                    var lookedC = context.lookup(cObj);
+                    var cRefs = (lookedC && typeof lookedC.asArray === 'function') ? lookedC.asArray() : [cObj];
+                    for (var cs = 0; cs < cRefs.length; cs++) {
+                        var rawSt = context.lookup(cRefs[cs]);
+                        var decStr = decodeRawPdfStreamToString(rawSt);
+                        if (decStr) {
+                            var updatedStr = decStr.replace(
+                                /\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC/g,
+                                function (full, oldT, mStr) {
+                                    var mNum = parseInt(mStr, 10);
+                                    if (!mcidSet[mNum]) return full;
+                                    if (newTag === 'Artifact') {
+                                        return '/Artifact BMC';
+                                    }
+                                    return '/' + newTag + ' <</MCID ' + mNum + '>> BDC';
+                                }
+                            );
+                            if (updatedStr !== decStr) {
+                                var newFlate = context.flateStream(stringToLatin1Bytes(updatedStr));
+                                context.assign(cRefs[cs], newFlate);
+                            }
+                        }
+                    }
+                }
+            }
+
+            doc.bytes = await pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false, addDefaultPage: false });
+            doc.modified = true;
+            renderTabsBar();
+            await updateAccessibilityUI(false);
+            await buildAndRenderScreenreaderPreview();
+            showToast(
+                newTag === 'Artifact'
+                    ? 'Element als /Artifact (Hintergrund) ausgeblendet'
+                    : ('Struktur-Tag erfolgreich auf <' + newTag + '> geändert!'),
+                'success'
+            );
+        } catch (err) {
+            console.error(err);
+            showToast('Fehler beim Ändern des Struktur-Tags: ' + err.message, 'error');
+        }
+    }
+
+    async function moveStructElemInParent(parentRefStr, childIndex, direction) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
+            var context = pdfDoc.context;
+            var pRef = parsePdfRefFromString(parentRefStr);
+            var pDict = pRef ? context.lookup(pRef) : null;
+            if (!pDict || typeof pDict.get !== 'function') return;
+
+            var kRaw = pDict.get(PDFLib.PDFName.of('K'));
+            var kLooked = context.lookup(kRaw);
+            if (!kLooked || typeof kLooked.asArray !== 'function') return;
+
+            var kArr = kLooked.asArray().slice();
+            var targetIdx = childIndex + direction;
+            if (childIndex < 0 || childIndex >= kArr.length || targetIdx < 0 || targetIdx >= kArr.length) return;
+
+            var tmp = kArr[childIndex];
+            kArr[childIndex] = kArr[targetIdx];
+            kArr[targetIdx] = tmp;
+            pDict.set(PDFLib.PDFName.of('K'), context.obj(kArr));
+
+            doc.bytes = await pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false, addDefaultPage: false });
+            doc.modified = true;
+            renderTabsBar();
+            await buildAndRenderScreenreaderPreview();
+            showToast('Lesereihenfolge im Strukturbaum verschoben!', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Fehler beim Verschieben: ' + err.message, 'error');
+        }
+    }
+
+    async function mergeStructElemWithPrevious(parentRefStr, childIndex, pageIndex, curMcids) {
+        var doc = getActiveDoc();
+        if (!doc || childIndex <= 0) return;
+        try {
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
+            var context = pdfDoc.context;
+            var pages = pdfDoc.getPages();
+            var pRef = parsePdfRefFromString(parentRefStr);
+            var pDict = pRef ? context.lookup(pRef) : null;
+            if (!pDict || typeof pDict.get !== 'function') return;
+
+            var kRaw = pDict.get(PDFLib.PDFName.of('K'));
+            var kLooked = context.lookup(kRaw);
+            if (!kLooked || typeof kLooked.asArray !== 'function') return;
+
+            var kArr = kLooked.asArray().slice();
+            if (childIndex >= kArr.length) return;
+
+            var prevRef = kArr[childIndex - 1];
+            var curRef = kArr[childIndex];
+            var prevDict = context.lookup(prevRef);
+            var curDict = context.lookup(curRef);
+            if (!prevDict || !curDict || typeof prevDict.get !== 'function' || typeof curDict.get !== 'function') return;
+
+            var prevTag = String(prevDict.get(PDFLib.PDFName.of('S')) || '/P').replace(/^\//, '');
+
+            function toArrayK(d) {
+                var kr = d.get(PDFLib.PDFName.of('K'));
+                if (!kr) return [];
+                var kl = context.lookup(kr);
+                return (kl && typeof kl.asArray === 'function') ? kl.asArray().slice() : [kr];
+            }
+
+            var prevK = toArrayK(prevDict);
+            var curK = toArrayK(curDict);
+            for (var c = 0; c < curK.length; c++) {
+                var childObj = context.lookup(curK[c]);
+                if (childObj && typeof childObj.set === 'function' && childObj.get(PDFLib.PDFName.of('P'))) {
+                    childObj.set(PDFLib.PDFName.of('P'), prevRef);
+                }
+                prevK.push(curK[c]);
+            }
+            prevDict.set(PDFLib.PDFName.of('K'), context.obj(prevK));
+
+            // Remove curRef from parent's K array
+            kArr.splice(childIndex, 1);
+            pDict.set(PDFLib.PDFName.of('K'), context.obj(kArr));
+
+            // Update ParentTree and content stream BDC tags for curMcids
+            var mcidSet = {};
+            for (var m = 0; m < (curMcids || []).length; m++) {
+                mcidSet[curMcids[m]] = true;
+            }
+            if (pages[pageIndex] && (curMcids || []).length > 0 && PDFLib.decodePDFRawStream) {
+                var pageNode = pages[pageIndex].node;
+                var cObj = pageNode.get(PDFLib.PDFName.of('Contents'));
+                if (cObj) {
+                    var lookedC = context.lookup(cObj);
+                    var cRefs = (lookedC && typeof lookedC.asArray === 'function') ? lookedC.asArray() : [cObj];
+                    for (var cs = 0; cs < cRefs.length; cs++) {
+                        var rawSt = context.lookup(cRefs[cs]);
+                        var decStr = decodeRawPdfStreamToString(rawSt);
+                        if (decStr) {
+                            var updatedStr = decStr.replace(
+                                /\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC/g,
+                                function (full, oldT, mStr) {
+                                    var mNum = parseInt(mStr, 10);
+                                    if (!mcidSet[mNum]) return full;
+                                    return '/' + prevTag + ' <</MCID ' + mNum + '>> BDC';
+                                }
+                            );
+                            if (updatedStr !== decStr) {
+                                var newFlate = context.flateStream(stringToLatin1Bytes(updatedStr));
+                                context.assign(cRefs[cs], newFlate);
+                            }
+                        }
+                    }
+                }
+            }
+
+            doc.bytes = await pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false, addDefaultPage: false });
+            doc.modified = true;
+            renderTabsBar();
+            await updateAccessibilityUI(false);
+            await buildAndRenderScreenreaderPreview();
+            showToast('Block erfolgreich mit dem vorherigen <' + prevTag + '>-Block zusammengeführt!', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Fehler beim Zusammenführen: ' + err.message, 'error');
+        }
+    }
+
+    async function updateStructElemAltTextInPdf(refStr, newAltText) {
+        var doc = getActiveDoc();
+        if (!doc) return;
+        try {
+            var cleanAlt = String(newAltText || '').trim() || 'Abbildung';
+            var pdfDoc = await PDFLib.PDFDocument.load(doc.bytes, { ignoreEncryption: true, updateMetadata: false });
+            var context = pdfDoc.context;
+            var elemRef = parsePdfRefFromString(refStr);
+            var elemDict = elemRef ? context.lookup(elemRef) : null;
+            if (!elemDict || typeof elemDict.set !== 'function') return;
+
+            elemDict.set(PDFLib.PDFName.of('Alt'), PDFLib.PDFString.of(cleanAlt));
+            if (elemDict.get(PDFLib.PDFName.of('ActualText'))) {
+                elemDict.set(PDFLib.PDFName.of('ActualText'), PDFLib.PDFString.of(cleanAlt));
+            }
+
+            doc.bytes = await pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false, addDefaultPage: false });
+            doc.modified = true;
+            renderTabsBar();
+            await updateAccessibilityUI(false);
+            await buildAndRenderScreenreaderPreview();
+            showToast('Alternativtext (/Alt) für <Figure> im PDF gespeichert!', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Fehler beim Speichern des Alt-Textes: ' + err.message, 'error');
+        }
+    }
+
+    function renderInlinePartsHtml(inlineParts, fallbackText) {
+        if (!inlineParts || inlineParts.length === 0) {
+            return escapeHtml(fallbackText || '(Leer)');
+        }
+        var html = [];
+        var idx = 0;
+        while (idx < inlineParts.length) {
+            var part = inlineParts[idx];
+            if (part.type === 'link') {
+                var linkTexts = [part.text];
+                var uri = part.uri || part.alt || '';
+                idx++;
+                while (idx < inlineParts.length && inlineParts[idx].type === 'link' && (inlineParts[idx].uri || '') === uri) {
+                    linkTexts.push(inlineParts[idx].text);
+                    idx++;
+                }
+                var joinedLink = linkTexts.join('');
+                var tip = uri ? (' title="' + escapeHtml(uri) + '"') : '';
+                var pillStyle = 'display:inline-block;background:#2c3e50;color:#ffffff;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px;margin:0 3px;vertical-align:baseline;letter-spacing:0.2px;cursor:help;';
+                html.push(
+                    '<span style="' + pillStyle + '"' + tip + '>Link</span>' +
+                    '<span style="text-decoration:underline;text-decoration-color:rgba(15,23,42,0.45);"' + tip + '>' + escapeHtml(joinedLink) + '</span>' +
+                    '<span style="' + pillStyle + '"' + tip + '>Link</span>'
+                );
+            } else {
+                html.push(escapeHtml(part.text));
+                idx++;
+            }
+        }
+        return html.join('');
+    }
+
+    function speakSingleSrPreviewBlock(spokenLabel, blockEl) {
+        if (!window.speechSynthesis) {
+            showToast('Ihr Browser unterstützt leider keine Sprachausgabe (Web Speech API).', 'error');
+            return;
+        }
+        stopSrPreviewSpeech();
+        if (!spokenLabel) return;
+        srPreviewState.speaking = true;
+        var mySession = srPreviewState.sessionId;
+        if (blockEl) {
+            blockEl.classList.add('sr-pac-speaking-active');
+            blockEl.style.boxShadow = '0 0 0 3px #10b981, 0 4px 12px rgba(0,0,0,0.35)';
+            blockEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        var utt = new SpeechSynthesisUtterance(spokenLabel);
+        utt.lang = 'de-DE';
+        utt.rate = 1.02;
+        utt.onend = function () {
+            if (srPreviewState.sessionId !== mySession) return;
+            stopSrPreviewSpeech();
+        };
+        utt.onerror = function () {
+            if (srPreviewState.sessionId !== mySession) return;
+            stopSrPreviewSpeech();
+        };
+        window.speechSynthesis.speak(utt);
+    }
+
+    function speakAllSrPreviewBlocks() {
+        if (!window.speechSynthesis) {
+            showToast('Ihr Browser unterstützt leider keine Sprachausgabe (Web Speech API).', 'error');
+            return;
+        }
+        if (srPreviewState.speaking) {
+            stopSrPreviewSpeech();
+            return;
+        }
+        var container = document.getElementById('srPreviewTreeContainer');
+        if (!container) return;
+        var speakNodes = container.querySelectorAll('[data-sr-speak-text]');
+        if (!speakNodes || speakNodes.length === 0) {
+            showToast('Keine vorlesbaren Struktur-Blöcke in der aktuellen Ansicht.', 'error');
+            return;
+        }
+
+        stopSrPreviewSpeech();
+        srPreviewState.speaking = true;
+        var mySession = srPreviewState.sessionId;
+        var btn = document.getElementById('btnSrPreviewSpeakAll');
+        if (btn) {
+            btn.innerHTML = '⏹ Vorlesen stoppen';
+            btn.classList.add('btn-danger');
+        }
+
+        var idx = 0;
+        function nextBlock() {
+            if (srPreviewState.sessionId !== mySession || !srPreviewState.speaking) return;
+            if (idx >= speakNodes.length) {
+                stopSrPreviewSpeech();
+                return;
+            }
+            for (var c = 0; c < speakNodes.length; c++) {
+                speakNodes[c].classList.remove('sr-pac-speaking-active');
+                speakNodes[c].style.boxShadow = '';
+            }
+            var curEl = speakNodes[idx++];
+            var txt = curEl.getAttribute('data-sr-speak-text') || '';
+            if (!txt.trim()) {
+                nextBlock();
+                return;
+            }
+            curEl.classList.add('sr-pac-speaking-active');
+            curEl.style.boxShadow = '0 0 0 3px #10b981, 0 4px 12px rgba(0,0,0,0.35)';
+            curEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+            var utt = new SpeechSynthesisUtterance(txt);
+            utt.lang = 'de-DE';
+            utt.rate = 1.04;
+            utt.onend = function () {
+                if (srPreviewState.sessionId !== mySession) return;
+                nextBlock();
+            };
+            utt.onerror = function () {
+                if (srPreviewState.sessionId !== mySession) return;
+                nextBlock();
+            };
+            window.speechSynthesis.speak(utt);
+        }
+        nextBlock();
+    }
+
+    async function buildAndRenderScreenreaderPreview() {
+        var doc = getActiveDoc();
+        var container = document.getElementById('srPreviewTreeContainer');
+        var titleEl = document.getElementById('srPreviewDocTitle');
+        var statsEl = document.getElementById('srPreviewStatsLine');
+        var filterSel = document.getElementById('srPreviewPageFilter');
+        if (!doc || !container) return;
+
+        stopSrPreviewSpeech();
+        var pageFilter = filterSel ? (filterSel.value || 'all') : 'all';
+
+        if (titleEl) {
+            titleEl.textContent = 'Screenreader-Vorschau — ' + doc.name;
+        }
+        container.innerHTML = '<div style="padding:28px;text-align:center;color:#f8fafc;font-size:13px;">⏳ Analysiere PDF-Strukturbaum (<code>/StructTreeRoot</code>) und MCID-Textströme…</div>';
+
+        try {
+            var treeData = await parsePdfStructTreeForPreview(doc);
+            srPreviewState.lastTreeData = treeData;
+
+            if (!treeData.hasStructTree) {
+                if (statsEl) {
+                    statsEl.innerHTML = '<span style="color:#f59e0b;font-weight:700;">⚠️ Dieses PDF enthält aktuell noch keinen PDF/UA-Strukturbaum (<code>/StructTreeRoot</code>).</span>';
+                }
+                container.innerHTML =
+                    '<div style="background:#334155;border:1px solid #64748b;border-radius:8px;padding:28px 22px;text-align:center;color:#f8fafc;">' +
+                    '  <div style="font-size:36px;margin-bottom:8px;">♿</div>' +
+                    '  <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Kein Tag-Strukturbaum (<code>/StructTreeRoot</code>) im Dokument vorhanden</div>' +
+                    '  <p style="font-size:12.5px;color:#cbd5e1;max-width:620px;margin:0 auto 16px auto;line-height:1.5;">' +
+                    '    Ein Screenreader benötigt semantische PDF/UA-Strukturtags (<code>&lt;H1&gt;</code>, <code>&lt;H2&gt;</code>, <code>&lt;P&gt;</code>, <code>&lt;L&gt;</code>, <code>&lt;Figure&gt;</code>, <code>&lt;Link&gt;</code>). Klicken Sie unten auf den Button, um den Strukturbaum jetzt vollautomatisch nach PAC 2026 zu erzeugen:' +
+                    '  </p>' +
+                    '  <button type="button" class="tool-btn btn-success" id="btnSrEmptyRunAutoFix" style="height:38px;padding:0 18px;font-size:13px;font-weight:700;">' +
+                    '    🛠️ Jetzt PDF/UA-Strukturbaum automatisch erzeugen &amp; Vorschau laden' +
+                    '  </button>' +
+                    '</div>';
+                var emptyFixBtn = document.getElementById('btnSrEmptyRunAutoFix');
+                if (emptyFixBtn) {
+                    emptyFixBtn.addEventListener('click', async function () {
+                        emptyFixBtn.disabled = true;
+                        emptyFixBtn.textContent = '⏳ Erzeuge PDF/UA-Strukturbaum…';
+                        await remediatePdfAccessibility();
+                        await buildAndRenderScreenreaderPreview();
+                    });
+                }
+                return;
+            }
+
+            var st = treeData.stats;
+            if (statsEl) {
+                statsEl.innerHTML =
+                    '<strong>' + st.totalTags + ' Tags</strong> im Strukturbaum • ' +
+                    '<strong>' + st.headings + '</strong> Überschriften (<code>H1/H2</code>) • ' +
+                    '<strong>' + st.paragraphs + '</strong> Absätze (<code>P</code>) • ' +
+                    '<strong>' + st.lists + '</strong> Listen (<code>L</code>) • ' +
+                    '<strong>' + st.figures + '</strong> Abbildungen (<code>Figure</code>) • ' +
+                    '<strong>' + st.links + '</strong> Links (<code>Link</code>)';
+            }
+
+            // Build PAC 2026 visual layout: Left "Document" bar -> per-section "Sect" bar -> colored tag blocks
+            var docWrapper = document.createElement('div');
+            docWrapper.style.cssText = 'display:flex;align-items:stretch;background:#3b4d54;border:1px solid #28363b;border-radius:4px;overflow:hidden;';
+
+            var docSideLabel = document.createElement('div');
+            docSideLabel.style.cssText =
+                'width:22px;background:#475b63;color:#e2e8f0;font-size:11px;font-weight:700;' +
+                'display:flex;align-items:flex-start;justify-content:center;padding-top:10px;' +
+                'border-right:1px solid #28363b;user-select:none;flex-shrink:0;';
+            docSideLabel.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);letter-spacing:0.5px;">Document</span>';
+            docWrapper.appendChild(docSideLabel);
+
+            var sectsCol = document.createElement('div');
+            sectsCol.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:8px;padding:6px;min-width:0;';
+
+            var renderedSectionsCount = 0;
+
+            for (var sIdx = 0; sIdx < treeData.sections.length; sIdx++) {
+                var sec = treeData.sections[sIdx];
+                if (pageFilter !== 'all' && String(sec.pageIndex) !== String(pageFilter)) {
+                    continue;
+                }
+                if (!sec.blocks || sec.blocks.length === 0) continue;
+                renderedSectionsCount++;
+
+                var sectRow = document.createElement('div');
+                sectRow.style.cssText = 'display:flex;align-items:stretch;background:#526770;border:1px solid #2f3e44;border-radius:3px;overflow:hidden;';
+
+                var sectSideLabel = document.createElement('div');
+                sectSideLabel.style.cssText =
+                    'width:22px;background:#5c737d;color:#f1f5f9;font-size:10.5px;font-weight:700;' +
+                    'display:flex;align-items:flex-start;justify-content:center;padding-top:10px;' +
+                    'border-right:1px solid #2f3e44;user-select:none;flex-shrink:0;';
+                sectSideLabel.title = 'Sect (Seite ' + (sec.pageIndex + 1) + ')';
+                sectSideLabel.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);letter-spacing:0.4px;">Sect (S.' + (sec.pageIndex + 1) + ')</span>';
+                sectRow.appendChild(sectSideLabel);
+
+                var blocksCol = document.createElement('div');
+                blocksCol.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:6px;padding:6px;min-width:0;';
+
+                for (var bIdx = 0; bIdx < sec.blocks.length; bIdx++) {
+                    (function (blk, blockIdx, totalBlocksInSect, sectParentRefStr) {
+                        var parentRefForEdit = blk.parentRefStr || sectParentRefStr;
+
+                        // Helper to create the right-side interactive control toolbar on a block
+                        function buildBlockControlsBar(currentTag, mcidsArr, pageIdx, allowMergeUp, speakText, targetDomForSpeak) {
+                            var ctrlWrap = document.createElement('div');
+                            ctrlWrap.style.cssText = 'display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:8px;';
+
+                            // Speak button
+                            var btnSpk = document.createElement('button');
+                            btnSpk.type = 'button';
+                            btnSpk.textContent = '🔊';
+                            btnSpk.title = 'Diesen Block wie ein Screenreader vorlesen';
+                            btnSpk.style.cssText = 'background:rgba(15,23,42,0.12);border:1px solid rgba(15,23,42,0.22);color:#0f172a;border-radius:4px;padding:2px 6px;font-size:11px;cursor:pointer;font-weight:700;';
+                            btnSpk.addEventListener('click', function (ev) {
+                                ev.stopPropagation();
+                                speakSingleSrPreviewBlock(speakText, targetDomForSpeak);
+                            });
+                            ctrlWrap.appendChild(btnSpk);
+
+                            if (blk.refStr && parentRefForEdit) {
+                                // Move Up
+                                if (blk.indexInParent > 0) {
+                                    var btnUp = document.createElement('button');
+                                    btnUp.type = 'button';
+                                    btnUp.textContent = '▲';
+                                    btnUp.title = 'In der Lesereihenfolge nach oben verschieben';
+                                    btnUp.style.cssText = 'background:rgba(15,23,42,0.12);border:1px solid rgba(15,23,42,0.22);color:#0f172a;border-radius:4px;padding:2px 6px;font-size:10.5px;cursor:pointer;font-weight:700;';
+                                    btnUp.addEventListener('click', function (ev) {
+                                        ev.stopPropagation();
+                                        moveStructElemInParent(parentRefForEdit, blk.indexInParent, -1);
+                                    });
+                                    ctrlWrap.appendChild(btnUp);
+                                }
+                                // Move Down
+                                if (blockIdx < totalBlocksInSect - 1) {
+                                    var btnDown = document.createElement('button');
+                                    btnDown.type = 'button';
+                                    btnDown.textContent = '▼';
+                                    btnDown.title = 'In der Lesereihenfolge nach unten verschieben';
+                                    btnDown.style.cssText = 'background:rgba(15,23,42,0.12);border:1px solid rgba(15,23,42,0.22);color:#0f172a;border-radius:4px;padding:2px 6px;font-size:10.5px;cursor:pointer;font-weight:700;';
+                                    btnDown.addEventListener('click', function (ev) {
+                                        ev.stopPropagation();
+                                        moveStructElemInParent(parentRefForEdit, blk.indexInParent, 1);
+                                    });
+                                    ctrlWrap.appendChild(btnDown);
+                                }
+                                // Merge with previous block
+                                if (allowMergeUp && blk.indexInParent > 0) {
+                                    var btnMerge = document.createElement('button');
+                                    btnMerge.type = 'button';
+                                    btnMerge.textContent = '🔗▲';
+                                    btnMerge.title = 'Mit dem darüberliegenden Block zu einem gemeinsamen Tag zusammenfassen (z. B. mehrzeilige Überschrift oder getrennter Absatz)';
+                                    btnMerge.style.cssText = 'background:rgba(15,23,42,0.12);border:1px solid rgba(15,23,42,0.22);color:#0f172a;border-radius:4px;padding:2px 6px;font-size:10.5px;cursor:pointer;font-weight:700;';
+                                    btnMerge.addEventListener('click', function (ev) {
+                                        ev.stopPropagation();
+                                        mergeStructElemWithPrevious(parentRefForEdit, blk.indexInParent, pageIdx, mcidsArr);
+                                    });
+                                    ctrlWrap.appendChild(btnMerge);
+                                }
+                                // Tag selector dropdown
+                                if (currentTag !== 'Figure' && currentTag !== 'L') {
+                                    var selTag = document.createElement('select');
+                                    selTag.title = 'Semantischen PDF/UA-Tag für diesen Block direkt im PDF ändern';
+                                    selTag.style.cssText = 'background:rgba(255,255,255,0.85);border:1px solid rgba(15,23,42,0.3);color:#0f172a;border-radius:4px;padding:1px 4px;font-size:11px;font-weight:700;cursor:pointer;height:22px;';
+                                    var tagOptions = [
+                                        { val: 'H1', label: 'Tag: H1' },
+                                        { val: 'H2', label: 'Tag: H2' },
+                                        { val: 'H3', label: 'Tag: H3' },
+                                        { val: 'P', label: 'Tag: P' },
+                                        { val: 'Artifact', label: '🚫 Artifact (Ausblenden)' }
+                                    ];
+                                    var hasCur = false;
+                                    for (var to = 0; to < tagOptions.length; to++) {
+                                        if (tagOptions[to].val === currentTag) hasCur = true;
+                                    }
+                                    if (!hasCur) {
+                                        tagOptions.unshift({ val: currentTag, label: 'Tag: ' + currentTag });
+                                    }
+                                    for (var tIdx = 0; tIdx < tagOptions.length; tIdx++) {
+                                        var oEl = document.createElement('option');
+                                        oEl.value = tagOptions[tIdx].val;
+                                        oEl.textContent = tagOptions[tIdx].label;
+                                        if (tagOptions[tIdx].val === currentTag) oEl.selected = true;
+                                        selTag.appendChild(oEl);
+                                    }
+                                    selTag.addEventListener('change', function (ev) {
+                                        ev.stopPropagation();
+                                        if (selTag.value && selTag.value !== currentTag) {
+                                            changeStructElemTagInPdf(blk.refStr, parentRefForEdit, blk.indexInParent, selTag.value, pageIdx, mcidsArr);
+                                        }
+                                    });
+                                    ctrlWrap.appendChild(selTag);
+                                }
+                            }
+                            return ctrlWrap;
+                        }
+
+                        // 1. FIGURE + ALT BLOCK (PAC Gold/Cream style)
+                        if (blk.type === 'Figure') {
+                            var figGroup = document.createElement('div');
+                            figGroup.style.cssText = 'display:flex;flex-direction:column;gap:2px;border:1px solid #78350f;border-radius:3px;overflow:hidden;background:#efe6c2;';
+                            figGroup.setAttribute('data-sr-speak-text', 'Abbildung: ' + (blk.altText || 'Ohne Alternativtext'));
+
+                            // Top row: Figure badge + cropped thumbnail
+                            var figTopRow = document.createElement('div');
+                            figTopRow.style.cssText = 'display:flex;align-items:stretch;min-height:42px;border-bottom:1px solid rgba(120,53,15,0.25);';
+
+                            var figBadge = document.createElement('div');
+                            figBadge.style.cssText =
+                                'width:22px;background:#ca8a04;color:#ffffff;font-size:10px;font-weight:700;' +
+                                'display:flex;align-items:center;justify-content:center;flex-shrink:0;user-select:none;';
+                            figBadge.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);">Figure</span>';
+                            figTopRow.appendChild(figBadge);
+
+                            var figBody = document.createElement('div');
+                            figBody.style.cssText = 'flex:1;padding:6px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;';
+                            if (blk.thumbDataUrl) {
+                                var imgEl = document.createElement('img');
+                                imgEl.src = blk.thumbDataUrl;
+                                imgEl.alt = blk.altText || 'Figure';
+                                imgEl.style.cssText = 'max-height:54px;max-width:260px;object-fit:contain;background:#ffffff;border:1px solid rgba(0,0,0,0.18);border-radius:2px;padding:2px;';
+                                figBody.appendChild(imgEl);
+                            } else {
+                                var noImgSpan = document.createElement('span');
+                                noImgSpan.style.cssText = 'font-size:12px;font-weight:600;color:#78350f;';
+                                noImgSpan.textContent = '🖼️ Grafikelement / Abbildung (Seite ' + (blk.pageIndex + 1) + ')';
+                                figBody.appendChild(noImgSpan);
+                            }
+                            figBody.appendChild(buildBlockControlsBar('Figure', blk.mcids || [], blk.pageIndex, false, 'Abbildung: ' + (blk.altText || ''), figGroup));
+                            figTopRow.appendChild(figBody);
+                            figGroup.appendChild(figTopRow);
+
+                            // Bottom row: Alt badge + editable Alt text input
+                            var altRow = document.createElement('div');
+                            altRow.style.cssText = 'display:flex;align-items:stretch;min-height:28px;background:#e9ddb0;';
+
+                            var altBadge = document.createElement('div');
+                            altBadge.style.cssText =
+                                'width:22px;background:#d97706;color:#ffffff;font-size:10px;font-weight:700;' +
+                                'display:flex;align-items:center;justify-content:center;flex-shrink:0;user-select:none;';
+                            altBadge.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);">Alt</span>';
+                            altRow.appendChild(altBadge);
+
+                            var altBody = document.createElement('div');
+                            altBody.style.cssText = 'flex:1;padding:4px 10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+
+                            var altInput = document.createElement('input');
+                            altInput.type = 'text';
+                            altInput.value = blk.altText || '';
+                            altInput.placeholder = 'Alternativtext (/Alt) für Screenreader eingeben…';
+                            altInput.style.cssText = 'flex:1;min-width:200px;background:rgba(255,255,255,0.75);border:1px solid rgba(120,53,15,0.35);border-radius:4px;padding:3px 8px;font-size:12px;color:#0f172a;font-weight:500;';
+                            altBody.appendChild(altInput);
+
+                            if (blk.refStr) {
+                                var btnSaveAlt = document.createElement('button');
+                                btnSaveAlt.type = 'button';
+                                btnSaveAlt.textContent = '💾 Alt speichern';
+                                btnSaveAlt.style.cssText = 'background:#b45309;color:#ffffff;border:none;border-radius:4px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;';
+                                btnSaveAlt.addEventListener('click', function () {
+                                    updateStructElemAltTextInPdf(blk.refStr, altInput.value);
+                                });
+                                altInput.addEventListener('keydown', function (ev) {
+                                    if (ev.key === 'Enter') {
+                                        ev.preventDefault();
+                                        updateStructElemAltTextInPdf(blk.refStr, altInput.value);
+                                    }
+                                });
+                                altBody.appendChild(btnSaveAlt);
+                            }
+
+                            altRow.appendChild(altBody);
+                            figGroup.appendChild(altRow);
+                            blocksCol.appendChild(figGroup);
+                            return;
+                        }
+
+                        // 2. LIST BLOCK (<L> -> <LI> -> <Lbl> + <LBody>, PAC Blue style)
+                        if (blk.type === 'L') {
+                            var listWrap = document.createElement('div');
+                            listWrap.style.cssText = 'display:flex;align-items:stretch;background:#0284c7;border:1px solid #0369a1;border-radius:3px;overflow:hidden;';
+
+                            var lSideBadge = document.createElement('div');
+                            lSideBadge.style.cssText =
+                                'width:22px;background:#0284c7;color:#ffffff;font-size:10.5px;font-weight:700;' +
+                                'display:flex;align-items:flex-start;justify-content:center;padding-top:8px;flex-shrink:0;user-select:none;';
+                            lSideBadge.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);">L</span>';
+                            listWrap.appendChild(lSideBadge);
+
+                            var liCol = document.createElement('div');
+                            liCol.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:5px;padding:5px;background:#0369a1;min-width:0;';
+
+                            var lItems = blk.items || [];
+                            for (var liIdx = 0; liIdx < lItems.length; liIdx++) {
+                                (function (liObj) {
+                                    var liRow = document.createElement('div');
+                                    liRow.style.cssText = 'display:flex;align-items:stretch;background:#38bdf8;border:1px solid #0284c7;border-radius:2px;overflow:hidden;';
+                                    liRow.setAttribute('data-sr-speak-text', 'Listenpunkt: ' + (liObj.text || ''));
+
+                                    var liBadge = document.createElement('div');
+                                    liBadge.style.cssText =
+                                        'width:20px;background:#0284c7;color:#ffffff;font-size:10px;font-weight:700;' +
+                                        'display:flex;align-items:center;justify-content:center;flex-shrink:0;user-select:none;';
+                                    liBadge.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);">LI</span>';
+                                    liRow.appendChild(liBadge);
+
+                                    var liInner = document.createElement('div');
+                                    liInner.style.cssText = 'flex:1;display:flex;align-items:stretch;gap:4px;padding:3px;background:#7dd3fc;min-width:0;';
+
+                                    if (liObj.lblText) {
+                                        var lblBox = document.createElement('div');
+                                        lblBox.style.cssText = 'display:flex;align-items:stretch;background:#bae6fd;border:1px solid #0284c7;border-radius:2px;overflow:hidden;flex-shrink:0;';
+                                        lblBox.innerHTML =
+                                            '<div style="width:16px;background:#0284c7;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">' +
+                                            '  <span style="writing-mode:vertical-rl;transform:rotate(180deg);">Lbl</span>' +
+                                            '</div>' +
+                                            '<div style="padding:4px 7px;font-size:12.5px;font-weight:700;color:#0f172a;display:flex;align-items:center;">' +
+                                            escapeHtml(liObj.lblText) +
+                                            '</div>';
+                                        liInner.appendChild(lblBox);
+                                    }
+
+                                    var lBodyBox = document.createElement('div');
+                                    lBodyBox.style.cssText = 'flex:1;display:flex;align-items:stretch;background:#bae6fd;border:1px solid #0284c7;border-radius:2px;overflow:hidden;min-width:0;';
+
+                                    var lBodyBadge = document.createElement('div');
+                                    lBodyBadge.style.cssText =
+                                        'width:18px;background:#0284c7;color:#ffffff;font-size:9px;font-weight:700;' +
+                                        'display:flex;align-items:center;justify-content:center;flex-shrink:0;user-select:none;';
+                                    lBodyBadge.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);">LBody</span>';
+                                    lBodyBox.appendChild(lBodyBadge);
+
+                                    var lBodyContent = document.createElement('div');
+                                    lBodyContent.style.cssText = 'flex:1;padding:5px 10px;font-size:12.5px;color:#0f172a;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;';
+
+                                    var lBodyTextSpan = document.createElement('div');
+                                    lBodyTextSpan.style.cssText = 'flex:1;line-height:1.4;word-break:break-word;';
+                                    lBodyTextSpan.innerHTML = renderInlinePartsHtml(liObj.inlineParts, liObj.text);
+                                    lBodyContent.appendChild(lBodyTextSpan);
+
+                                    // Speak button for individual LI
+                                    var liSpkBtn = document.createElement('button');
+                                    liSpkBtn.type = 'button';
+                                    liSpkBtn.textContent = '🔊';
+                                    liSpkBtn.title = 'Listenpunkt vorlesen';
+                                    liSpkBtn.style.cssText = 'background:rgba(15,23,42,0.1);border:1px solid rgba(15,23,42,0.2);color:#0f172a;border-radius:4px;padding:1px 5px;font-size:10.5px;cursor:pointer;flex-shrink:0;';
+                                    liSpkBtn.addEventListener('click', function (ev) {
+                                        ev.stopPropagation();
+                                        speakSingleSrPreviewBlock('Listenpunkt: ' + (liObj.text || ''), liRow);
+                                    });
+                                    lBodyContent.appendChild(liSpkBtn);
+
+                                    lBodyBox.appendChild(lBodyContent);
+                                    liInner.appendChild(lBodyBox);
+                                    liRow.appendChild(liInner);
+                                    liCol.appendChild(liRow);
+                                })(lItems[liIdx]);
+                            }
+
+                            listWrap.appendChild(liCol);
+                            blocksCol.appendChild(listWrap);
+                            return;
+                        }
+
+                        // 3. HEADING (H1..H6, PAC Red/Rose style) OR PARAGRAPH (P, PAC Green/Cream style)
+                        var isH = blk.type === 'Heading';
+                        var badgeBg = isH ? '#dc2626' : '#65a30d';
+                        var rowBg = isH ? '#f4c2c2' : '#dce7b5';
+                        var borderCol = isH ? '#991b1b' : '#4d7c0f';
+                        var fontSizePx = blk.tag === 'H1' ? '20px' : (blk.tag === 'H2' ? '16.5px' : (isH ? '14.5px' : '12.5px'));
+                        var fontWeightVal = isH ? '800' : '500';
+                        var speakPrefix = isH ? ('Überschrift ' + blk.tag.replace('H', '') + ': ') : '';
+
+                        var blockRow = document.createElement('div');
+                        blockRow.style.cssText =
+                            'display:flex;align-items:stretch;background:' + rowBg + ';border:1px solid ' + borderCol + ';' +
+                            'border-radius:3px;overflow:hidden;min-height:' + (isH ? '38px' : '28px') + ';';
+                        blockRow.setAttribute('data-sr-speak-text', speakPrefix + (blk.text || ''));
+
+                        var tagSideBadge = document.createElement('div');
+                        tagSideBadge.style.cssText =
+                            'width:22px;background:' + badgeBg + ';color:#ffffff;font-size:10.5px;font-weight:700;' +
+                            'display:flex;align-items:center;justify-content:center;flex-shrink:0;user-select:none;';
+                        tagSideBadge.innerHTML = '<span style="writing-mode:vertical-rl;transform:rotate(180deg);">' + escapeHtml(blk.tag) + '</span>';
+                        blockRow.appendChild(tagSideBadge);
+
+                        var bodyWrap = document.createElement('div');
+                        bodyWrap.style.cssText = 'flex:1;padding:6px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;';
+
+                        var textDiv = document.createElement('div');
+                        textDiv.style.cssText =
+                            'flex:1;font-size:' + fontSizePx + ';font-weight:' + fontWeightVal + ';color:#0f2942;' +
+                            'line-height:1.38;word-break:break-word;';
+                        textDiv.innerHTML = renderInlinePartsHtml(blk.inlineParts, blk.text);
+                        bodyWrap.appendChild(textDiv);
+
+                        bodyWrap.appendChild(
+                            buildBlockControlsBar(
+                                blk.tag,
+                                blk.mcids || [],
+                                blk.pageIndex,
+                                true,
+                                speakPrefix + (blk.text || ''),
+                                blockRow
+                            )
+                        );
+
+                        blockRow.appendChild(bodyWrap);
+                        blocksCol.appendChild(blockRow);
+                    })(sec.blocks[bIdx], bIdx, sec.blocks.length, sec.sectRefStr);
+                }
+
+                sectRow.appendChild(blocksCol);
+                sectsCol.appendChild(sectRow);
+            }
+
+            if (renderedSectionsCount === 0) {
+                container.innerHTML = '<div style="padding:24px;text-align:center;color:#f8fafc;font-size:13px;">Keine Struktur-Elemente auf der gewählten Seite gefunden.</div>';
+                return;
+            }
+
+            docWrapper.appendChild(sectsCol);
+            container.innerHTML = '';
+            container.appendChild(docWrapper);
+        } catch (err) {
+            console.error('Screenreader preview error:', err);
+            container.innerHTML =
+                '<div style="padding:22px;text-align:center;color:#fecaca;font-size:13px;">' +
+                '❌ Fehler beim Laden der Screenreader-Vorschau: ' + escapeHtml(err.message || String(err)) +
+                '</div>';
+        }
+    }
+
+    // =========================================================================
     // Event Listeners Setup
     // =========================================================================
     function initEventListeners() {
@@ -15916,6 +17315,54 @@
         var btnDownloadTableCsv = document.getElementById('btnDownloadTableCsv');
         if (btnDownloadTableCsv) {
             btnDownloadTableCsv.addEventListener('click', downloadExtractedTableCsv);
+        }
+
+        // v2.0.0: PAC 2026 Screenreader Preview & Interactive Tag Inspector Listeners
+        var srPreviewPageFilter = document.getElementById('srPreviewPageFilter');
+        if (srPreviewPageFilter) {
+            srPreviewPageFilter.addEventListener('change', buildAndRenderScreenreaderPreview);
+        }
+        var btnSrPreviewSpeakAll = document.getElementById('btnSrPreviewSpeakAll');
+        if (btnSrPreviewSpeakAll) {
+            btnSrPreviewSpeakAll.addEventListener('click', speakAllSrPreviewBlocks);
+        }
+        var btnSrPreviewRunAutoFix = document.getElementById('btnSrPreviewRunAutoFix');
+        if (btnSrPreviewRunAutoFix) {
+            btnSrPreviewRunAutoFix.addEventListener('click', async function () {
+                btnSrPreviewRunAutoFix.disabled = true;
+                try {
+                    await remediatePdfAccessibility();
+                    await buildAndRenderScreenreaderPreview();
+                } finally {
+                    btnSrPreviewRunAutoFix.disabled = false;
+                }
+            });
+        }
+        var btnSrPreviewRefresh = document.getElementById('btnSrPreviewRefresh');
+        if (btnSrPreviewRefresh) {
+            btnSrPreviewRefresh.addEventListener('click', buildAndRenderScreenreaderPreview);
+        }
+        var btnSrPreviewOpenAudit = document.getElementById('btnSrPreviewOpenAudit');
+        if (btnSrPreviewOpenAudit) {
+            btnSrPreviewOpenAudit.addEventListener('click', async function () {
+                stopSrPreviewSpeech();
+                closeModal('modalScreenreaderPreview');
+                await updateAccessibilityUI(true);
+            });
+        }
+        var btnSrPreviewDownloadPdf = document.getElementById('btnSrPreviewDownloadPdf');
+        if (btnSrPreviewDownloadPdf) {
+            btnSrPreviewDownloadPdf.addEventListener('click', async function () {
+                var doc = getActiveDoc();
+                if (!doc) return;
+                await bakeAnnotationsIntoDocument(doc);
+                var outName = doc.name.replace(/\.pdf$/i, '') + '_barrierefrei.pdf';
+                downloadBlob(doc.bytes, outName, 'application/pdf');
+                doc.modified = false;
+                renderTabsBar();
+                trackUsageEvent('pdf_exported');
+                showToast('Barrierefreies PDF heruntergeladen: ' + outName, 'success');
+            });
         }
 
         // Keyboard shortcuts (Desktop feel)
