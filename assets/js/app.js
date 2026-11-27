@@ -5647,7 +5647,7 @@
             } else if (op === 'Q') {
                 currentCm = cmStack.length > 0 ? cmStack.pop() : null;
             } else if (op === 'cm' && st.operands.length >= 6) {
-                currentCm = [
+                var newCm = [
                     parseFloat(st.operands[0]) || 0,
                     parseFloat(st.operands[1]) || 0,
                     parseFloat(st.operands[2]) || 0,
@@ -5655,6 +5655,18 @@
                     parseFloat(st.operands[4]) || 0,
                     parseFloat(st.operands[5]) || 0
                 ];
+                if (currentCm) {
+                    currentCm = [
+                        newCm[0] * currentCm[0] + newCm[1] * currentCm[2],
+                        newCm[0] * currentCm[1] + newCm[1] * currentCm[3],
+                        newCm[2] * currentCm[0] + newCm[3] * currentCm[2],
+                        newCm[2] * currentCm[1] + newCm[3] * currentCm[3],
+                        newCm[4] * currentCm[0] + newCm[5] * currentCm[2] + currentCm[4],
+                        newCm[4] * currentCm[1] + newCm[5] * currentCm[3] + currentCm[5]
+                    ];
+                } else {
+                    currentCm = newCm;
+                }
             } else if (op === 'Tf') {
                 activeTfRaw = st.raw;
             } else if (op === 'Tr') {
@@ -5839,12 +5851,17 @@
                 var isImageXObj = !pageImageXObjNames || Boolean(pageImageXObjNames[doName]);
                 var curOrigBdc = origBdcStack.length > 0 ? origBdcStack[origBdcStack.length - 1] : null;
                 var wasOrigArtifact = Boolean(curOrigBdc && curOrigBdc.tag === '/Artifact');
+                var cmX1 = currentCm ? Math.min(currentCm[4], currentCm[4] + currentCm[0]) : 50;
+                var cmY1 = currentCm ? Math.min(currentCm[5], currentCm[5] + currentCm[3]) : 740;
+                var cmW = currentCm ? (Math.abs(currentCm[0]) || 120) : 120;
+                var cmH = currentCm ? (Math.abs(currentCm[3]) || 45) : 45;
                 var matchedFigDef = null;
 
                 // Priority 1: Match by exact original MCID from Word's /Figure <</MCID k>> BDC
+                // (Allow multiple Do XObjects belonging to a grouped Word <Figure> with multiple origMcids)
                 if (curOrigBdc && curOrigBdc.mcid !== null) {
                     for (var fd1 = 0; fd1 < figDefsList.length; fd1++) {
-                        if (!figDefsList[fd1].matched && figDefsList[fd1].origMcids &&
+                        if (figDefsList[fd1].origMcids &&
                             figDefsList[fd1].origMcids.indexOf(curOrigBdc.mcid) !== -1) {
                             matchedFigDef = figDefsList[fd1];
                             break;
@@ -5860,20 +5877,21 @@
                         }
                     }
                 }
+                // Priority 3: Composite multi-image Word header <Figure> (e.g. LKA banner + Symbolbild investigator photograph right below it)
+                if (!matchedFigDef && isImageXObj && figDefsList.length === 1 &&
+                    cmY1 >= 480 && cmW >= 90 && cmH >= 28) {
+                    matchedFigDef = figDefsList[0];
+                }
 
                 if (matchedFigDef) {
                     matchedFigDef.matched = true;
                     var figMcid = nextMcid++;
-                    var cmX1 = currentCm ? currentCm[4] : 50;
-                    var cmY1 = currentCm ? currentCm[5] : 740;
-                    var cmW = currentCm ? (Math.abs(currentCm[0]) || 120) : 120;
-                    var cmH = currentCm ? (Math.abs(currentCm[3]) || 45) : 45;
-                    var figBBox = matchedFigDef.bbox || [
+                    var figBBox = currentCm ? [
                         Math.round(cmX1),
                         Math.round(cmY1),
                         Math.round(cmX1 + cmW),
                         Math.round(cmY1 + cmH)
-                    ];
+                    ] : (matchedFigDef.bbox || [50, 700, 200, 750]);
                     mcidTags.push('Figure');
                     mcidRawTexts.push(matchedFigDef.altText);
                     mcidFigureInfos[figMcid] = {
@@ -6841,33 +6859,36 @@
                     // First, merge any whitespace-only MCID block that immediately follows a non-whitespace MCID
                     // inside the same BT..ET stream directly into that preceding MCID
                     var mergedInlineWs = false;
+                    var mergedInlineWsIntoOldMcid = {};
                     pStateForClean.taggedContentStr = pStateForClean.taggedContentStr.replace(
-                        /(\/[A-Za-z0-9]+\s*<<\/MCID\s+(\d+)>>\s*BDC\n[\s\S]*?)\nEMC((?:\n\/[A-Za-z0-9]+\s*<<\/MCID\s+\d+>>\s*BDC\n[\s\S]*?\nEMC)+)/g,
-                        function (fullGroup, firstPart, firstMcidStr, trailingChain) {
-                            var firstM = parseInt(firstMcidStr, 10);
-                            var fTagCandidate = (pStateForClean.pageMcidTags && pStateForClean.pageMcidTags[firstM]) || 'P';
-                            var fIsFig = fTagCandidate === 'Figure' || Boolean(pStateForClean.mcidFigureInfos && pStateForClean.mcidFigureInfos[firstM]);
-                            if (!mcidHasNonWs[firstM] || fIsFig) return fullGroup;
-
-                            var chainRe = /\n\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC\n([\s\S]*?)\nEMC/g;
-                            var cMatch;
-                            var mergedPrefix = firstPart;
-                            var restParts = [];
-                            var stillMerging = true;
-                            while ((cMatch = chainRe.exec(trailingChain)) !== null) {
-                                var cTag = cMatch[1];
-                                var cMcid = parseInt(cMatch[2], 10);
-                                var cBody = cMatch[3];
+                        /(?:\/[A-Za-z0-9]+\s*<<\/MCID\s+\d+>>\s*BDC\n(?:(?!\nEMC\b)[\s\S])*?\nEMC)(?:\n\/[A-Za-z0-9]+\s*<<\/MCID\s+\d+>>\s*BDC\n(?:(?!\nEMC\b)[\s\S])*?\nEMC)+/g,
+                        function (fullChain) {
+                            var singleRe = /(?:^|\n)\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC\n([\s\S]*?)\nEMC/g;
+                            var sMatch;
+                            var outBlocks = [];
+                            var prevKeptBlock = null;
+                            while ((sMatch = singleRe.exec(fullChain)) !== null) {
+                                var cTag = sMatch[1];
+                                var cMcid = parseInt(sMatch[2], 10);
+                                var cBody = sMatch[3];
                                 var cIsFig = cTag === 'Figure' || Boolean(pStateForClean.mcidFigureInfos && pStateForClean.mcidFigureInfos[cMcid]);
-                                if (stillMerging && !mcidHasNonWs[cMcid] && !cIsFig) {
-                                    mergedPrefix += '\n' + cBody;
+                                var cHasText = Boolean(mcidHasNonWs[cMcid]);
+                                if (!cHasText && !cIsFig && prevKeptBlock) {
+                                    prevKeptBlock.body += '\n' + cBody;
                                     mergedInlineWs = true;
+                                    mergedInlineWsIntoOldMcid[prevKeptBlock.mcid] = true;
                                 } else {
-                                    stillMerging = false;
-                                    restParts.push('\n/' + cTag + ' <</MCID ' + cMcid + '>> BDC\n' + cBody + '\nEMC');
+                                    var blkEntry = { tag: cTag, mcid: cMcid, body: cBody };
+                                    outBlocks.push(blkEntry);
+                                    prevKeptBlock = (cHasText && !cIsFig) ? blkEntry : null;
                                 }
                             }
-                            return mergedPrefix + '\nEMC' + restParts.join('');
+                            var rebuilt = [];
+                            for (var ob = 0; ob < outBlocks.length; ob++) {
+                                var bItem = outBlocks[ob];
+                                rebuilt.push('/' + bItem.tag + ' <</MCID ' + bItem.mcid + '>> BDC\n' + bItem.body + '\nEMC');
+                            }
+                            return rebuilt.join('\n');
                         }
                     );
 
@@ -6877,6 +6898,7 @@
                     var newMcidFontStates = {};
                     var newMcidFigureInfos = {};
                     var hadDemotedWhitespaceAfter = {};
+                    var hadMergedInlineWsAfter = {};
                     var nextCleanMcid = 0;
                     var lastKeptNewMcid = null;
                     var hadWhitespaceMcid = mergedInlineWs;
@@ -6887,6 +6909,9 @@
                             var newM = nextCleanMcid++;
                             oldToNewMcid[om] = newM;
                             lastKeptNewMcid = newM;
+                            if (mergedInlineWsIntoOldMcid[om]) {
+                                hadMergedInlineWsAfter[newM] = true;
+                            }
                             var origTag = isFigureMcid ? 'Figure' : origTagCandidate;
                             if (newM === 0 && origTag === 'P') {
                                 origTag = pIdx0 === 0 ? 'H1' : 'H2';
@@ -6908,6 +6933,7 @@
                         }
                     }
                     pStateForClean.hadDemotedWhitespaceAfter = hadDemotedWhitespaceAfter;
+                    pStateForClean.hadMergedInlineWsAfter = hadMergedInlineWsAfter;
                     if (hadWhitespaceMcid) {
                         pStateForClean.taggedContentStr = pStateForClean.taggedContentStr.replace(
                             /\/([A-Za-z0-9]+)\s*<<\/MCID\s+(\d+)>>\s*BDC/g,
@@ -7183,6 +7209,7 @@
                     var lastRawStr = mRunsList[mRunsList.length - 1].str || '';
                     var hadPrecedingDemotedWs = Boolean(mGeo > 0 && preState.hadDemotedWhitespaceAfter && preState.hadDemotedWhitespaceAfter[mGeo - 1]);
                     var hadFollowingDemotedWs = Boolean(preState.hadDemotedWhitespaceAfter && preState.hadDemotedWhitespaceAfter[mGeo]);
+                    var hadMergedInlineWs = Boolean(preState.hadMergedInlineWsAfter && preState.hadMergedInlineWsAfter[mGeo]);
                     // If the preceding MCID was a whitespace MCID that got demoted to /Artifact, PDF.js attached its space
                     // to firstRawStr via saveLastChar(" "), so ignore that phantom leading whitespace flag
                     var startsWithWs = !hadPrecedingDemotedWs && /^[\s\u00A0]/.test(firstRawStr);
@@ -7214,6 +7241,7 @@
                         startsWithWs: startsWithWs,
                         endsWithWs: endsWithWs,
                         hadFollowingWsMcid: hadFollowingDemotedWs,
+                        hadMergedInlineWs: hadMergedInlineWs,
                         x1: mx1,
                         y1: my1,
                         x2: mx2,
@@ -7311,6 +7339,18 @@
                     } else {
                         var prevIt = activeSeg.items[activeSeg.items.length - 1];
                         var gapX = curIt.x1 - prevIt.x2;
+                        var upcomingWords = [];
+                        for (var uwi = ri; uwi < Math.min(vRow.items.length, ri + 6); uwi++) {
+                            if (!vRow.items[uwi].isFigure && vRow.items[uwi].text) {
+                                upcomingWords.push(vRow.items[uwi].text.trim());
+                            }
+                        }
+                        var upcomingRowText = upcomingWords.join(' ').replace(/\s+/g, ' ').trim();
+                        var upcomingAlnum = upcomingRowText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+                        var isRightBoxPhraseStart = curIt.x1 >= preW * 0.28 && gapX > 1.5 && (
+                            /^(?:Die\s+)?Informationen\s+zur\s+Erhebung\b|^Hinweis\s+zum\s+Datenschutz\b|^\(DS[\-\s]*GVO\)|^Rubrik\s+[„"']?\s*Datenschutz|^Personalfragen\b|^Fachfragen\b|^Find\s+us\s+on\b/i.test(upcomingRowText) ||
+                            /^LKABW|^FINDUSON/.test(upcomingAlnum)
+                        );
                         var isCrossCenterColJump = gapX > Math.max(18, vRow.fontH * 1.8) &&
                             prevIt.x2 <= preW * 0.65 && curIt.x1 >= preW * 0.33;
                         var isContactColSplit = gapX > Math.max(14, vRow.fontH * 1.4) &&
@@ -7322,7 +7362,7 @@
                         var isPageNumBoundary = (startsPageNumToken && !activeSeg.startsWithPageWord) ||
                             (activeSeg.startsWithPageWord && !/^(?:\d+|\/|von|\d+\s*\/\s*\d+)$/i.test(curTrim));
 
-                        if (isCrossCenterColJump || isContactColSplit || isFarRightJump || isHugeGap || isPageNumBoundary) {
+                        if (isRightBoxPhraseStart || isCrossCenterColJump || isContactColSplit || isFarRightJump || isHugeGap || isPageNumBoundary) {
                             rowSegs.push(activeSeg);
                             activeSeg = {
                                 isFigure: false,
@@ -7430,14 +7470,17 @@
             }
 
             // Mark page numbers ("Seite 1 / 3", "1 / 3"), repeated running headers ("WIR SUCHEN SIE FÜR UNSER TEAM" on pages > 1),
-            // & decorative margin/footer domain watermarks ("LKA-BW.DE") as Artifact
+            // & decorative margin/footer domain watermarks ("LKA-BW.DE", "Find us on") as Artifact
             for (var ovI = 0; ovI < orderedVisualLines.length; ovI++) {
                 var ovSeg = orderedVisualLines[ovI];
                 if (ovSeg.isFigure) continue;
                 var tClean = ovSeg.text.trim();
+                var tAlnumUpper = tClean.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
                 var isPageNumOrWatermark = /^Seite(?:\s*\d+(?:\s*(?:\/|von)\s*\d+)?)?$/i.test(tClean) ||
                     ((ovSeg.baseY < preH * 0.28 || ovSeg.baseY > preH * 0.82) && /^(?:\d+\s*(?:\/|von)\s*\d+|-\s*\d+\s*-)$/i.test(tClean)) ||
-                    /^LKA[\s\-\u2010-\u2015]*BW\s*\.\s*DE$/i.test(tClean) ||
+                    tAlnumUpper === 'LKABWDE' ||
+                    (tAlnumUpper.indexOf('LKABWDE') !== -1 && tAlnumUpper.length <= 24) ||
+                    /^FINDUSON\b/.test(tAlnumUpper) ||
                     (pPre > 0 && /^WIR\s+SUCHEN\s+SIE\s+F[ÜU]R\s+UNSER\s+TEAM\b/i.test(tClean));
                 if (isPageNumOrWatermark) {
                     ovSeg.isArtifact = true;
@@ -7836,14 +7879,36 @@
             for (var vlIdx = 0; vlIdx < activeVisualLines.length; vlIdx++) {
                 var vLine = activeVisualLines[vlIdx];
                 if (vLine.isFigure) {
-                    semanticBlocks.push({
-                        type: 'Figure',
-                        mcids: vLine.mcids.slice(),
-                        altText: vLine.altText,
-                        bbox: vLine.bbox,
-                        lines: [vLine],
-                        text: vLine.altText
-                    });
+                    var existingFigBlk = null;
+                    for (var efb = 0; efb < semanticBlocks.length; efb++) {
+                        if (semanticBlocks[efb].type === 'Figure' && semanticBlocks[efb].altText === vLine.altText) {
+                            existingFigBlk = semanticBlocks[efb];
+                            break;
+                        }
+                    }
+                    if (existingFigBlk) {
+                        for (var fmc = 0; fmc < vLine.mcids.length; fmc++) {
+                            existingFigBlk.mcids.push(vLine.mcids[fmc]);
+                        }
+                        if (vLine.bbox && existingFigBlk.bbox && vLine.bbox.length >= 4 && existingFigBlk.bbox.length >= 4) {
+                            existingFigBlk.bbox = [
+                                Math.min(existingFigBlk.bbox[0], vLine.bbox[0]),
+                                Math.min(existingFigBlk.bbox[1], vLine.bbox[1]),
+                                Math.max(existingFigBlk.bbox[2], vLine.bbox[2]),
+                                Math.max(existingFigBlk.bbox[3], vLine.bbox[3])
+                            ];
+                        }
+                        existingFigBlk.lines.push(vLine);
+                    } else {
+                        semanticBlocks.push({
+                            type: 'Figure',
+                            mcids: vLine.mcids.slice(),
+                            altText: vLine.altText,
+                            bbox: vLine.bbox ? vLine.bbox.slice() : [50, 700, 200, 750],
+                            lines: [vLine],
+                            text: vLine.altText
+                        });
+                    }
                     continue;
                 }
 
@@ -7899,7 +7964,10 @@
                 }
 
                 // 3. Section Heading (<H2>) — only after <H1> has appeared
-                var isNotContactOrMeta = !/@|https?:\/\/|www\.|\+49\s*\d|^Job-ID:|Bewerbungsfrist|^Seite\s+\d|^\d+\s*\/\s*\d+$|^WIR SUCHEN SIE\b|^LKA[\-\s]?BW|^Fachfragen$|^Personalfragen$/i.test(lText);
+                var lAlnumUpper = lText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+                var isNotContactOrMeta = !/@|https?:\/\/|www\.|\+49\s*\d|^Job-ID:|Bewerbungsfrist|^Seite\s+\d|^\d+\s*\/\s*\d+$|^WIR SUCHEN SIE\b|^Fachfragen$|^Personalfragen$/i.test(lText) &&
+                    !/LKABW|FINDUSON/.test(lAlnumUpper) &&
+                    !(vLine.baseY < pVis.pageHeight * 0.24 && vLine.x1 > pageWidth * 0.48);
                 var isLargerHeadingFont = seenH1OnPage0 && isNotContactOrMeta && lText.length >= 4 && lText.length <= 75 &&
                     vLine.fontH >= bodyFontH * 1.16;
                 var uppercaseLettersCount = (lText.match(/[A-ZÄÖÜ]/g) || []).length;
@@ -8033,7 +8101,7 @@
                         continue;
                     }
 
-                    if (gCur.endsWithWs || gNext.startsWithWs) continue;
+                    if (gCur.hadMergedInlineWs) continue;
 
                     var sameLine = Math.abs(gCur.baseY - gNext.baseY) <= Math.max(gCur.fontH, gNext.fontH) * 0.42;
                     if (sameLine) {
